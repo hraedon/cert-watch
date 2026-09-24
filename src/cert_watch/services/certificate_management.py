@@ -13,6 +13,7 @@ from cert_watch.auth.scope import (
     ensure_new_tags_in_scope,
     ensure_write_scope,
     require_auth_context,
+    unknown_target_scope_error,
 )
 from cert_watch.cert_chain import validate_is_ca_certificate
 from cert_watch.database import (
@@ -118,21 +119,26 @@ def delete_certificate(
 ) -> bool:
     require_auth_context(auth)
     with get_write_lock():
-        refuse_if_superseded(db_path, cert_id, auth=auth)
+        def hidden() -> Exception:
+            return unknown_target_scope_error(auth, db_path)
+
+        refuse_if_superseded(db_path, cert_id, auth=auth, hidden=hidden)
         ensure_write_scope(auth, db_path, cert_id=cert_id)
         deleted = delete_certificate_cascade(
             db_path,
             cert_id,
-            guard=lambda conn: ensure_not_superseded(conn, cert_id, auth=auth),
+            guard=lambda conn: ensure_not_superseded(conn, cert_id, auth=auth, hidden=hidden),
         )
-    record_audit(
-        db_path,
-        actor=actor,
-        action="cert.delete",
-        target_type="certificate",
-        target_id=cert_id,
-        source_ip=source_ip,
-    )
+    if deleted:
+        # A delete that removed nothing is not an event worth auditing.
+        record_audit(
+            db_path,
+            actor=actor,
+            action="cert.delete",
+            target_type="certificate",
+            target_id=cert_id,
+            source_ip=source_ip,
+        )
     return deleted
 
 

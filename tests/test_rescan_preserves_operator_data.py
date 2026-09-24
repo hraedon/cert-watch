@@ -597,3 +597,108 @@ def test_replace_reads_and_writes_in_one_immediate_transaction(
         new, _, _ = replace_scanned(db, _HOST, 443, leaf, [], None)
     assert outcome["result"] == "locked", outcome
     assert SqliteCertificateRepository(db).get_tags(new) == "team-a"
+
+
+# -- round 4 -----------------------------------------------------------
+
+
+def test_scanned_bytes_on_a_superseded_row_are_a_renewal_not_a_rescan(tmp_path):
+    """Fable's surviving mutant S1: A, then B replacing A, with A's row still
+    stored. When A's bytes reappear, that is a renewal from the head B -- not
+    an unchanged rescan of A, which would bring A's stale tags back."""
+    from tests._helpers import seed_certificate
+
+    db = _db(tmp_path)
+    a_leaf = parse_certificate(_make_cert(_HOST).der)
+    a = seed_scanned(db, _HOST, 443, a_leaf)
+    SqliteCertificateRepository(db).set_tags(a, "team-stale")
+    b = seed_certificate(
+        db,
+        parse_certificate(_make_cert(_HOST, days_valid=50).der),
+        hostname=_HOST,
+        port=443,
+        source="scanned",
+        replaces_cert_id=a,
+    )
+    SqliteCertificateRepository(db).set_tags(b, "team-live")
+
+    current = seed_scanned(db, _HOST, 443, a_leaf)
+
+    assert current not in (a, b)
+    [row] = _rows(db, "SELECT id, tags, replaces_cert_id FROM certificates WHERE is_leaf = 1")
+    assert (row["tags"], row["replaces_cert_id"]) == ("team-live", b)
+
+
+def _self_referencing(db: Path, leaf) -> str:
+    cert_id = seed_scanned(db, _HOST, 443, leaf)
+    with _connect(db) as conn:
+        conn.execute("UPDATE certificates SET replaces_cert_id = id WHERE id = ?", (cert_id,))
+        conn.commit()
+    return cert_id
+
+
+def test_unchanged_rescan_clears_a_self_reference(tmp_path):
+    """Round 4 (Sol): a row naming itself survived the rescan, and the expiry
+    rule then skipped it as superseded -- no alert, ever."""
+    from cert_watch.alerting.rules.expiry import evaluate_all_certs
+
+    db = _db(tmp_path)
+    leaf = parse_certificate(_make_cert(_HOST, days_valid=5, not_before_days_ago=360).der)
+    cert_id = _self_referencing(db, leaf)
+    assert seed_scanned(db, _HOST, 443, leaf) == cert_id
+    assert _rows(db, "SELECT replaces_cert_id FROM certificates WHERE id = ?", (cert_id,)) == [
+        {"replaces_cert_id": None}
+    ]
+    assert evaluate_all_certs(db, SqliteAlertRepository(db))
+
+
+def test_a_self_reference_never_hides_a_certificate_from_evaluation(tmp_path):
+    """Defensively, before any rescan repairs it: a row is not superseded by
+    itself, so the expiry and renewal-window rules still see it."""
+    from cert_watch.alerting import renewal_window_candidates
+    from cert_watch.alerting.rules.expiry import evaluate_all_certs
+
+    db = _db(tmp_path)
+    leaf = parse_certificate(_make_cert(_HOST, days_valid=5, not_before_days_ago=360).der)
+    cert_id = _self_referencing(db, leaf)
+    assert any(a.cert_id == cert_id for a in evaluate_all_certs(db, SqliteAlertRepository(db)))
+    assert any(c["id"] == cert_id for c in renewal_window_candidates(db, 30))
+
+
+def test_a_self_referencing_row_is_still_a_head(tmp_path):
+    """Beside an unrelated second leaf, a row naming itself is still current:
+    rescanning its bytes keeps it (and repairs the self-reference)."""
+    from tests._helpers import seed_certificate
+
+    db = _db(tmp_path)
+    leaf = parse_certificate(_make_cert(_HOST, days_valid=40).der)
+    s = _self_referencing(db, leaf)
+    seed_certificate(
+        db,
+        parse_certificate(_make_cert(_HOST, days_valid=20).der),
+        hostname=_HOST,
+        port=443,
+        source="scanned",
+    )
+    assert seed_scanned(db, _HOST, 443, leaf) == s
+
+
+def test_a_self_reference_does_not_block_reviving_a_legacy_expiry_failure(tmp_path):
+    from cert_watch.database import Alert, AlertStore
+
+    db = _db(tmp_path)
+    cert_id = _self_referencing(db, parse_certificate(_make_cert(_HOST, days_valid=5).der))
+    alert_id = SqliteAlertRepository(db).create(
+        Alert(
+            cert_id=cert_id,
+            alert_type="expiry_warning",
+            status="failed",
+            message="expiring",
+            threshold_days=7,
+            hostname=_HOST,
+        )
+    )
+    with _connect(db) as conn:
+        conn.execute("UPDATE alerts SET failure_reason = 'legacy_failed' WHERE id = ?", (alert_id,))
+        conn.commit()
+    assert AlertStore(db).revive_legacy_expiry(alert_id) is True

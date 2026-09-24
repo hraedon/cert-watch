@@ -24,6 +24,7 @@ from cert_watch.auth.scope import (
     ensure_new_tags_in_scope,
     ensure_write_scope,
     require_auth_context,
+    unknown_target_scope_error,
 )
 from cert_watch.database.connection import _connect, begin_immediate, get_write_lock
 from cert_watch.database.metadata_ops import (
@@ -186,14 +187,17 @@ def update_certificate_tags(
 ) -> TagUpdateResult:
     require_auth_context(auth)
     with get_write_lock():
-        refuse_if_superseded(db_path, cert_id, auth=auth)
+        def hidden() -> Exception:
+            return unknown_target_scope_error(auth, db_path)
+
+        refuse_if_superseded(db_path, cert_id, auth=auth, hidden=hidden)
         ensure_write_scope(auth, db_path, cert_id=cert_id)
         normalized = normalize_tags(_value(tags))
         ensure_new_tags_in_scope(auth, normalized)
         event = _transact(
             db_path,
             persist=lambda conn: persist_certificate_tags(conn, cert_id, normalized),
-            guard=lambda conn: ensure_not_superseded(conn, cert_id, auth=auth),
+            guard=lambda conn: ensure_not_superseded(conn, cert_id, auth=auth, hidden=hidden),
             action="cert.update_tags",
             target_type="certificate",
             target_id=cert_id,

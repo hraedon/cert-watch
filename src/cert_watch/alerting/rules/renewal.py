@@ -32,8 +32,9 @@ def renewal_window_candidates(
         superseded = {
             r["replaces_cert_id"]
             for r in conn.execute(
+                # A row naming itself is not superseded (#115 review).
                 "SELECT DISTINCT replaces_cert_id FROM certificates "
-                "WHERE replaces_cert_id IS NOT NULL"
+                "WHERE replaces_cert_id IS NOT NULL AND replaces_cert_id != id"
             ).fetchall()
         }
         leaves = conn.execute(

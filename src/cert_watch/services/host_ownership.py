@@ -139,6 +139,11 @@ def _validate(update: HostOwnershipUpdate) -> None:
             raise HostOwnershipValidationError("runbook_url", error)
 
 
+def _unknown_resource() -> Exception:
+    """What an id that names no host or certificate gets."""
+    return HostOwnershipTargetError("resource_not_found")
+
+
 def resolve_host_ownership_target(
     db_path: str | Path, resource_id: str, *, auth: Any = None
 ) -> HostOwnershipTarget:
@@ -151,9 +156,12 @@ def resolve_host_ownership_target(
     :func:`update_host_ownership`.
     """
     lookup = resolve_host_target(_connect(db_path), resource_id)
+    if auth is not None and lookup.status != "host":
+        # A renewed-away certificate id -- gone, or a stale row still
+        # coexisting with its successor -- is refused, or answered as unknown
+        # when the caller can't see the current certificate.
+        refuse_if_superseded(db_path, resource_id, auth=auth, hidden=_unknown_resource)
     if lookup.host is None:
-        if lookup.status == "resource_not_found" and auth is not None:
-            refuse_if_superseded(db_path, resource_id, auth=auth)
         raise HostOwnershipTargetError(lookup.status)
     return HostOwnershipTarget(
         host_id=lookup.host.id, source=lookup.status, resource_id=resource_id,
@@ -185,7 +193,7 @@ def update_host_ownership(
     named_cert = target.resource_id if target.source == "certificate" else ""
     with get_write_lock():
         if named_cert:
-            refuse_if_superseded(db_path, named_cert, auth=auth)
+            refuse_if_superseded(db_path, named_cert, auth=auth, hidden=_unknown_resource)
         ensure_write_scope(auth, db_path, **target.scope_target())
         if callable(update):
             update = update()
@@ -199,7 +207,7 @@ def update_host_ownership(
                 # the target was resolved -- in this process or another --
                 # refuse rather than act on a stale id. Checked inside the
                 # write transaction, so it still holds when the write commits.
-                ensure_not_superseded(conn, named_cert, auth=auth)
+                ensure_not_superseded(conn, named_cert, auth=auth, hidden=_unknown_resource)
             updated = persist_host_ownership(conn, host_id, **detail)
             if updated is None:
                 raise HostNotFoundError("host not found")

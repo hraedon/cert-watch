@@ -461,3 +461,215 @@ def test_cross_process_renewal_waits_for_the_unassign_write(
     assert seen["blocked"] is True, "the other process renewed between check and write"
     renewed = out.strip().splitlines()[-1]
     assert SqliteAlertGroupRepository(db).groups_for_cert_manual(renewed) == []
+
+
+# -- round 4 -----------------------------------------------------------
+
+
+def _coexisting_lineage(db: Path) -> tuple[str, str, str]:
+    """A -> B -> C with all three rows still stored (the schema allows it):
+    A is tagged team-old, the current C team-new."""
+    from tests._helpers import seed_certificate
+
+    init_schema(db)
+    SqliteHostRepository(db).add(_HOST, 443)
+    ids: list[str] = []
+    for days, tags in ((30, "team-old"), (60, ""), (90, "team-new")):
+        cert_id = seed_certificate(
+            db,
+            parse_certificate(_make_cert(_HOST, days_valid=days).der),
+            hostname=_HOST,
+            port=443,
+            source="scanned",
+            replaces_cert_id=ids[-1] if ids else None,
+        )
+        SqliteCertificateRepository(db).set_tags(cert_id, tags)
+        ids.append(cert_id)
+    return ids[0], ids[1], ids[2]
+
+
+def test_a_stale_row_coexisting_with_its_successor_is_superseded(tmp_path, reload_app):
+    """Round 4 (Sol): the guard returned as soon as the addressed row existed.
+    A still exists, but C replaces it (through B): an admin is told about C."""
+    db = tmp_path / "cert-watch.sqlite3"
+    a, b, c = _coexisting_lineage(db)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        for stale in (a, b):
+            _assert_conflict(
+                client.put(f"/api/certificates/{stale}/tags", json={"tags": "x"}), stale, c
+            )
+    assert SqliteCertificateRepository(db).get_tags(a) == "team-old"
+
+
+def test_old_team_cannot_act_on_a_stale_row_to_reach_the_current_certificate(tmp_path):
+    """Sol's probe: a user scoped only to stale A changed host ownership,
+    though they can't access current C. They now get exactly the unknown-id
+    answer on every route, and nothing changes."""
+    from tests.test_tag_scoped_access import _make_scoped_app, _scoped_client
+
+    db = tmp_path / "cert-watch.sqlite3"
+    a, _b, c = _coexisting_lineage(db)
+    app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-old")
+    with _scoped_client(app, groups) as client:
+        unknown = _answers(client, "00000000-0000-0000-0000-000000000000")
+        stale = _answers(client, a)
+    assert stale == unknown
+    [host] = SqliteHostRepository(db).list_all()
+    assert host.owner_name == ""
+    assert SqliteCertificateRepository(db).get_tags(a) == "team-old"
+    assert SqliteCertificateRepository(db).get_by_id(a) is not None
+    assert SqliteCertificateRepository(db).get_by_id(c) is not None
+
+
+def test_two_renewals_ago_is_refused_with_the_current_certificate(
+    tmp_path, reload_app, self_signed_leaf
+):
+    """Round 4 (Fable): A -> B -> C by ordinary renewals, so A's and B's rows
+    are gone. The page for A redirects to C; a change sent from it is refused
+    with C too -- not "certificate not found" or a bare redirect Home."""
+    db, a, _b, group_id = _renewed(tmp_path, self_signed_leaf, assign=True)
+    c = seed_scanned(db, _HOST, 443, parse_certificate(_make_cert(_HOST, days_valid=70).der))
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _assert_sent_to_current(
+            client.post(f"/certificates/{a}/tags", data={"tags": "x"}, follow_redirects=False), c
+        )
+        _assert_sent_to_current(
+            client.post(
+                f"/certificates/{a}/owner", data={"owner_name": "x"}, follow_redirects=False
+            ),
+            c,
+        )
+        _assert_sent_to_current(client.post(f"/certificates/{a}/delete", follow_redirects=False), c)
+        _assert_conflict(client.put(f"/api/certificates/{a}/tags", json={"tags": "x"}), a, c)
+        _assert_conflict(client.delete(f"/api/certificates/{a}"), a, c)
+        _assert_conflict(client.post(f"/api/alert-groups/{group_id}/certs/{a}"), a, c)
+        _assert_conflict(client.delete(f"/api/alert-groups/{group_id}/certs/{a}"), a, c)
+    assert SqliteCertificateRepository(db).get_tags(c) == "team-a"
+    assert SqliteAlertGroupRepository(db).groups_for_cert_manual(c) == [group_id]
+
+
+def test_form_delete_of_an_unknown_id_says_so_and_is_not_audited(tmp_path, reload_app):
+    """Round 4 (Fable, pre-existing): it redirected Home silently and wrote a
+    cert.delete audit row for a delete that deleted nothing."""
+    from cert_watch.database.connection import _connect
+
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/certificates/00000000-0000-0000-0000-000000000000/delete", follow_redirects=False
+        )
+    assert r.headers["location"] == "/?error=certificate+not+found"
+    with _connect(db) as conn:
+        audited = conn.execute("SELECT 1 FROM audit_log WHERE action = 'cert.delete'").fetchall()
+    assert audited == []
+
+
+def _delete_in_another_process(db: Path, sql: str, param: str) -> None:
+    import subprocess
+    import sys
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sqlite3, sys; c = sqlite3.connect(sys.argv[1]); "
+            "c.execute(sys.argv[2], (sys.argv[3],)); c.commit()",
+            str(db),
+            sql,
+            param,
+        ],
+        check=True,
+    )
+
+
+def test_assign_refuses_a_group_deleted_by_another_process_after_the_precheck(
+    tmp_path, monkeypatch, reload_app, self_signed_leaf
+):
+    """Round 4 (Sol): the group was checked before the insert's transaction;
+    a concurrent group delete left an orphan assignment and a 200."""
+    import importlib
+
+    alerts_routes = importlib.import_module("cert_watch.routes.api.alerts")
+
+    db, _old, cur, group_id = _renewed(tmp_path, self_signed_leaf)
+    real = alerts_routes.refuse_if_superseded
+
+    def then_delete_group(*args, **kwargs):
+        real(*args, **kwargs)
+        _delete_in_another_process(db, "DELETE FROM alert_groups WHERE id = ?", group_id)
+
+    monkeypatch.setattr(alerts_routes, "refuse_if_superseded", then_delete_group)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(f"/api/alert-groups/{group_id}/certs/{cur}")
+    assert (r.status_code, r.json()) == (404, {"error": "group not found"})
+    from cert_watch.database.connection import _connect
+
+    with _connect(db) as conn:
+        assert conn.execute("SELECT * FROM alert_group_certs").fetchall() == []
+
+
+def test_assign_refuses_a_certificate_deleted_by_another_connection(tmp_path, self_signed_leaf):
+    """Fable's surviving mutant S2: with the in-transaction existence check
+    ignored, this wrote an orphan and reported success."""
+    from cert_watch.database.connection import _connect
+
+    db, _old, cur, group_id = _renewed(tmp_path, self_signed_leaf)
+    _delete_in_another_process(db, "DELETE FROM certificates WHERE id = ?", cur)
+    outcome = SqliteAlertGroupRepository(db).assign_cert(group_id, cur, require_existing=True)
+    assert outcome == "certificate_not_found"
+    with _connect(db) as conn:
+        assert conn.execute("SELECT * FROM alert_group_certs").fetchall() == []
+
+
+def _host_tagged_estate(tmp_path: Path, self_signed_leaf, *, port: int = 443):
+    """Scope comes only from the HOST tag: the certificate itself is untagged.
+    A second endpoint with the same host name on :8443 belongs to team-b."""
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    hosts = SqliteHostRepository(db)
+    hosts.add(_HOST, 443, tags="team-a")
+    hosts.add(_HOST, 8443, tags="team-b")
+    old = seed_scanned(db, _HOST, port, parse_certificate(self_signed_leaf.der))
+    new = seed_scanned(db, _HOST, port, parse_certificate(_make_cert(_HOST, days_valid=90).der))
+    return db, old, new
+
+
+def test_scope_from_the_host_tag_alone_reveals_the_current_certificate(tmp_path, self_signed_leaf):
+    from tests.test_tag_scoped_access import _make_scoped_app, _scoped_client
+
+    db, old, new = _host_tagged_estate(tmp_path, self_signed_leaf)
+    app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-a")
+    with _scoped_client(app, groups) as client:
+        _assert_conflict(client.put(f"/api/certificates/{old}/tags", json={"tags": "x"}), old, new)
+
+
+def test_same_host_name_on_another_port_does_not_lend_its_scope(tmp_path, self_signed_leaf):
+    """The :8443 successor is team-b; the team-a tag on host :443 must not
+    make it visible (the join is on host name AND port)."""
+    from tests.test_tag_scoped_access import _make_scoped_app, _scoped_client
+
+    db, old, _new = _host_tagged_estate(tmp_path, self_signed_leaf, port=8443)
+    app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-a")
+    with _scoped_client(app, groups) as client:
+        unknown = _answers(client, "00000000-0000-0000-0000-000000000000")
+        superseded = _answers(client, old)
+    assert superseded == unknown
+
+
+def test_a_renewal_whose_successor_was_deleted_is_an_ordinary_not_found(
+    tmp_path, reload_app, self_signed_leaf
+):
+    """A was renewed to B, then an operator deleted B. The lineage from A
+    dead-ends in a deleted row, so A is not "renewed to" anything current."""
+    from cert_watch.database import delete_certificate_cascade
+
+    db, a, b, _ = _renewed(tmp_path, self_signed_leaf)
+    assert delete_certificate_cascade(db, b)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.put(f"/api/certificates/{a}/tags", json={"tags": "x"})
+    assert (r.status_code, r.json()) == (404, {"error": "not found"})

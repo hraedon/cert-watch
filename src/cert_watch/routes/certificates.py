@@ -159,7 +159,7 @@ async def delete_certificate(
 ) -> RedirectResponse:
     db = _db_path(request)
     try:
-        delete_certificate_service(
+        deleted = delete_certificate_service(
             db,
             cert_id,
             auth=acting_auth(request),
@@ -170,6 +170,9 @@ async def delete_certificate(
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     except CertificateSupersededError as exc:
         return superseded_redirect(exc)
+    if not deleted:
+        # It used to land Home with no message, as if it had deleted.
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     logger.info("deleted certificate %s (cascade)", cert_id)
     return RedirectResponse(url="/", status_code=303)
 
@@ -266,6 +269,10 @@ async def update_certificate_owner(
         )
     except CertificateSupersededError as exc:
         return superseded_redirect(exc)
+    except HostOwnershipTargetError:
+        # Renewed away between resolving the target and the write, to a
+        # certificate the caller can't see: the unknown-id answer.
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     logger.info("updated owner for host %s via certificate %s", host_id, cert_id)
     return RedirectResponse(url=f"/certificates/{cert_id}", status_code=303)
 

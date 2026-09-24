@@ -340,9 +340,10 @@ async def api_assign_cert_to_group(
             refuse_if_superseded(db, cert_id, auth=auth)
             if cert_repo.get_by_id(cert_id) is None:
                 return JSONResponse(content={"error": "certificate not found"}, status_code=404)
-            # Re-checked inside the write transaction: a renewal or delete by
-            # another connection can't land between the check and the insert.
-            assigned = group_repo.assign_cert(
+            # All re-checked inside the write transaction: a renewal, or a
+            # delete of the group or the certificate by another connection,
+            # can't land between the checks and the insert.
+            outcome = group_repo.assign_cert(
                 group_id,
                 cert_id,
                 guard=lambda conn: ensure_not_superseded(conn, cert_id, auth=auth),
@@ -350,8 +351,8 @@ async def api_assign_cert_to_group(
             )
         except CertificateSupersededError as exc:
             return superseded_json(exc)
-        if not assigned:
-            return JSONResponse(content={"error": "certificate not found"}, status_code=404)
+        if outcome != "assigned":
+            return JSONResponse(content={"error": outcome.replace("_", " ")}, status_code=404)
     record_audit(
         db,
         actor=resolve_actor(request),
@@ -384,7 +385,9 @@ async def api_unassign_cert_from_group(
             )
         except CertificateSupersededError as exc:
             return superseded_json(exc)
-        if not removed:
+        if removed == "group_not_found":
+            return JSONResponse(content={"error": "group not found"}, status_code=404)
+        if removed != "unassigned":
             return JSONResponse(
                 content={"error": "certificate is not assigned to this group"},
                 status_code=404,

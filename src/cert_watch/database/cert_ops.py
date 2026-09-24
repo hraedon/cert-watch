@@ -105,7 +105,14 @@ def _select_predecessors(
     head; every leaf then counts as one.) Rows come newest first, which
     orders ties for the lineage fields only.
     """
-    replaced = {row["replaces_cert_id"] for row in old_leaf_rows if row["replaces_cert_id"]}
+    # A row naming itself is not replaced by anything (#115 review): treating
+    # it as a one-node cycle kept the self-reference, and the expiry rules
+    # then skipped the row as superseded -- no alert, ever.
+    replaced = {
+        row["replaces_cert_id"]
+        for row in old_leaf_rows
+        if row["replaces_cert_id"] and row["replaces_cert_id"] != row["id"]
+    }
     heads = [row for row in old_leaf_rows if row["id"] not in replaced] or list(old_leaf_rows)
     same_bytes_heads = [row for row in heads if row["fingerprint_sha256"] == fingerprint]
     if same_bytes_heads:
@@ -214,6 +221,8 @@ def _do_replace(
     if unchanged and old_leaf_row is not None:
         leaf_id = old_leaf_row["id"]
         lineage_id = old_leaf_row["replaces_cert_id"]
+        if lineage_id == leaf_id:
+            lineage_id = None  # never keep a self-reference
     # Operator-set data on the predecessor: the certificate's own tags and
     # its manual alert-group assignments. The rows are deleted and re-inserted
     # below, and until #113 the new row was written without either, so every

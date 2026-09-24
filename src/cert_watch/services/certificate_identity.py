@@ -14,22 +14,32 @@ after ``BEGIN IMMEDIATE`` and before the write, and commit both together.
 this process or another -- can renew the certificate between the check and
 the write (the scan's replace also runs under ``BEGIN IMMEDIATE``).
 
-An id is superseded only when a stored leaf names it in ``replaces_cert_id``
-(its successor). Such an id is refused with
-:class:`CertificateSupersededError`, carrying the successor's id, so the
-client can re-read the current certificate and decide again. It is never
-retargeted to the successor and never answered with success for a no-op.
+An id is superseded when renewal lineage leads from it to a current
+certificate: a leaf that names it in ``replaces_cert_id``, or -- once that
+row is gone too -- the ``cert_renewed`` event that recorded the renewal,
+followed hop by hop to a row that still exists and that nothing replaces
+(the head). This is checked before asking whether the addressed row still
+exists: a stale row can coexist with its successor, and acting on it would
+bypass the current certificate's scope. Such an id is refused with
+:class:`CertificateSupersededError`, carrying the head's id, so the client
+can re-read the current certificate and decide again. It is never
+retargeted to the head and never answered with success for a no-op.
 
-An id with no successor row -- one that never existed, or that an operator
-deleted -- is not "superseded": it falls through to the caller's ordinary
-handling. So does a superseded id whose successor the caller's tag scope
-does not cover: the refusal would reveal that the id was real and renewed,
-so the caller gets exactly the answer an unknown id gets.
+Only renewal lineage counts. An id that never existed, or whose certificate
+an operator deleted (its endpoint's next certificate is a ``cert_added``, not
+a renewal of it), is not superseded and gets the caller's ordinary handling.
+
+A caller whose tag scope does not cover the head gets exactly the answer an
+unknown id gets on that route: the refusal would otherwise reveal that the id
+was real and renewed. For an addressed row that no longer exists, falling
+through gives that answer; for a stale row that still exists, the caller
+supplies it (*hidden*), because falling through would act on the stale row.
 """
 
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from typing import Any
 
 
@@ -64,33 +74,76 @@ def _may_read(conn: sqlite3.Connection, auth: Any, cert_id: str) -> bool:
     return bool({t.casefold() for t in parse_tags(scope_tag)} & effective)
 
 
-def ensure_not_superseded(conn: sqlite3.Connection, cert_id: str, *, auth: Any) -> None:
+def current_head(conn: sqlite3.Connection, cert_id: str) -> str | None:
+    """The current certificate renewal lineage leads to from *cert_id*, or
+    ``None`` when *cert_id* has no successor (or the lineage dead-ends in a
+    deleted row). Reads only on *conn*."""
+    seen = {cert_id}
+    current = cert_id
+    while True:
+        row = conn.execute(
+            "SELECT id FROM certificates WHERE replaces_cert_id = ? AND id != ? "
+            "AND is_leaf = 1 ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (current, current),
+        ).fetchone()
+        successor = str(row["id"]) if row is not None else None
+        if successor is None:
+            event = conn.execute(
+                "SELECT json_extract(payload, '$.cert_id') AS cert_id FROM event_log "
+                "WHERE event_type = 'cert_renewed' "
+                "AND json_extract(payload, '$.replaced_cert_id') = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (current,),
+            ).fetchone()
+            if event is not None and event["cert_id"]:
+                successor = str(event["cert_id"])
+        if successor is None or successor in seen:
+            break
+        seen.add(successor)
+        current = successor
+    if current == cert_id:
+        return None
+    exists = conn.execute("SELECT 1 FROM certificates WHERE id = ?", (current,)).fetchone()
+    return current if exists else None
+
+
+def ensure_not_superseded(
+    conn: sqlite3.Connection,
+    cert_id: str,
+    *,
+    auth: Any,
+    hidden: Callable[[], Exception] | None = None,
+) -> None:
     """Raise :class:`CertificateSupersededError` if *cert_id* was renewed away.
 
     *conn* must be the connection that performs the guarded write, inside a
     ``BEGIN IMMEDIATE`` transaction it has not yet committed. Only reads on
-    *conn*; never commits.
+    *conn*; never commits. When the caller may not see the current
+    certificate, raises ``hidden()`` -- the route's unknown-id error -- if
+    given, else returns (for an addressed row that no longer exists that is
+    already the unknown-id path).
     """
-    if conn.execute("SELECT 1 FROM certificates WHERE id = ?", (cert_id,)).fetchone():
+    head = current_head(conn, cert_id)
+    if head is None:
         return
-    successor = conn.execute(
-        "SELECT id FROM certificates WHERE replaces_cert_id = ? AND is_leaf = 1 "
-        "ORDER BY created_at DESC, rowid DESC LIMIT 1",
-        (cert_id,),
-    ).fetchone()
-    if successor is None:
+    if not _may_read(conn, auth, head):
+        if hidden is not None:
+            raise hidden()
         return
-    if not _may_read(conn, auth, str(successor["id"])):
-        return
-    raise CertificateSupersededError(cert_id, str(successor["id"]))
+    raise CertificateSupersededError(cert_id, head)
 
 
-
-def refuse_if_superseded(db_path: Any, cert_id: str, *, auth: Any) -> None:
+def refuse_if_superseded(
+    db_path: Any,
+    cert_id: str,
+    *,
+    auth: Any,
+    hidden: Callable[[], Exception] | None = None,
+) -> None:
     """Early, advisory form of :func:`ensure_not_superseded`, before a
     service's scope checks, so a renewed-away id is answered as such rather
     than as an out-of-scope target. Not a guarantee: the service repeats the
     check inside the write transaction."""
     from cert_watch.database.connection import _connect
 
-    ensure_not_superseded(_connect(db_path), cert_id, auth=auth)
+    ensure_not_superseded(_connect(db_path), cert_id, auth=auth, hidden=hidden)

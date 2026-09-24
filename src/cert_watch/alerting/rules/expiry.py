@@ -195,7 +195,8 @@ def evaluate_all_certs(
             "san_dns_names, fingerprint_sha256, hostname, port "
             "FROM certificates AS current WHERE is_leaf = 1 "
             "AND NOT EXISTS (SELECT 1 FROM certificates AS successor "
-            "WHERE successor.replaces_cert_id = current.id)"
+            "WHERE successor.replaces_cert_id = current.id "
+            "AND successor.id != current.id)"
         ).fetchall()
 
     # Resolve the complete immutable route once for the batch. The snapshot

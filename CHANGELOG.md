@@ -48,14 +48,24 @@ All notable changes to cert-watch are documented in this file.
   tags, setting its owner, and assigning it to or removing it from an alert
   group. The API answers 409 with `current_cert_id`; the web forms return to
   the current certificate with a note. Nothing is applied to the renewed
-  certificate on the sender's behalf. A caller outside the current
-  certificate's tag scope gets exactly the answer an unknown id gets on
-  that route, so the refusal doesn't reveal that the id was real. Only a
-  renewal counts: an id whose certificate was deleted is an ordinary "not
-  found". The check and the change happen in one database transaction, so
-  a scan in another process can't renew the certificate in between.
-  Removing a certificate from an alert group it isn't assigned to now
-  answers 404 instead of "unassigned" (#113).
+  certificate on the sender's behalf. This holds however many renewals ago
+  the id was current, and when a stale row still sits beside its
+  successor. A caller outside the current certificate's tag scope gets
+  exactly the answer an unknown id gets on that route, so the refusal
+  doesn't reveal that the id was real. Only a renewal counts: an id whose
+  certificate was deleted is an ordinary "not found". The check and the
+  change happen in one database transaction, so a scan in another process
+  can't renew the certificate in between. Assigning a certificate to an
+  alert group also checks, in that transaction, that the group and the
+  certificate still exist. Removing a certificate from an alert group it
+  isn't assigned to now answers 404 instead of "unassigned" (#113).
+- Deleting a certificate that doesn't exist from its page now says
+  "certificate not found" instead of returning Home as if it had worked, and
+  no longer writes a `cert.delete` audit entry for a delete that removed
+  nothing (#113).
+- A certificate whose stored lineage names itself is no longer treated as
+  replaced by itself. Such a row was skipped by the expiry and renewal-window
+  alerts for good. A rescan now also repairs the self-reference (#113).
 - A certificate's detail page says when the endpoint's latest scan failed.
   It previously showed the last good certificate as "Healthy" with its grade
   and never showed the error. The page now marks the latest scan as failed,

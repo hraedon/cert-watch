@@ -121,6 +121,13 @@ class ScopeDeniedError(PermissionError):
     is the user-facing message the route adapters have always shown."""
 
 
+def unknown_target_scope_error(auth_ctx: Any, db_path: str | Path) -> ScopeDeniedError:
+    """The refusal a scoped caller gets for a certificate id that doesn't
+    exist -- used where an id must be answered exactly like an unknown one."""
+    message = write_scope_error(auth_ctx, db_path) or "certificate not found"
+    return ScopeDeniedError(message)
+
+
 def ensure_write_scope(
     auth_ctx: Any,
     db_path: str | Path,
