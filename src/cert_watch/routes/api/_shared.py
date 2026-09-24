@@ -86,8 +86,9 @@ def _invalid_decoded(value: Any, max_depth: int) -> bool:
 MAX_JSON_DEPTH = 64
 # JSON API bodies are small (tags, owner fields, policy, keys). The global
 # request limit is sized for CSV uploads; capping JSON separately bounds the
-# parse-and-walk cost of a hostile body to a fraction of a second.
-MAX_JSON_BODY_BYTES = 1024 * 1024
+# parse-and-walk cost of a hostile body to well under 0.1 s. The largest real
+# body is a host note (10,000 characters, ~60 KB even fully \u-escaped).
+MAX_JSON_BODY_BYTES = 256 * 1024
 
 
 def json_body(raw: bytes, *, require_object: bool = True) -> Any:

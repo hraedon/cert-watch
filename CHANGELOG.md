@@ -12,7 +12,7 @@ All notable changes to cert-watch are documented in this file.
 ### Fixed
 
 - JSON API bodies are refused with `400` when they nest deeper than 64 levels
-  or exceed 1 MiB. The previous depth guard relied on `RecursionError`, which
+  or exceed 256 KiB. The previous depth guard relied on `RecursionError`, which
   CPython 3.14.7 no longer raises for such bodies, so on that interpreter a
   hostile deeply nested body was accepted.
 - `Verify-Install.ps1` run with no arguments no longer fails on a healthy
