@@ -66,6 +66,27 @@ jobs:
           .venv/bin/pytest -m integration -q --no-cov -n0
           tests/test_alert_targets.py tests/test_alert_routing_matrix.py
 
+  test-runtime-python:
+    # The container image runs Python 3.14 while the job above runs 3.13 (the
+    # coverage floors and audit are tuned there). Run the unit suite once more
+    # on the image's interpreter so a runtime-only incompatibility shows up here
+    # rather than after deploy. Keep this in step with the Dockerfile's FROM.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          # Patina verifies the recorded content-model review against git history.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: "3.14"
+      - run: uv venv
+      - run: uv sync --frozen --extra dev --extra auth
+      - name: pytest (image interpreter)
+        run: >-
+          .venv/bin/pytest -q --no-cov -p no:cacheprovider
+          --ignore=tests/e2e --ignore=tests/integration
+
   ldap-integration:
     runs-on: ubuntu-latest
     steps:

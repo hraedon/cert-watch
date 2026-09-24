@@ -4,8 +4,17 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- The container image runs Python 3.14 (was 3.13); CI also runs the unit
+  suite on 3.14.
+
 ### Fixed
 
+- JSON API bodies are refused with `400` when they nest deeper than 64 levels
+  or exceed 256 KiB. The previous depth guard relied on `RecursionError`, which
+  CPython 3.14.7 no longer raises for such bodies, so on that interpreter a
+  hostile deeply nested body was accepted.
 - `Verify-Install.ps1` run with no arguments no longer fails on a healthy
   host-name-bound IIS site. Without `-BaseUrl` it now probes the URLs from the
   site's own bindings (https first) before the `localhost` fallbacks, and

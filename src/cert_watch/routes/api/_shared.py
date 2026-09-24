@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, cast
 
 from fastapi import HTTPException, Request
@@ -44,20 +45,50 @@ def _reject_json_constant(_value: str) -> Any:
     raise JsonBodyError("invalid JSON")
 
 
-def _has_lone_surrogate(value: Any) -> bool:
-    """Inspect decoded JSON iteratively so hostile nesting cannot recurse here."""
-    pending = [value]
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def _invalid_decoded(value: Any, max_depth: int) -> bool:
+    """Whether decoded JSON nests deeper than ``max_depth`` or holds a lone
+    surrogate. Iterative, so hostile nesting cannot recurse here; only
+    containers are queued, strings are checked where they are found."""
+    if isinstance(value, str):
+        return _LONE_SURROGATE.search(value) is not None
+    if not isinstance(value, dict | list):
+        return False
+    search = _LONE_SURROGATE.search
+    pending: list[tuple[dict[str, Any] | list[Any], int]] = [(value, 1)]
     while pending:
-        item = pending.pop()
-        if isinstance(item, str):
-            if any(0xD800 <= ord(char) <= 0xDFFF for char in item):
-                return True
-        elif isinstance(item, dict):
-            pending.extend(item.keys())
-            pending.extend(item.values())
-        elif isinstance(item, list):
-            pending.extend(item)
+        container, depth = pending.pop()
+        if depth > max_depth:
+            return True
+        if isinstance(container, dict):
+            for key in container:
+                if search(key) is not None:
+                    return True
+            children: Any = container.values()
+        else:
+            children = container
+        for child in children:
+            if isinstance(child, str):
+                if search(child) is not None:
+                    return True
+            elif isinstance(child, dict | list):
+                pending.append((child, depth + 1))
     return False
+
+
+# No API body is more than a few levels deep. The bound is explicit because
+# relying on RecursionError is interpreter-dependent: CPython 3.14.7 parses a
+# 100k-deep body without raising it, leaving the value to whatever recurses over
+# it next. The bound is checked on the decoded value (json.loads also accepts
+# UTF-16/32 bytes, which a byte-level scan would misread).
+MAX_JSON_DEPTH = 64
+# JSON API bodies are small (tags, owner fields, policy, keys). The global
+# request limit is sized for CSV uploads; capping JSON separately bounds the
+# parse-and-walk cost of a hostile body to well under 0.1 s. The largest real
+# body is a host note (10,000 characters, ~60 KB even fully \u-escaped).
+MAX_JSON_BODY_BYTES = 256 * 1024
 
 
 def json_body(raw: bytes, *, require_object: bool = True) -> Any:
@@ -67,6 +98,8 @@ def json_body(raw: bytes, *, require_object: bool = True) -> Any:
     Used as the deferred input of a scope-enforcing service, so the body is
     judged only after the caller's scope on the target has been checked.
     """
+    if len(raw) > MAX_JSON_BODY_BYTES:
+        raise JsonBodyError("JSON body too large")
     try:
         body = json.loads(
             raw,
@@ -75,7 +108,7 @@ def json_body(raw: bytes, *, require_object: bool = True) -> Any:
         )
     except (ValueError, RecursionError):
         raise JsonBodyError("invalid JSON") from None
-    if _has_lone_surrogate(body):
+    if _invalid_decoded(body, MAX_JSON_DEPTH):
         raise JsonBodyError("invalid JSON")
     if require_object and not isinstance(body, dict):
         raise JsonBodyError("JSON body must be an object")

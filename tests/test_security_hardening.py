@@ -636,3 +636,43 @@ def test_new_guard_variants_have_stable_repr_and_reject_invalid_shape():
     assert "MutationGuard" in repr(admin_session_json_write_guard)
     with pytest.raises(ValueError, match="JSON guards"):
         MutationGuard("write", form=True, json_only=True)
+
+
+def test_json_nesting_is_bounded_explicitly_not_by_recursion():
+    """The depth bound must not depend on the interpreter's recursion guard.
+
+    CPython 3.14.7 parsed the 100k-deep body in the test above without raising
+    RecursionError, so `json_body` accepted it. The bound is now checked on the
+    decoded value, which also makes it independent of the body's encoding
+    (json.loads accepts UTF-16/32 bytes).
+    """
+    import json
+
+    from cert_watch.routes.api._shared import MAX_JSON_DEPTH, JsonBodyError, json_body
+
+    def nested(depth: int) -> str:
+        return '{"v":' + "[" * (depth - 1) + "0" + "]" * (depth - 1) + "}"
+
+    at_limit = nested(MAX_JSON_DEPTH)
+    assert json_body(at_limit.encode()) == json.loads(at_limit)
+    with pytest.raises(JsonBodyError, match="invalid JSON"):
+        json_body(nested(MAX_JSON_DEPTH + 1).encode())
+
+    # An escaped quote in a UTF-16/32 body once desynchronised a byte-level
+    # scan and hid the nesting behind it; brackets inside strings don't count.
+    marker = '\\"' + "[" * (MAX_JSON_DEPTH + 1)
+    too_deep = '{"m":' + json.dumps('\\"') + ',"v":' + nested(MAX_JSON_DEPTH + 2)[5:]
+    shallow = json.dumps({"marker": marker})
+    for codec in ("utf-8", "utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be"):
+        with pytest.raises(JsonBodyError, match="invalid JSON"):
+            json_body(too_deep.encode(codec))
+        assert json_body(shallow.encode(codec)) == {"marker": marker}
+
+
+def test_json_body_size_is_capped_below_the_request_limit():
+    from cert_watch.routes.api._shared import MAX_JSON_BODY_BYTES, JsonBodyError, json_body
+
+    padded = b"{}" + b" " * (MAX_JSON_BODY_BYTES - 2)
+    assert json_body(padded) == {}
+    with pytest.raises(JsonBodyError, match="too large"):
+        json_body(padded + b" ")
