@@ -2,7 +2,10 @@
 
 All notable changes to cert-watch are documented in this file.
 
-## [Unreleased]
+## [1.0.1] - 2026-09-23
+
+A patch release. No schema migrations and no configuration changes. Windows
+operators should read the Security note below.
 
 ### Security
 
@@ -35,6 +38,14 @@ All notable changes to cert-watch are documented in this file.
 - Configure application logging before startup schema migration so the
   pre-migration backup path and each applied migration reach the configured
   handler.
+
+- `cert-watch verify-report` reads the report as UTF-8 regardless of the
+  system locale, so a report containing non-ASCII text no longer fails as
+  tampered on Windows.
+- Digest delivery leases are evaluated on the digest engine's clock, and
+  SQL date arithmetic (dashboard buckets, pivot day counts, the `/readyz`
+  expired count) uses a reference time bound from the application instead of
+  SQLite's own clock.
 
 ### Documentation
 
