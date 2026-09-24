@@ -17,17 +17,23 @@ the existing rows to the same form:
     its own endpoint twice. The survivor keeps its values and takes a losing
     row's where it had none; notes are concatenated; the certificates'
     tags and manual alert-group assignments are kept.
-  * Different scopes: **fail closed**. Tags become the intersection of the
-    rows' tag sets (disjoint: no tags, so the endpoint is visible to
-    administrators only until one re-tags it). Owner name, e-mail and Slack
-    are kept only where identical across every row, else cleared, so no
-    alert routes to a planted owner; a cleared owner means the endpoint's
-    alerts reach only alert groups matching its (intersected) tags and the
-    global recipients, as for any host without an owner. Notes and every
-    other field are the survivor's own. The per-certificate tags of every
-    colliding spelling's certificates are cleared, and manual alert-group
+  * Different scopes: **fail closed**, and nothing follows the rows' age.
+    Tags become the intersection of the rows' tag sets (disjoint: no tags,
+    so the endpoint is visible to administrators only until one re-tags
+    it). Every other field (owner name, e-mail and Slack, notes, threshold,
+    scan interval, expected issuers, STARTTLS mode, renewal status and
+    method, runbook) is kept only where every row agrees and is otherwise
+    reset to the column's declared default, so a planted row can neither
+    route alerts to its owner nor set the victim's thresholds, cadence,
+    issuers or notes. A cleared owner means the endpoint's alerts reach only
+    alert groups matching its (intersected) tags and the global recipients,
+    as for any host without an owner. The per-certificate tags of every
+    colliding spelling's certificates are cleared, manual alert-group
     assignments are kept only for groups assigned on every colliding row's
-    certificates.
+    certificates, and the recipient snapshots (``extra_recipients``,
+    ``routing``) of still-deliverable alerts on those certificates are
+    emptied, so dispatch cannot mail a planted owner from a queued alert
+    either; sent and closed alerts keep their history.
 
   Every value dropped is recorded in full in an ``audit_log`` row
   (``host.merge_alias``, visible on the audit page) and a WARNING log line
@@ -76,9 +82,13 @@ _FILLABLE = (
     "owner_name", "owner_email", "owner_slack", "renewal_method", "runbook_url",
     "expected_issuers", "starttls_mode", "threshold_days", "scan_interval_hours",
 )
-# Cross-scope collisions: alert recipients, kept only when every row agrees.
-_OWNER_FIELDS = ("owner_name", "owner_email", "owner_slack")
+# Cross-scope collisions: every field but these is kept only when every row
+# agrees, else reset to the column's declared default.
+_IDENTITY_FIELDS = ("id", "hostname", "port", "added_at", "tags")
 _OPEN = ("pending", "sending")
+_EMPTY_ROUTING = json.dumps(
+    {"version": 1, "recipients": [], "groups": []}, separators=(",", ":"), sort_keys=True
+)
 
 # ``prefix:hostname:port:fingerprint[:suffix...]`` — the hostname is the only
 # field that may contain colons (IPv6), so it is found by anchoring on the port
@@ -144,17 +154,46 @@ def _same_scope_fields(survivor: dict[str, Any], losers: list[dict[str, Any]]) -
     return fields
 
 
-def _cross_scope_fields(members: list[dict[str, Any]]) -> dict[str, Any]:
-    """Different teams claim one endpoint: keep only what every row agrees on."""
+def _column_defaults(conn: sqlite3.Connection, table: str) -> dict[str, Any]:
+    """Declared DEFAULT of every column (``None`` when there is none)."""
+    defaults: dict[str, Any] = {}
+    for row in conn.execute(f"PRAGMA table_info({table})"):
+        raw = row[4]
+        if raw is None or str(raw).upper() == "NULL":
+            defaults[row[1]] = None
+        elif len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
+            defaults[row[1]] = raw[1:-1]
+        else:
+            try:
+                defaults[row[1]] = int(raw)
+            except ValueError:
+                defaults[row[1]] = raw
+    return defaults
+
+
+def _cross_scope_fields(
+    members: list[dict[str, Any]], defaults: dict[str, Any]
+) -> dict[str, Any]:
+    """Different teams claim one endpoint: keep only what every row agrees on.
+
+    Nothing depends on which row is older. Tags are the intersection; every
+    other field is kept when identical across all rows and otherwise reset
+    to the column's declared default (``NULL`` for a threshold or interval,
+    the empty string for text, ``pending`` for the renewal status).
+    """
     survivor = members[0]
     common = set.intersection(*(_tag_set(m) for m in members))
     kept_tags = [t for t in parse_tags(survivor.get("tags") or "") if t.casefold() in common]
-    fields: dict[str, Any] = {"tags": format_tags(kept_tags)}
-    for name in _OWNER_FIELDS:
-        if name not in survivor:
+    fields: dict[str, Any] = {}
+    if format_tags(kept_tags) != (survivor.get("tags") or ""):
+        fields["tags"] = format_tags(kept_tags)
+    for name in survivor:
+        if name in _IDENTITY_FIELDS:
             continue
-        values = {m.get(name) or "" for m in members}
-        fields[name] = values.pop() if len(values) == 1 else ""
+        values = {m.get(name) for m in members}
+        agreed = values.pop() if len(values) == 1 else defaults.get(name)
+        if agreed != survivor.get(name):
+            fields[name] = agreed
     return fields
 
 
@@ -173,7 +212,9 @@ def _quarantine_certificates(
     """Cross-scope collision: clear per-certificate tags on every colliding
     spelling's certificates and keep only alert-group assignments present on
     every member's certificates. Returns what was dropped, for the audit row."""
-    dropped: dict[str, Any] = {"certificate_tags": {}, "alert_group_assignments": []}
+    dropped: dict[str, Any] = {
+        "certificate_tags": {}, "alert_group_assignments": [], "alert_recipient_snapshots": {},
+    }
     if "certificates" not in tables:
         return dropped
     has_tags = "tags" in _columns(conn, "certificates")
@@ -212,6 +253,27 @@ def _quarantine_certificates(
                             "DELETE FROM alert_group_certs WHERE cert_id = ? AND group_id = ?",
                             (cert_id, row[0]),
                         )
+    # Queued alerts carry an immutable recipient snapshot taken when they
+    # fired; a deliverable one would still mail a planted owner after the
+    # host row was cleared. Empty the snapshots of every still-deliverable
+    # alert on these certificates; sent and closed alerts keep their history.
+    all_cert_ids = [cid for cert_ids, _ in per_member for cid in cert_ids]
+    if all_cert_ids and "alerts" in tables and "routing" in _columns(conn, "alerts"):
+        placeholders = ",".join("?" * len(all_cert_ids))
+        rows = conn.execute(
+            f"SELECT id, extra_recipients, routing FROM alerts WHERE cert_id IN ({placeholders})"
+            f" AND status IN ({','.join('?' * len(_OPEN))})"
+            " AND (COALESCE(extra_recipients, '[]') != '[]' OR COALESCE(routing, ?) != ?)",
+            [*all_cert_ids, *_OPEN, _EMPTY_ROUTING, _EMPTY_ROUTING],
+        ).fetchall()
+        for row in rows:
+            dropped["alert_recipient_snapshots"][row["id"]] = {
+                "extra_recipients": row["extra_recipients"], "routing": row["routing"],
+            }
+            conn.execute(
+                "UPDATE alerts SET extra_recipients = '[]', routing = ? WHERE id = ?",
+                (_EMPTY_ROUTING, row["id"]),
+            )
     return dropped
 
 
@@ -268,9 +330,12 @@ def _canonicalize_hosts(conn: sqlite3.Connection, tables: set[str]) -> None:
             same_scope = _same_scope(members)
             if same_scope:
                 applied = _same_scope_fields(survivor, losers)
-                dropped: dict[str, Any] = {"certificate_tags": {}, "alert_group_assignments": []}
+                dropped: dict[str, Any] = {
+                "certificate_tags": {}, "alert_group_assignments": [],
+                "alert_recipient_snapshots": {},
+            }
             else:
-                applied = _cross_scope_fields(members)
+                applied = _cross_scope_fields(members, _column_defaults(conn, "hosts"))
                 dropped = _quarantine_certificates(conn, tables, members)
             conn.execute(
                 f"DELETE FROM hosts WHERE id IN ({','.join('?' * len(losers))})",

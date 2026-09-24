@@ -1193,10 +1193,11 @@ def _insert_alias_estate(conn: sqlite3.Connection) -> None:
         ("h-same-a", "same.example.test", 443, "team-c", "", "n1", None, "", "", _ts(1, 1)),
         ("h-same-b", "SAME.example.test.", 443, "Team-C", "Cara", "n2", 21, _RUNBOOK,
          "acme", _ts(2, 1)),
-        # A planted alias that is the OLDER row: it survives, but keeps nothing.
-        ("h-att", "planted.example.test", 443, "team-x", "Mallory", "mine now", 7, "", "",
-         _ts(1, 1)),
-        ("h-vic", "PLANTED.example.test", 443, "team-y", "Yves", "ours", 30, "", "",
+        # A planted alias that is the OLDER row: it survives, but keeps nothing
+        # the rows disagree on (renewal_method they agree on).
+        ("h-att", "planted.example.test", 443, "team-x", "Mallory", "mine now", 7, "",
+         "manual", _ts(1, 1)),
+        ("h-vic", "PLANTED.example.test", 443, "team-y", "Yves", "ours", 30, "", "manual",
          _ts(2, 1)),
     ]
     for hid, hn, port, tags, owner, notes, threshold, runbook, method, added in hosts:
@@ -1207,6 +1208,12 @@ def _insert_alias_estate(conn: sqlite3.Connection) -> None:
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (hid, hn, port, tags, owner, email, notes, threshold, runbook, method, added),
         )
+    # The planted row also set the cadence, STARTTLS mode, issuer allowlist
+    # and renewal state the victim would inherit by age.
+    conn.execute(
+        "UPDATE hosts SET scan_interval_hours = 8760, starttls_mode = 'smtp',"
+        " expected_issuers = 'Evil CA', renewal_status = 'renewed' WHERE id = 'h-att'"
+    )
     now = datetime.now(UTC).isoformat()
     for cid, hn, port, tags in (
         ("c-old", "victim.example.test", 443, ""),
@@ -1267,6 +1274,19 @@ def _insert_alias_estate(conn: sqlite3.Connection) -> None:
             " dedupe_key) VALUES (?, ?, 'expiry_warning', ?, 'm', ?, ?, ?)",
             (aid, cid, status, created, hn, key),
         )
+    # Queued and already-sent alerts on the planted certificate, routed to the
+    # planted owner at the time they fired.
+    for aid, status in (("a-planted-queued", "pending"), ("a-planted-sent", "sent")):
+        conn.execute(
+            "INSERT INTO alerts (id, cert_id, alert_type, status, message, created_at, hostname,"
+            " dedupe_key, extra_recipients, routing) VALUES (?, 'c-att', 'expiry_warning', ?,"
+            " 'm', ?, 'planted.example.test', ?, ?, ?)",
+            (aid, status, "2026-02-06T00:00:00+00:00",
+             f"expiry:planted.example.test:443:{_FP}:expiry_warning:{aid}",
+             json.dumps(["mallory@example.test"]),
+             json.dumps({"version": 1, "recipients": ["mallory@example.test"], "groups": []},
+                        separators=(",", ":"), sort_keys=True)),
+        )
     for key, first, last, count in (
         (f"overdue:victim.example.test:443:{_FP}", _ts(1, 1), _ts(1, 5), 2),
         (f"overdue:VICTIM.example.test:443:{_FP}", "2025-12-01T00:00:00+00:00", _ts(1, 9), 3),
@@ -1325,7 +1345,7 @@ def test_migration_0038_merges_aliases_and_canonicalizes_every_hostname_keyed_ro
         # survivor's own; nothing filled from the planted row.
         assert survivor["tags"] == ""
         assert survivor["owner_name"] == "" and survivor["owner_email"] == ""
-        assert survivor["notes"] == "old note"
+        assert survivor["notes"] == ""  # "old note" / "planted" / "old note": not agreed
         assert survivor["threshold_days"] is None
         assert survivor["runbook_url"] == "" and survivor["renewal_method"] == ""
         assert hosts["h-8443"]["hostname"] == "victim.example.test"
@@ -1343,7 +1363,13 @@ def test_migration_0038_merges_aliases_and_canonicalizes_every_hostname_keyed_ro
         planted = hosts["h-att"]
         assert planted["hostname"] == "planted.example.test"
         assert planted["tags"] == "" and planted["owner_email"] == ""
-        assert planted["notes"] == "mine now"  # survivor's own; recorded in audit
+        # Every field the rows disagreed on is the column default, not the
+        # older (planted) row's value; the one they agreed on is kept.
+        assert planted["notes"] == ""
+        assert planted["threshold_days"] is None and planted["scan_interval_hours"] is None
+        assert planted["starttls_mode"] == "" and planted["expected_issuers"] == ""
+        assert planted["renewal_status"] == "pending"
+        assert planted["renewal_method"] == "manual"
         assert conn.execute(
             "SELECT COUNT(*) FROM hosts WHERE hostname = 'victim.example.test' AND port = 443"
         ).fetchone()[0] == 1
@@ -1361,7 +1387,7 @@ def test_migration_0038_merges_aliases_and_canonicalizes_every_hostname_keyed_ro
         # Nothing was dropped from the history tables.
         assert conn.execute("SELECT COUNT(*) FROM certificates").fetchone()[0] == 8
         assert conn.execute("SELECT COUNT(*) FROM scan_history").fetchone()[0] == 8
-        assert conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0] == 5
+        assert conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0] == 7
 
         # Cross-scope: the certificates of every colliding spelling grant
         # nothing (per-cert tags cleared, manual group assignments not shared
@@ -1393,12 +1419,19 @@ def test_migration_0038_merges_aliases_and_canonicalizes_every_hostname_keyed_ro
             assert write_scope_error(ctx(tag), db_path, cert_id=cert_id) is not None, tag
             assert _effective_tags(db_path, host_id=host_id) == set(), tag
         # No alert routes to the planted owner: the survivor has no owner
-        # e-mail, so its certificates resolve to group recipients only (none
-        # here) and fall back to the global recipients at send time.
+        # e-mail, so fresh routing resolves to group recipients only (none
+        # here) and falls back to the global recipients at send time...
         from cert_watch.alerting.routing import resolve_cert_recipients
 
         owner = {"owner_email": hosts["h-att"]["owner_email"]}
         assert resolve_cert_recipients([], owner, {}) == []
+        # ...and the queued alert's snapshot, taken when it fired, is emptied
+        # too, while the sent one keeps its history.
+        queued = dict(conn.execute("SELECT * FROM alerts WHERE id = 'a-planted-queued'").fetchone())
+        sent = dict(conn.execute("SELECT * FROM alerts WHERE id = 'a-planted-sent'").fetchone())
+        assert queued["extra_recipients"] == "[]"
+        assert json.loads(queued["routing"]) == {"version": 1, "recipients": [], "groups": []}
+        assert json.loads(sent["extra_recipients"]) == ["mallory@example.test"]
         # The same-scope team keeps full access.
         assert write_scope_error(ctx("team-c"), db_path, host_id="h-same-a") is None
 
@@ -1449,9 +1482,7 @@ def test_migration_0038_merges_aliases_and_canonicalizes_every_hostname_keyed_ro
         assert {m["id"] for m in detail["removed"]} == {"h-upper", "h-dot"}
         assert {m["tags"] for m in detail["removed"]} == {"team-a,web", "TEAM-B"}
         assert detail["survivor_before"]["tags"] == "team-b"
-        assert detail["survivor_changes"] == {
-            "tags": "", "owner_name": "", "owner_email": "", "owner_slack": "",
-        }
+        assert detail["survivor_changes"] == {"tags": "", "notes": ""}
         assert detail["dropped_from_certificates"]["certificate_tags"] == {"c-upper": "team-a"}
         assert detail["dropped_from_certificates"]["alert_group_assignments"] == [
             {"cert_id": "c-upper", "group_id": "g-team-a"}
@@ -1461,7 +1492,17 @@ def test_migration_0038_merges_aliases_and_canonicalizes_every_hostname_keyed_ro
         assert audit["h-same-a"]["dropped_from_certificates"]["alert_group_assignments"] == []
         planted_detail = audit["h-att"]
         assert planted_detail["survivor_before"]["owner_email"] == "mallory@example.test"
-        assert planted_detail["survivor_changes"]["owner_email"] == ""
+        assert planted_detail["survivor_changes"] == {
+            "tags": "", "owner_name": "", "owner_email": "", "notes": "",
+            "threshold_days": None, "scan_interval_hours": None, "starttls_mode": "",
+            "expected_issuers": "", "renewal_status": "pending",
+        }
+        assert planted_detail["dropped_from_certificates"]["alert_recipient_snapshots"] == {
+            "a-planted-queued": {
+                "extra_recipients": '["mallory@example.test"]',
+                "routing": '{"groups":[],"recipients":["mallory@example.test"],"version":1}',
+            }
+        }
         assert planted_detail["removed"][0]["tags"] == "team-y"
         assert planted_detail["dropped_from_certificates"]["certificate_tags"] == {
             "c-att": "team-x", "c-vic": "team-y",
@@ -1478,6 +1519,41 @@ def test_migration_0038_merges_aliases_and_canonicalizes_every_hostname_keyed_ro
         assert conn.execute(
             "SELECT COUNT(*) FROM audit_log WHERE action = 'host.merge_alias'"
         ).fetchone()[0] == 4
+
+
+def test_migration_0038_leaves_no_planted_recipient_on_any_dispatched_envelope(
+    db_path: Path,
+) -> None:
+    """End to end: a queued alert routed to a planted owner when it fired is
+    dispatched, after the migration, to nobody in particular (the global
+    recipients only, added by the transport)."""
+    from cert_watch.alerting import Dispatcher
+    from cert_watch.alerting.model import SendResult
+    from cert_watch.migrations.m0038_canonical_hostnames import upgrade
+
+    init_schema(db_path)
+    with sqlite3.connect(str(db_path)) as conn:
+        _insert_alias_estate(conn)
+        conn.commit()
+        upgrade(conn)
+        conn.commit()
+
+    class Recording:
+        channel = "webhook:generic"
+        destination_id = "recording"
+
+        def __init__(self) -> None:
+            self.envelopes: dict[str, tuple[str, ...]] = {}
+
+        def send(self, message):
+            self.envelopes[message.cert_id] = tuple(message.queued_recipients)
+            return SendResult("accepted")
+
+    transport = Recording()
+    result = Dispatcher(db_path, transports=[transport]).process_pending()
+    assert result["sent"] >= 1 and "c-att" in transport.envelopes
+    assert transport.envelopes["c-att"] == ()
+    assert not any("mallory" in r for rs in transport.envelopes.values() for r in rs)
 
 
 def test_migration_0038_rewrites_each_table_in_one_pass_regardless_of_alias_count(

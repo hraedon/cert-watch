@@ -1545,10 +1545,75 @@ def test_health_probes_are_detailed_for_administrators_and_the_metrics_token(
     assert anonymous.status_code == 503 and anonymous.json() == {"status": "degraded"}
     assert bad_token.json() == {"status": "degraded"}
     assert "checks" in scraper.json() and scraper.json()["checks"]["database"] == "ok"
-    # The scraper's token is for /readyz; /api/health stays a session API.
+    # The scraper's token is for /readyz; /api/health stays a session API,
+    # and the token never widens a scoped session on it.
     with _client(estate.full_dir, None, metrics_token=_METRICS_TOKEN) as client:
         r = client.get("/api/health", headers={"Authorization": f"Bearer {_METRICS_TOKEN}"})
     assert r.status_code == 401
+    with _client(estate.full_dir, "pay-viewer", metrics_token=_METRICS_TOKEN) as client:
+        bearer = {"Authorization": f"Bearer {_METRICS_TOKEN}"}
+        assert set(client.get("/api/health", headers=bearer).json()) == {"overall"}
+        assert "checks" in client.get("/readyz", headers=bearer).json()
+
+
+def _shape(resp: Any) -> str:
+    body = resp.json()
+    return "detailed" if ("checks" in body or "scheduler_running" in body) else "shallow"
+
+
+def test_health_probes_resolve_api_keys_and_sessions_like_the_middleware(
+    estate: _Estate, tmp_path: Path
+) -> None:
+    """/readyz is public and authenticates its caller itself; it must reach the
+    same decision as /api/health for every credential mix, and honour
+    revocation: an admin API key is detailed and a read key shallow; with a
+    scoped session AND an admin key the session wins on both routes (the
+    middleware's order); a cookie replayed after logout, or after the role
+    was demoted, is shallow."""
+    from cert_watch.database import Role, SqliteRoleRepository, SqliteUserRepository, User
+    from cert_watch.database.api_keys import SqliteApiKeyRepository
+    from cert_watch.database.connection import _connect
+
+    db = _copy_estate(estate.full_dir, tmp_path)
+    roles, users = SqliteRoleRepository(db), SqliteUserRepository(db)
+    admin_role = roles.add(Role(name="second-admin-role", permission_tier="admin", scope_tag=""))
+    users.add(User(username="second-admin", email="", password_hash=_hash(_PW), role_id=admin_role))
+    keys = SqliteApiKeyRepository(db)
+    admin_key = keys.create_key("k-admin", "admin")[1]
+    read_key = keys.create_key("k-read", "read")[1]
+
+    with _client(tmp_path, None) as client:
+        for token, expected in ((admin_key, "detailed"), (read_key, "shallow")):
+            headers = {"Authorization": f"Bearer {token}"}
+            assert _shape(client.get("/readyz", headers=headers)) == expected
+            assert _shape(client.get("/api/health", headers=headers)) == expected
+    with _client(tmp_path, "pay-viewer") as client:
+        headers = {"Authorization": f"Bearer {admin_key}"}
+        assert _shape(client.get("/readyz", headers=headers)) == "shallow"
+        assert _shape(client.get("/api/health", headers=headers)) == "shallow"
+    with _client(tmp_path, "second-admin") as client:
+        assert _shape(client.get("/readyz")) == "detailed"
+        assert _shape(client.get("/api/health")) == "detailed"
+        cookie = client.cookies.get(SESSION_COOKIE)
+        with _connect(db) as conn:
+            conn.execute(
+                "UPDATE roles SET permission_tier = 'viewer', scope_tag = 'payments' WHERE id = ?",
+                (admin_role,),
+            )
+            conn.commit()
+        assert _shape(client.get("/readyz")) == "shallow"  # demoted, same cookie
+        assert _shape(client.get("/api/health")) == "shallow"
+        with _connect(db) as conn:
+            conn.execute(
+                "UPDATE roles SET permission_tier = 'admin', scope_tag = '' WHERE id = ?",
+                (admin_role,),
+            )
+            conn.commit()
+        assert _shape(client.get("/readyz")) == "detailed"
+        assert client.post("/auth/logout", headers=_csrf_header(client)).status_code in (200, 303)
+        client.cookies.set(SESSION_COOKIE, cookie)
+        assert _shape(client.get("/readyz")) == "shallow"  # replayed after logout
+        assert client.get("/api/health").status_code == 401
 
 
 @pytest.mark.parametrize("user", ("pay-operator", _DIRECTORY_USER))

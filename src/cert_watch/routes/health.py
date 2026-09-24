@@ -12,17 +12,14 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from cert_watch.alerting.model import UNDELIVERED_AFTER_HOURS, delivery_is_configured
-from cert_watch.auth import SESSION_COOKIE, decode_session, validate_session
 from cert_watch.auth.request_context import (
     _is_auth_enabled,
-    attach_session_context,
-    authenticate_api_key,
     check_metrics_token,
     metrics_token_configured,
+    resolve_session_user,
 )
 from cert_watch.database.connection import _connect, _sql_now
 from cert_watch.routes._deps import _db_path, _get_settings
-from cert_watch.security import _request_security
 
 logger = logging.getLogger("cert_watch.routes.health")
 
@@ -61,46 +58,37 @@ def _undelivered_count(db: str | Path, *, now: datetime) -> int:
     return overdue + stale_leases
 
 
-def _detail_allowed(request: Request, auth_ctx: Any) -> bool:
+def _detail_allowed(request: Request, auth_ctx: Any, *, metrics_token_unlocks: bool) -> bool:
     """Whether this caller may see the detailed health body.
 
     The detail (last scan, certificate and alert counts, scheduler errors) is
-    computed over the whole estate, so it is for administrators and the
-    monitoring scraper (``CERT_WATCH_METRICS_TOKEN``) only. A tag-scoped
-    principal, an API key below ``admin`` scope and an anonymous caller get
-    the shallow body: the overall status and nothing else (#116 review).
-    Open mode (no auth provider) has no principals to tell apart and keeps
-    the full body, as the deployment smoke checks rely on.
+    computed over the whole estate, so it is for administrators only, plus,
+    on ``/readyz`` alone (*metrics_token_unlocks*), the monitoring scraper's
+    ``CERT_WATCH_METRICS_TOKEN``. A tag-scoped principal, an API key below
+    ``admin`` scope and an anonymous caller get the shallow body: the overall
+    status and nothing else (#116 review). The token never widens a session:
+    ``/api/health`` is a session API and ignores it. Open mode (no auth
+    provider) has no principals to tell apart and keeps the full body, as
+    the deployment smoke checks rely on.
     """
     if not _is_auth_enabled(request):
         return True
-    if metrics_token_configured(request) and check_metrics_token(request):
+    if metrics_token_unlocks and metrics_token_configured(request) and check_metrics_token(request):
         return True
     return auth_ctx is not None and bool(getattr(auth_ctx, "is_admin", False))
 
 
-def _probe_principal(request: Request, db: str | Path) -> Any:
+def _probe_principal(request: Request) -> Any:
     """Resolve the caller of a public probe path to an AuthContext, or None.
 
     ``/readyz`` is public, so ``auth_middleware`` never runs on it and
-    nothing has authenticated the request yet: an API key is tried first,
-    then the session cookie, through the same builders the middleware uses.
+    nothing has authenticated the request yet. The middleware's own resolver
+    is used (session cookie first, then API key), so a caller presenting
+    both credentials gets the same answer here as on ``/api/health``.
     """
-    ctx = authenticate_api_key(request, db)
-    if ctx is not None:
-        return ctx
-    token = request.cookies.get(SESSION_COOKIE, "")
-    info = decode_session(token, _request_security(request))
-    if info is None:
+    if resolve_session_user(request).error is not None:
         return None
-    settings = getattr(request.app.state, "settings", None)
-    username = validate_session(
-        token, _request_security(request), db_path=str(db),
-        session_ttl=getattr(settings, "session_ttl", None) if settings else None,
-    )
-    if not username:
-        return None
-    return attach_session_context(request, username, info)
+    return getattr(request.state, "auth_context", None)
 
 
 @router.get("/healthz")
@@ -216,7 +204,8 @@ def readyz(request: Request) -> JSONResponse:
             checks["undelivered_alerts"] = "error"
             checks["stale_sending_leases"] = "error"
     full = _detail_allowed(
-        request, _probe_principal(request, db) if _is_auth_enabled(request) else None
+        request, _probe_principal(request) if _is_auth_enabled(request) else None,
+        metrics_token_unlocks=True,
     )
     body: dict[str, Any] = {"status": "ok" if ok else "degraded"}
     if full:
@@ -341,7 +330,9 @@ def build_api_health_response(request: Request) -> JSONResponse:
         overall = "warning"
 
     checks["overall"] = overall
-    if not _detail_allowed(request, getattr(request.state, "auth_context", None)):
+    if not _detail_allowed(
+        request, getattr(request.state, "auth_context", None), metrics_token_unlocks=False
+    ):
         return JSONResponse(content={"overall": overall})
     return JSONResponse(content=checks)
 

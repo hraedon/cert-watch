@@ -46,10 +46,14 @@ know:
 - **Two rows that spell one endpoint are collapsed.** If both rows carry the
   same tags, they are merged. If they carry different tags, the migration
   fails closed: the surviving row keeps only the tags both had (none, if
-  disjoint, which makes the endpoint visible to administrators only), owner
-  fields only where both agreed, and the certificates under that endpoint
-  lose their per-certificate tags and any alert-group assignment not shared
-  by both. Nothing is deleted from the history. Every such collapse is a
+  disjoint, which makes the endpoint visible to administrators only); every
+  other field (owner, notes, threshold, scan interval, expected issuers,
+  STARTTLS mode, renewal status and method, runbook) is kept only where both
+  agreed and otherwise reset to its default; the certificates under that
+  endpoint lose their per-certificate tags and any alert-group assignment
+  not shared by both; and alerts still queued for them are sent to the
+  global recipients only, not to the recipients they were queued with.
+  Nothing is deleted from the history. Every such collapse is a
   `WARNING` line in the startup log and an audit entry with action
   `host.merge_alias` that holds the removed row and every dropped value in
   full. **After upgrading, an administrator should open the audit log,

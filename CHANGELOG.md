@@ -55,10 +55,15 @@ All notable changes to cert-watch are documented in this file.
   merged (empty fields filled, notes joined). If they carry different tags
   the migration fails closed, whichever row is older: the surviving row keeps
   only the tags all rows shared (none if disjoint: administrators only until
-  re-tagged) and owner fields only where all rows agreed, and the endpoint's
-  certificates lose their per-certificate tags and any alert-group
-  assignment not shared by every row; so an alias planted through the old
-  bug grants its team nothing and routes no alert to it. Every collapse is a
+  re-tagged); every other field (owner and contact, notes, alert threshold,
+  scan interval, expected issuers, STARTTLS mode, renewal status and method,
+  runbook) is kept only where all rows agreed and is otherwise reset to its
+  default; the endpoint's certificates lose their per-certificate tags and
+  any alert-group assignment not shared by every row; and alerts still
+  waiting to be sent for those certificates lose the recipient list they
+  were queued with (sent and closed alerts keep theirs). So an alias planted
+  through the old bug grants its team nothing, sets nothing on the victim
+  and routes no alert, queued or new, to it. Every collapse is a
   startup `WARNING` and an audit entry (`host.merge_alias`) holding the
   removed row and every dropped value in full. Nothing is deleted from the
   history tables. Legacy numeric IPv4 spellings (`010.010.010.010`,
@@ -78,9 +83,12 @@ All notable changes to cert-watch are documented in this file.
   scheduler errors) is computed over the whole estate, so a tag-scoped user
   could watch another team's scans fail and alerts pile up. Everyone else,
   signed in or not, now gets `{"status": ...}` from `/readyz` and
-  `{"overall": ...}` from `/api/health`. Status codes are unchanged, so
-  probes and uptime checks are unaffected; with authentication disabled the
-  full bodies remain.
+  `{"overall": ...}` from `/api/health`. The metrics token unlocks detail on
+  `/readyz` only; it does not widen a signed-in session on `/api/health`.
+  `/readyz` resolves its caller as the rest of the app does (session cookie
+  first, then API key), so a caller presenting both gets the same answer on
+  both endpoints. Status codes are unchanged, so probes and uptime checks are
+  unaffected; with authentication disabled the full bodies remain.
 
 ### Changed
 
