@@ -600,6 +600,133 @@ def test_format_safe_url(url: str, expected: str) -> None:
     assert out == expected
 
 
+# --- Verify-Install.ps1: probe URLs and app pool from the IIS site (#105) ----
+
+PROBE_FNS = ("ConvertTo-BindingProbeUrl", "Get-ProbeUrlList", "Format-SafeUrl")
+
+
+def _binding_urls(bindings: list[dict[str, str]]) -> list[str]:
+    body = "@(ConvertTo-BindingProbeUrl " + _input(bindings) + ")"
+    out = run_ps(VERIFY, body, functions=PROBE_FNS)
+    if out is None:
+        return []
+    return out if isinstance(out, list) else [out]
+
+
+BINDING_CASES = [
+    # install-windows.ps1 -ConfigureIIS -HostName: host header on https 443.
+    ([{"protocol": "https", "bindingInformation": "*:443:certs.example.test"}], ["https://certs.example.test"]),
+    ([{"protocol": "http", "bindingInformation": "*:80:certs.example.test"}], ["http://certs.example.test"]),
+    ([{"protocol": "https", "bindingInformation": "*:8443:certs.example.test"}], ["https://certs.example.test:8443"]),
+    ([{"protocol": "http", "bindingInformation": "*:8080:"}], ["http://localhost:8080"]),
+    ([{"protocol": "https", "bindingInformation": "*:443:*"}], ["https://localhost"]),
+    ([{"protocol": "http", "bindingInformation": ":80:"}], ["http://localhost"]),
+    # An IP-specific binding is not reachable via localhost: probe its address.
+    ([{"protocol": "https", "bindingInformation": "192.0.2.10:443:"}], ["https://192.0.2.10"]),
+    ([{"protocol": "http", "bindingInformation": "[2001:db8::10]:8080:"}], ["http://[2001:db8::10]:8080"]),
+    ([{"protocol": "https", "bindingInformation": "[::]:443:"}], ["https://localhost"]),
+    ([{"protocol": "https", "bindingInformation": "[2001:db8::10]:443:certs.example.test"}], ["https://certs.example.test"]),
+    # https first whatever the binding order; duplicates collapse.
+    (
+        [
+            {"protocol": "http", "bindingInformation": "*:80:certs.example.test"},
+            {"protocol": "https", "bindingInformation": "*:443:certs.example.test"},
+            {"protocol": "https", "bindingInformation": "*:443:CERTS.example.test"},
+        ],
+        ["https://certs.example.test", "http://certs.example.test"],
+    ),
+    # Non-HTTP protocols, wildcard host headers and malformed entries are skipped.
+    ([{"protocol": "net.tcp", "bindingInformation": "808:*"}], []),
+    ([{"protocol": "https", "bindingInformation": "*:443:*.example.test"}], []),
+    ([{"protocol": "https", "bindingInformation": "*:99999:certs.example.test"}], []),
+    ([{"protocol": "https", "bindingInformation": "garbage"}], []),
+    ([{"protocol": "https", "bindingInformation": _c("*:443:u:p<<AT>>certs.example.test")}], []),
+    ([{"protocol": "https", "bindingInformation": "*:443:certs.example.test/x?t=1"}], []),
+    ([], []),
+]
+
+
+@pytest.mark.parametrize(("bindings", "expected"), BINDING_CASES)
+def test_probe_urls_from_site_bindings(bindings: list[dict[str, str]], expected: list[str]) -> None:
+    assert _binding_urls(bindings) == expected
+
+
+def _probe_list(explicit: str, bindings: list[dict[str, str]], port: int = 0) -> list[str]:
+    body = ("@(Get-ProbeUrlList -Explicit " + _input(explicit) + " -Bindings " + _input(bindings)
+            + " -LoopbackPort " + str(port) + ")")
+    out = run_ps(VERIFY, body, functions=PROBE_FNS)
+    return out if isinstance(out, list) else [out]
+
+
+def test_probe_list_puts_bindings_first_and_localhost_last() -> None:
+    hostname = [{"protocol": "https", "bindingInformation": "*:443:certs.example.test"}]
+    assert _probe_list("", hostname) == ["https://certs.example.test", "https://localhost", "http://localhost"]
+    assert _probe_list("", hostname, 8000) == [
+        "https://certs.example.test", "https://localhost", "http://localhost", "http://127.0.0.1:8000"]
+    # A localhost-shaped binding is not repeated by the fallbacks.
+    assert _probe_list("", [{"protocol": "http", "bindingInformation": "*:80:"}]) == [
+        "http://localhost", "https://localhost"]
+    assert _probe_list("", []) == ["https://localhost", "http://localhost"]
+
+
+def test_explicit_base_url_wins_over_bindings() -> None:
+    hostname = [{"protocol": "https", "bindingInformation": "*:443:certs.example.test"}]
+    assert _probe_list("https://other.example.test/", hostname) == ["https://other.example.test"]
+    assert _probe_list("https://other.example.test", hostname, 8000) == [
+        "https://other.example.test", "http://127.0.0.1:8000"]
+
+
+POOL_CASES = [
+    ("", {"applicationPool": "cert-watch"}, {"Name": "cert-watch", "Source": "site"}),
+    ("", {"applicationPool": "Cert Watch Pool_2.1"}, {"Name": "Cert Watch Pool_2.1", "Source": "site"}),
+    ("explicit-pool", {"applicationPool": "cert-watch"}, {"Name": "explicit-pool", "Source": "argument"}),
+    ("explicit-pool", None, {"Name": "explicit-pool", "Source": "argument"}),
+    ("", None, {"Name": "", "Source": "none"}),
+    ("", {"applicationPool": ""}, {"Name": "", "Source": "none"}),
+    ("", {}, {"Name": "", "Source": "none"}),
+    # A malformed name is neither reported nor passed to icacls/appcmd.
+    ("", {"applicationPool": _c("pool;<<pw>>=x")}, {"Name": "", "Source": "none"}),
+    ("", {"applicationPool": "pool\n$(evil)"}, {"Name": "", "Source": "none"}),
+    ("", {"applicationPool": " padded"}, {"Name": "", "Source": "none"}),
+]
+
+
+@pytest.mark.parametrize(("explicit", "site", "expected"), POOL_CASES)
+def test_app_pool_inferred_from_site(explicit: str, site: dict[str, str] | None, expected: dict[str, str]) -> None:
+    site_expr = "$null" if site is None else _input(site)
+    body = "Resolve-AppPoolName -Explicit " + _input(explicit) + " -Site " + site_expr
+    assert run_ps(VERIFY, body, functions=("Resolve-AppPoolName",)) == expected
+
+
+def test_site_binding_rows_come_from_the_site_object() -> None:
+    """The WebAdministration site object exposes bindings.Collection; the rows
+    feed the URL derivation. A missing site yields no rows."""
+    site = {
+        "applicationPool": "cert-watch",
+        "bindings": {"Collection": [
+            {"protocol": "https", "bindingInformation": "*:443:certs.example.test", "sslFlags": 1},
+            {"protocol": "http", "bindingInformation": "*:80:certs.example.test", "sslFlags": 0},
+        ]},
+    }
+    body = """
+$SiteName = 'cert-watch'
+$rows = Get-SiteBindingRow """ + _input(site) + """
+[ordered]@{ urls = @(ConvertTo-BindingProbeUrl $rows); none = @(Get-SiteBindingRow $null).Count }
+"""
+    out = run_ps(VERIFY, body, functions=("Get-SiteBindingRow", *PROBE_FNS))
+    assert out == {"urls": ["https://certs.example.test", "http://certs.example.test"], "none": 0}
+
+
+def test_defaults_are_derived_before_the_checks_and_reported() -> None:
+    code = VERIFY.read_text(encoding="utf-8").split("#>", 1)[1]
+    derive = code.index("$probeUrls = @(Get-ProbeUrlList")
+    assert code.index("$AppPool = $poolChoice.Name") < code.index("Add-Check -Id 'ENV-001'")
+    assert derive < code.index("Add-Check -Id 'ENV-001'")
+    target = code.split("target = [ordered]@{", 1)[1].split("summary = [ordered]@{", 1)[0]
+    assert "baseUrlSource = $baseUrlSource" in target
+    assert "appPoolSource = $appPoolSource" in target
+
+
 # --- Verify-Install.ps1: grammar-checked config values ----------------------
 
 def test_grammar_values(tmp_path: Path) -> None:

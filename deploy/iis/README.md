@@ -356,6 +356,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Verify-Install.ps1 `
     -AppPool cert-watch -BaseUrl https://certs.example.com -SkipCertCheck
 ```
 
+`-AppPool` and `-BaseUrl` are optional: without them the verifier checks the
+site's own application pool and probes the URLs from its bindings (https
+first), then `https://localhost` and `http://localhost`. Pass them to check a
+different pool or URL; explicit values always win.
+
 It is **read-only** (it never modifies the install). It writes a structured JSON
 report to `C:\ProgramData\cert-watch\logs\verify-report.json` and **exits
 non-zero if any check fails**, so a change-control or CI gate can branch on it.
