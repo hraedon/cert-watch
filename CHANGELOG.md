@@ -4,6 +4,11 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- The container image runs Python 3.14 (was 3.13); CI also runs the unit
+  suite on 3.14.
+
 ### Fixed
 
 - `Verify-Install.ps1` run with no arguments no longer fails on a healthy
