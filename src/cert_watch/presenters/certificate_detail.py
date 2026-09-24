@@ -210,6 +210,7 @@ class CertificateDetailView:
     scan_at_label: str = ""
     scan_guidance: ScanErrorGuidance | None = None
     scanned: bool = False
+    added: bool = False
 
     def template_context(self) -> dict[str, Any]:
         """Expose one stable boundary to Jinja or a future JSON serializer."""
@@ -493,6 +494,7 @@ def present_certificate_detail(
     endpoint_error: str = "",
     superseded: bool = False,
     scanned: bool = False,
+    added: bool = False,
     now: datetime | None = None,
 ) -> CertificateDetailView:
     """Build either stored-certificate or pending-host detail view."""
@@ -557,6 +559,7 @@ def present_certificate_detail(
             endpoint_error=endpoint_error,
             **_latest_scan_fields(latest),
             scanned=scanned,
+            added=added,
         )
 
     technical = present_certificate_technical_details(
@@ -662,4 +665,5 @@ def present_certificate_detail(
         superseded=superseded,
         **_latest_scan_fields(data.latest_scan),
         scanned=scanned,
+        added=added,
     )

@@ -86,7 +86,9 @@
   <p class="cw-note" role="status" data-testid="cert-superseded-note">{{ icons.svg_icon('info', 14) }}<span>The link you followed named an earlier certificate for this endpoint. This is the certificate it serves now.</span></p>
   {%- endif %}
 
-  {%- if scanned and not scan_failed %}
+  {%- if added %}
+  <p class="cw-note {{ 't-warn' if scan_failed else 't-ok' }}" role="status" data-testid="host-added-note">{{ icons.svg_icon('alert' if scan_failed else 'check-circle', 14) }}<span>{% if scan_failed %}Host added. Its first scan failed; the details are below.{% elif cert %}Host added and scanned.{% else %}Host added. It will be scanned during the next cycle.{% endif %}</span></p>
+  {%- elif scanned and not scan_failed %}
   <p class="cw-note t-ok" role="status" data-testid="scan-complete-note">{{ icons.svg_icon('check-circle', 14) }}<span>Scan complete{% if scan_at_label %} at {{ scan_at_label }}{% endif %}.</span></p>
   {%- endif %}
 

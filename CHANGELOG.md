@@ -28,6 +28,11 @@ All notable changes to cert-watch are documented in this file.
   handshakes, blocked addresses), keeps the raw error beside it, and notes
   that the certificate shown is from the last successful scan. Pending hosts
   get the same explanation (#113).
+- Adding a host lands on the new host's page with "Host added and scanned."
+  (or, when the first scan failed, a note pointing at the failure details)
+  instead of Home with no confirmation. Adding a host on its common TLS ports
+  lands on Browse, filtered to that host, with a count of what was added
+  (#113).
 - "Scan now" on a detail page returns to that page instead of Home, and the
   detail page now shows the flash messages that actions returning to it set
   (#113).

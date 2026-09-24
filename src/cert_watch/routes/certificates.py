@@ -131,6 +131,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
         endpoint_error=request.query_params.get("endpoint_error", ""),
         superseded=bool(request.query_params.get("superseded")),
         scanned=bool(request.query_params.get("scanned")),
+        added=bool(request.query_params.get("added")),
     )
     return templates.TemplateResponse(
         request=request,

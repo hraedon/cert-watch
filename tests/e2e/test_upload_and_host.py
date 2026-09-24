@@ -195,3 +195,18 @@ def test_scan_now_on_detail_stays_on_detail_and_explains_failure(
     expect(panel).to_be_visible()
     expect(page.get_by_test_id("scan-failure-cause")).to_contain_text("does not resolve")
     expect(page.get_by_test_id("scan-failure-next-step")).to_be_visible()
+
+
+def test_add_host_lands_on_the_new_host_with_a_confirmation(
+    page: Page, cert_watch_server: str
+) -> None:
+    """#113 item 5: adding a host used to land on Home with no confirmation."""
+    hostname = "added-landing.invalid"
+    page.goto(f"{cert_watch_server}/browse")
+    _open_slide(page)
+    page.get_by_test_id("scan-hostname-input").fill(hostname)
+    page.locator('[data-tab-pane="scan"] input[name="port"]').fill("443")
+    page.get_by_test_id("scan-submit-btn").click()
+    page.wait_for_url("**/certificates/*")
+    expect(page.get_by_test_id("host-detail-heading")).to_have_text(f"{hostname}:443")
+    expect(page.get_by_test_id("host-added-note")).to_contain_text("Host added")

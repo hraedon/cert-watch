@@ -346,7 +346,7 @@ async def add_host(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
         )
     try:
-        await create_hosts(
+        created = await create_hosts(
             _db_path(request),
             _get_settings(request),
             hostname=hostname,
@@ -365,7 +365,20 @@ async def add_host(
         )
     except (HostValidationError, ScopeDeniedError) as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
-    return RedirectResponse(url="/", status_code=303)
+    # Land on what was added (#113). One endpoint: its detail page, by host
+    # id, which resolves to the certificate the first scan stored. Several
+    # (common ports): Browse, filtered to the host name.
+    if len(created.host_ids) == 1:
+        return RedirectResponse(
+            url=f"/certificates/{created.host_ids[0]}?added=1", status_code=303
+        )
+    notice = f"Added {len(created.host_ids)} endpoints for {hostname.strip()}"
+    if created.scanned:
+        notice += f"; {created.scanned} scanned successfully"
+    return RedirectResponse(
+        url=f"/browse?q={quote(hostname.strip())}&grouped=0&notice={quote(notice + '.')}",
+        status_code=303,
+    )
 
 
 @router.post("/hosts/import")
