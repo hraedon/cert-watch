@@ -63,8 +63,23 @@ All notable changes to cert-watch are documented in this file.
   A list such as `payments,hr-ops` passed the scope check on the part inside
   the scope and was then filtered as one literal tag, producing a signed,
   empty report named for the other team's tag.
+- `/readyz` and `/api/health` give their detailed bodies to administrators
+  and the metrics bearer token only. The detail (last scan time and status,
+  certificate and expired counts, undelivered and failed alert counts,
+  scheduler errors) is computed over the whole estate, so a tag-scoped user
+  could watch another team's scans fail and alerts pile up. Everyone else,
+  signed in or not, now gets `{"status": ...}` from `/readyz` and
+  `{"overall": ...}` from `/api/health`. Status codes are unchanged, so
+  probes and uptime checks are unaffected; with authentication disabled the
+  full bodies remain.
 
 ### Changed
+
+- **If a script scrapes `/api/health` or `/readyz` with a non-administrator
+  account, it now receives the shallow body.** Use `/readyz` with the metrics
+  bearer token (`CERT_WATCH_METRICS_TOKEN`) or an administrator's `admin` API
+  key for the detailed checks. The dashboard health strip shows the overall
+  status to non-administrators and its details to administrators.
 
 - Startup applies schema migration 0038 (see Security above). It rewrites
   data only; the pre-migration backup is taken as for every migration. A

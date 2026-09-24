@@ -479,13 +479,11 @@ _ESTATE_WIDE: dict[str, str] = {
     "/docs/oauth2-redirect": "Swagger UI helper; no estate data",
     "/redoc": "ReDoc shell; no estate data",
     "/favicon.ico": "static asset",
-    "/healthz": "liveness probe; no estate data",
-    "/readyz": "readiness probe; no estate data",
-    "/api/health": (
-        "scheduler health: reports the time and status of the estate's most"
-        " recent scan attempt, with no identifiers; a scoped user learns that"
-        " the scheduler ran, not what it scanned"
-    ),
+    "/healthz": "liveness probe; {\"status\": \"ok\"} and nothing else",
+    # /readyz and /api/health are NOT listed: their detailed bodies are
+    # estate-wide (last scan, certificate and alert counts) and are for
+    # administrators and the metrics token only; a scoped user gets the
+    # shallow status and is held to the differential test like any route.
     "/login": "login form",
     "/auth/login": "OAuth start; no provider configured here",
     "/auth/callback": "OAuth callback; no provider configured here",
@@ -607,9 +605,11 @@ def _get_routes() -> list[str]:
 
 @contextlib.contextmanager
 def _client(
-    data_dir: Path, username: str, scans: list[tuple[str, int]] | None = None
+    data_dir: Path, username: str | None, scans: list[tuple[str, int]] | None = None,
+    *, metrics_token: str | None = None,
 ) -> Iterator[TestClient]:
-    """A logged-in client against the app rooted at *data_dir*.
+    """A client against the app rooted at *data_dir*, logged in as *username*
+    (``None``: anonymous). *metrics_token* configures ``CERT_WATCH_METRICS_TOKEN``.
 
     Nothing here reaches the network: DNS resolves every name to one public
     address, and a scan is recorded in *scans* (as ``(hostname, port)``) and
@@ -637,7 +637,10 @@ def _client(
         mp.setenv("CERT_WATCH_DATA_DIR", str(data_dir))
         mp.setenv("CERT_WATCH_COOKIE_SECURE", "0")
         mp.setenv("CERT_WATCH_ROLE_MAP", _ROLE_MAP)
-        mp.delenv("CERT_WATCH_METRICS_TOKEN", raising=False)
+        if metrics_token is None:
+            mp.delenv("CERT_WATCH_METRICS_TOKEN", raising=False)
+        else:
+            mp.setenv("CERT_WATCH_METRICS_TOKEN", metrics_token)
         mp.setattr(csrf_mod, "_COOKIE_SECURE", False)
         # The scheduler would scan the pending hosts and change the estate
         # between the baseline and full runs.
@@ -654,6 +657,9 @@ def _client(
         mp.setattr(auth_routes, "_COOKIE_SECURE", False)
         mp.setattr("cert_watch.caa_check.check_caa", _no_caa)
         with TestClient(_app(data_dir), follow_redirects=False) as client:
+            if username is None:
+                yield client
+                return
             if username == _DIRECTORY_USER:
                 from cert_watch.auth import create_session
 
@@ -738,7 +744,10 @@ def test_matrix_requests_actually_ran(runs: dict[str, _Run], user: str) -> None:
     snaps = [*run.full.values(), *(s for pair in run.out_vs_missing.values() for s in pair)]
     bad = sorted(
         u for u, s in [*run.full.items(), *((u, p[0]) for u, p in run.out_vs_missing.items())]
-        if s.status == 429 or s.status >= 500 or s.location.startswith("/login")
+        if s.status == 429 or s.location.startswith("/login")
+        # /readyz answers 503 by contract while the scheduler is stopped, as
+        # it is here; any other 5xx is a route that did not run.
+        or (s.status >= 500 and not (u == "/readyz" and s.status == 503))
     )
     assert not bad, bad
     assert sum(s.status == 200 for s in snaps) >= 100
@@ -1447,3 +1456,49 @@ def test_directory_user_is_scoped_through_the_same_path(runs: dict[str, _Run]) -
     assert snap.status == 200
     assert json.loads(snap.body)["scope_tag"].casefold() == "payments"
     assert runs[_DIRECTORY_USER].full["/settings"].location.startswith("/")  # not admin
+
+
+# ---------------------------------------------------------------------------
+# Health probes: shallow for everyone but administrators and the scraper
+# ---------------------------------------------------------------------------
+
+# Built at run time so the suite carries no token-shaped literal.
+_METRICS_TOKEN = "-".join(["matrix", "metrics", "token"])
+
+
+@pytest.mark.parametrize("user", _USERS)
+def test_health_probes_are_shallow_for_scoped_users(runs: dict[str, _Run], user: str) -> None:
+    """``/readyz`` and ``/api/health`` compute their detail over the whole
+    estate (last scan, certificate and alert counts). A scoped principal gets
+    the overall status and nothing else; the status code is unchanged."""
+    ready = runs[user].full["/readyz"]
+    assert ready.status == 503  # the scheduler is stopped in the matrix
+    assert json.loads(ready.body) == {"status": "degraded"}
+    health = runs[user].full["/api/health"]
+    assert health.status == 200
+    body = json.loads(health.body)
+    assert set(body) == {"overall"} and body["overall"] in {"ok", "warning", "critical"}
+
+
+def test_health_probes_are_detailed_for_administrators_and_the_metrics_token(
+    estate: _Estate,
+) -> None:
+    with _client(estate.full_dir, "admin") as client:
+        ready = client.get("/readyz").json()
+        health = client.get("/api/health").json()
+    assert {"database", "last_scan", "certificates", "scheduler"} <= set(ready["checks"])
+    assert {"scheduler_running", "last_scan_at", "failed_alerts_24h", "overall"} <= set(health)
+
+    with _client(estate.full_dir, None, metrics_token=_METRICS_TOKEN) as client:
+        anonymous = client.get("/readyz")
+        bad_token = client.get("/readyz", headers={"Authorization": "Bearer not-the-token"})
+        scraper = client.get(
+            "/readyz", headers={"Authorization": f"Bearer {_METRICS_TOKEN}"}
+        )
+    assert anonymous.status_code == 503 and anonymous.json() == {"status": "degraded"}
+    assert bad_token.json() == {"status": "degraded"}
+    assert "checks" in scraper.json() and scraper.json()["checks"]["database"] == "ok"
+    # The scraper's token is for /readyz; /api/health stays a session API.
+    with _client(estate.full_dir, None, metrics_token=_METRICS_TOKEN) as client:
+        r = client.get("/api/health", headers={"Authorization": f"Bearer {_METRICS_TOKEN}"})
+    assert r.status_code == 401

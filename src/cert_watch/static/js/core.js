@@ -253,7 +253,8 @@
       strip.className = 'cw-health' + (tone ? ' ' + tone : '');
       if (stripDot) stripDot.className = 'dot';
       var parts = [];
-      if (!data.scheduler_running) parts.push('Scheduler is not running');
+      // A non-administrator gets {overall} only; undefined is not "stopped".
+      if (data.scheduler_running === false) parts.push('Scheduler is not running');
       if (data.last_scan_status === 'failure' || data.last_scan_status === 'partial') {
         var when = '';
         if (data.last_scan_at) {
@@ -272,7 +273,10 @@
       }
       if (data.overall === 'ok') parts = ['Monitoring pipeline healthy'];
       stripText.textContent = parts.join(' · ') || (data.overall === 'critical'
-        ? 'Monitoring health data unavailable' : 'System status unknown');
+        ? 'Monitoring pipeline has a problem; ask an administrator'
+        : data.overall === 'warning'
+          ? 'Monitoring pipeline reports a warning; ask an administrator'
+          : 'System status unknown');
       strip.classList.remove('cw-hidden');
     };
 
