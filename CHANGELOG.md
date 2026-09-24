@@ -38,6 +38,10 @@ All notable changes to cert-watch are documented in this file.
   to local users, and a user with no role is read-only. It previously said a
   role applied only once the role map referenced it, and that no role map
   meant full access (#113).
+- Settings → Alert groups warns when a group has email recipients but email
+  delivery isn't configured, and names what is missing (an SMTP server, a
+  From address, at least one global recipient). Without all three there is
+  no email transport, so group recipients silently received nothing (#113).
 - "Scan now" on a detail page returns to that page instead of Home, and the
   detail page now shows the flash messages that actions returning to it set
   (#113).

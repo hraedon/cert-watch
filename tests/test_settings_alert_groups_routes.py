@@ -219,3 +219,62 @@ def test_create_csrf_failure_does_not_mutate(reload_app, csrf_strict, tmp_path, 
     assert "csrf" in r.headers["location"].lower()
     assert _groups(tmp_path) == []
     assert "alert_group.create" not in _audit_actions(tmp_path)
+
+
+# ---------- #113 item 10: email recipients without an email transport ----------
+
+
+def _create_group(client, recipients: str) -> None:
+    r = client.post(
+        "/settings/alert-groups",
+        data={"name": "payments-oncall", "match_tags": "payments", "recipients": recipients},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+
+
+def test_group_with_recipients_warns_when_smtp_is_not_configured(
+    reload_app, tmp_path, monkeypatch
+):
+    for var in ("SMTP_HOST", "ALERT_FROM", "ALERT_RECIPIENTS"):
+        monkeypatch.delenv(var, raising=False)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _create_group(client, "payments-oncall@example.test")
+        page = client.get("/settings?tab=alert-groups&saved=1", follow_redirects=True).text
+    assert 'data-testid="ag-email-not-configured"' in page
+    assert "payments-oncall" in page
+    assert "an SMTP server, a From address and at least one global recipient" in page
+    assert 'href="/settings/channels"' in page
+
+
+def test_warning_names_only_what_is_missing(reload_app, tmp_path, monkeypatch):
+    monkeypatch.delenv("ALERT_RECIPIENTS", raising=False)
+    app_mod = reload_app(SMTP_HOST="smtp.example.test", ALERT_FROM="cw@example.test")
+    with TestClient(app_mod.app) as client:
+        _create_group(client, "payments-oncall@example.test")
+        page = client.get("/settings/alert-groups").text
+    assert 'data-testid="ag-email-not-configured"' in page
+    assert "also needs\n        at least one global recipient," in page
+
+
+def test_no_warning_when_email_is_configured(reload_app, tmp_path):
+    app_mod = reload_app(
+        SMTP_HOST="smtp.example.test",
+        ALERT_FROM="cw@example.test",
+        ALERT_RECIPIENTS="ops@example.test",
+    )
+    with TestClient(app_mod.app) as client:
+        _create_group(client, "payments-oncall@example.test")
+        page = client.get("/settings/alert-groups").text
+    assert "ag-email-not-configured" not in page
+
+
+def test_no_warning_for_a_group_without_recipients(reload_app, tmp_path, monkeypatch):
+    for var in ("SMTP_HOST", "ALERT_FROM", "ALERT_RECIPIENTS"):
+        monkeypatch.delenv(var, raising=False)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _create_group(client, "")
+        page = client.get("/settings/alert-groups").text
+    assert "ag-email-not-configured" not in page

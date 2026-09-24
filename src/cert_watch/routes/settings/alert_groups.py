@@ -20,7 +20,13 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from cert_watch.audit import resolve_actor, resolve_source_ip
 from cert_watch.auth.guards import admin_page_guard
 from cert_watch.database import SqliteAlertGroupRepository
-from cert_watch.routes._deps import IdParam, _db_path, acting_auth, get_templates
+from cert_watch.routes._deps import (
+    IdParam,
+    _db_path,
+    _get_settings,
+    acting_auth,
+    get_templates,
+)
 from cert_watch.routes.api._shared import _validate_webhook_url
 from cert_watch.routes.settings.core import settings_tab_form
 from cert_watch.routes.settings.render import _settings_context
@@ -110,18 +116,48 @@ def _parse_form(form: Any) -> tuple[dict[str, Any] | None, str | None]:
     }, None
 
 
+def _email_delivery_missing(request: Request) -> list[str]:
+    """What email delivery still lacks; empty when email alerts can be sent.
+
+    Mirrors ``Settings.build_alert_config``: without an SMTP host, a From
+    address *and* at least one global recipient there is no SMTP transport
+    at all, so alert-group recipients receive nothing either.
+    """
+    settings = _get_settings(request)
+    missing = []
+    if not settings.smtp_host:
+        missing.append("an SMTP server")
+    if not settings.alert_from:
+        missing.append("a From address")
+    if not settings.alert_recipients:
+        missing.append("at least one global recipient")
+    return missing
+
+
+def _groups_context(request: Request, db: Path) -> dict[str, Any]:
+    groups = SqliteAlertGroupRepository(db).list_all()
+    ctx = _settings_context(request, tab=_TAB)
+    ctx["alert_groups"] = groups
+    # Inline match count per existing group (WI-060): how many leaf certs would
+    # each group route to? Read-only, one COUNT query per group.
+    ctx["alert_group_match_counts"] = {
+        g.id: _match_preview(db, list(g.match_tags), sample_limit=0)[0] for g in groups
+    }
+    # Groups whose email recipients can't be reached because email delivery
+    # isn't configured (#113): creating one used to give no hint of that.
+    missing = _email_delivery_missing(request)
+    ctx["email_missing"] = (
+        ", ".join(missing[:-1]) + " and " + missing[-1] if len(missing) > 1 else "".join(missing)
+    )
+    ctx["groups_without_email"] = [g.name for g in groups if g.recipients] if missing else []
+    return ctx
+
+
 @router.get("/settings/alert-groups", response_class=HTMLResponse, response_model=None)
 def alert_groups_page(
     request: Request, _auth: str = Depends(admin_page_guard),
 ) -> HTMLResponse | RedirectResponse:
-    db = _db_path(request)
-    groups = SqliteAlertGroupRepository(db).list_all()
-    # Inline match count per existing group (WI-060): how many leaf certs would
-    # each group route to? Read-only, one COUNT query per group.
-    match_counts = {g.id: _match_preview(db, list(g.match_tags), sample_limit=0)[0] for g in groups}
-    ctx = _settings_context(request, tab=_TAB)
-    ctx["alert_groups"] = groups
-    ctx["alert_group_match_counts"] = match_counts
+    ctx = _groups_context(request, _db_path(request))
     return templates.TemplateResponse(
         request=request, name="settings/alert_groups.html", context=ctx
     )
@@ -142,11 +178,7 @@ def alert_groups_preview(
     raw_tags = str(request.query_params.get("match_tags") or "")
     preview_tags = parse_tags(raw_tags)
     count, sample = _match_preview(db, preview_tags, sample_limit=5)
-    groups = SqliteAlertGroupRepository(db).list_all()
-    match_counts = {g.id: _match_preview(db, list(g.match_tags), sample_limit=0)[0] for g in groups}
-    ctx = _settings_context(request, tab=_TAB)
-    ctx["alert_groups"] = groups
-    ctx["alert_group_match_counts"] = match_counts
+    ctx = _groups_context(request, db)
     ctx["preview_match_tags"] = ", ".join(preview_tags)
     ctx["preview_count"] = count
     ctx["preview_sample"] = sample

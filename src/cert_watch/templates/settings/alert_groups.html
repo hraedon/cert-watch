@@ -63,6 +63,20 @@
       </div>
     </div>
   </div>
+  {%- if groups_without_email|default([]) %}
+  <div class="cw-panel-body">
+    <div class="cw-note t-warn" role="status" data-testid="ag-email-not-configured">
+      {{ icons.svg_icon('alert', 14) }}
+      <div>
+        <b>Email alerts can't be sent yet.</b>
+        {% set n = groups_without_email | length %}
+        {{ n }} alert group{{ '' if n == 1 else 's' }} ({{ groups_without_email | join(', ') }}) {{ 'has' if n == 1 else 'have' }} email recipients, but email delivery also needs
+        {{ email_missing }}, so those recipients receive nothing.
+        Set up email in <a class="cw-link" href="/settings/channels">Channels</a>.
+      </div>
+    </div>
+  </div>
+  {%- endif %}
   <div class="cw-panel-body">
     <details class="cw-editor">
       <summary class="cw-btn primary">{{ icons.svg_icon('plus', 14) }}Add alert group</summary>
