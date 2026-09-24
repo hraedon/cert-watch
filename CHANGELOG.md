@@ -2,7 +2,13 @@
 
 All notable changes to cert-watch are documented in this file.
 
-## [Unreleased]
+## [1.0.3] - 2026-09-24
+
+A security release for installations with tag-scoped roles. Scoped users could
+read other teams' hosts on Posture, see their events, re-add and scan their
+endpoints, and tell their ids from nonexistent ones (#112). One schema
+migration, **0038**, which canonicalizes stored host names; read
+[UPGRADING.md](UPGRADING.md) before upgrading.
 
 ### Security
 

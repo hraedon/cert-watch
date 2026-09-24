@@ -23,7 +23,7 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
-## Upgrading from 1.0.2 (unreleased)
+## Upgrading from 1.0.2 to 1.0.3
 
 One schema migration, **0038**, rewrites every stored host name to one
 canonical spelling (lower-case IDNA A-labels without a trailing dot; the
@@ -41,8 +41,11 @@ know:
   with only a liveness probe, add one or raise the liveness
   `failureThreshold` before upgrading, or a long migration is killed and
   retried indefinitely. On IIS the startup limit is 60 s
-  (`deploy/iis/web.config`); run `cert-watch` once from a console to migrate
-  before starting the site if the database is large.
+  (`deploy/iis/web.config`). If the database is large, migrate before
+  starting the site: stop the site, run `cert-watch` from a console with the
+  same `CERT_WATCH_*` environment the site uses (at least the database
+  path), wait for the `migration 0038 applied` log line, stop it with
+  Ctrl+C, then start the site.
 - **Two rows that spell one endpoint are collapsed.** If both rows carry the
   same tags, they are merged. If they carry different tags, the migration
   fails closed: the surviving row keeps only the tags both had (none, if
@@ -59,6 +62,12 @@ know:
   full. **After upgrading, an administrator should open the audit log,
   filter for `host.merge_alias`, and re-tag or re-own the affected endpoints
   deliberately.**
+- **`/readyz` and `/api/health` return a shallow body to non-administrators.**
+  Status codes are unchanged, so Kubernetes probes, the Docker health check
+  and `Verify-Install` are unaffected. A script that reads the detailed body
+  with a non-administrator account or a `read`/`write` API key now gets only
+  `{"status": ...}` / `{"overall": ...}`; use `/readyz` with the metrics
+  token, or an `admin` API key.
 - Host names typed as legacy numeric IPv4 forms (`010.010.010.010`,
   `8.8.2056`, `0x08080808`) are rejected from now on; write the dotted quad.
   Stored ones are folded into the dotted-quad row by the migration.
