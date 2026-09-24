@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from cert_watch import __commit__, __version__
-from cert_watch.attention import build_attention_queue
+from cert_watch.attention import attention_queue_page
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.auth.guards import get_auth_context, write_form_guard
 from cert_watch.auth.scope import ScopeDeniedError
@@ -69,7 +69,7 @@ def home(
     scan_evidence = load_scan_evidence(
         db, scope_tags=scope_tags, hour=settings.sched_hour, minute=settings.sched_min,
     )
-    items = build_attention_queue(
+    items, queue_total = attention_queue_page(
         db, scope_tags=scope_tags, window_days=settings.renewal_window_days,
         scan_evidence=scan_evidence,
     )
@@ -78,6 +78,7 @@ def home(
 
     view = present_home(
         queue=items,
+        queue_total=queue_total,
         stats=stats,
         tracked_total=tracked_total,
         scan_coverage=summarize_scan_evidence(scan_evidence),

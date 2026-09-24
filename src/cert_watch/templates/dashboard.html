@@ -115,7 +115,7 @@
 
   {# ---- Stat strip: the cells ARE the urgency filter ---- #}
   <div class="cw-stats">
-    {{ ui.stat('Tracked', tracked_total, 'endpoints / files' if pivot_groups is none else 'endpoints', icon='shield',
+    {{ ui.stat('Tracked', tracked_total, 'endpoints / files', icon='shield',
                 href=browse_url(urgency=none) if not pivot_view else none, active=not filter_urgency and not pivot_view) }}
     {{ ui.stat('Expired', pivot_stats.expired, 'needs attention' if pivot_stats.expired else 'none', tone='t-expired', icon='alert',
                 href=browse_url(urgency='expired') if not pivot_view else none, active=filter_urgency == 'expired') }}
@@ -155,7 +155,7 @@
     </nav>
   </div>
   {% if pivot_view %}
-    <p class="cw-hint">{% if pivot_view == 'calendar' %}Calendar covers scanned and uploaded certificates in your scope.{% else %}Group views cover all scanned endpoints and pending hosts in your scope.{% endif %} Inventory filters do not apply.</p>
+    <p class="cw-hint">{% if pivot_view == 'calendar' %}Calendar covers scanned and uploaded certificates in your scope.{% else %}Group views cover every endpoint and uploaded file in your scope, the same rows as Inventory.{% endif %} Inventory filters do not apply.</p>
   {% elif filter_q or filter_urgency or filter_source %}
     <div class="cw-chiprow" data-testid="active-inventory-filters">
       <span class="cw-hint">Filters:</span>
@@ -205,7 +205,7 @@
       <thead>
         <tr>
           <th>{{ pivot_view | capitalize }}{{ ' / Method' if pivot_view == 'renewal_method' else '' }}</th>
-          <th class="num">Certs</th>
+          <th class="num">Tracked</th>
           <th>Worst status</th>
           <th class="num">Earliest expiry</th>
         </tr>
@@ -216,10 +216,10 @@
           <td><span class="chev">{{ icons.svg_icon('chevron-down', 14) }}</span> <span class="cw-id">{{ g.key }}</span></td>
           <td class="num">{{ g.count }}</td>
           <td>{{ ui.status(g.worst_urgency) }}</td>
-          <td class="num">{% if g.earliest_expiry is not none %}{{ g.earliest_expiry }} days{% else %}—{% endif %}</td>
+          <td class="num">{{ g.earliest_expiry_label }}</td>
         </tr>
         <tr class="cw-subrow cw-hidden" id="pivot-detail-{{ loop.index }}" data-pivot="{{ pivot_view }}" data-group-key="{{ g.key }}">
-          <td colspan="4">Click to load {{ g.count }} certificate{{ 's' if g.count != 1 else '' }}…</td>
+          <td colspan="4">Click to load {{ g.count }} tracked {{ 'entries' if g.count != 1 else 'entry' }}…</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -332,7 +332,7 @@
     </div>
 
     {% if pivot_groups is not none and not pivot_groups %}
-      {{ ui.empty('No scanned endpoints in this view', 'Uploaded files appear in Inventory and Calendar. Add a host to use endpoint group views.', testid='empty-pivot') }}
+      {{ ui.empty('Nothing to group yet', 'Add a host or upload a certificate file to use group views.', testid='empty-pivot') }}
     {% elif not entries and pivot_groups is none %}
       {% if filter_q or filter_urgency or filter_source %}
         {{ ui.empty('No matching certificates', 'Try a different search or filter.') }}

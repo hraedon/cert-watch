@@ -18,23 +18,17 @@ def _empty_stats() -> dict[str, int]:
     return {"expired": 0, "critical": 0, "warning": 0, "healthy": 0}
 
 
-def _count_urgencies(entries: list[dict[str, Any]]) -> dict[str, int]:
-    result = _empty_stats()
-    for entry in entries:
-        urgency = entry.get("urgency")
-        if urgency in result:
-            result[urgency] += 1
-    return result
-
-
 def pivot_urgency_stats(
     db_path: str | Path, scope_tags: list[str] | tuple[str, ...] | None = None
 ) -> dict[str, int]:
-    """Chain-aware urgency counts matching the scanned pivot rows."""
-    from cert_watch.database.dashboard_page import list_dashboard_page
+    """Chain-aware urgency counts matching the pivot rows.
 
-    entries, _ = list_dashboard_page(db_path, source="scanned", per_page=0, scope_tags=scope_tags)
-    return _count_urgencies(entries)
+    The pivots group every inventory row, uploaded files included, so their
+    cards are the unfiltered inventory's cards. Counting only scanned rows here
+    made the owner view report fewer tracked and warning rows than Browse for
+    the same estate (#113).
+    """
+    return dashboard_urgency_stats(db_path, scope_tags=scope_tags)
 
 
 def dashboard_urgency_stats(
@@ -43,12 +37,34 @@ def dashboard_urgency_stats(
     q: str | None = None,
     source: str | None = None,
     scope_tags: list[str] | tuple[str, ...] | None = None,
+    now: datetime | None = None,
 ) -> dict[str, int]:
-    """Chain-aware urgency counts matching the filtered dashboard rows."""
-    from cert_watch.database.dashboard_page import list_dashboard_page
+    """Status-card counts of the (filtered) inventory rows, counted in SQL.
 
-    entries, _ = list_dashboard_page(db_path, q=q, source=source, per_page=0, scope_tags=scope_tags)
-    return _count_urgencies(entries)
+    Uses the SQL form of the one status rule (:mod:`cert_watch.status_rule`),
+    the rule every built row carries, so the cards always match the rows
+    without building them (#113 review: Home, Browse and /metrics used to
+    materialise the whole estate to count it). Pending rows have no status.
+    """
+    from cert_watch.database.chain_status_cache import prepare_status
+    from cert_watch.database.dashboard_page import inventory_candidates_sql
+    from cert_watch.database.schema import init_schema
+
+    init_schema(db_path)
+    candidates = inventory_candidates_sql(
+        q=q, source=source, scope_tags=scope_tags, status=prepare_status(db_path, now)
+    )
+    result = _empty_stats()
+    if candidates is None:
+        return result
+    sql, params = candidates
+    with _connect(db_path) as conn:
+        for row in conn.execute(
+            f"SELECT urgency, COUNT(*) AS n FROM ({sql}) GROUP BY urgency", params
+        ).fetchall():
+            if row["urgency"] in result:
+                result[row["urgency"]] = row["n"]
+    return result
 
 
 def dashboard_expiry_stats(

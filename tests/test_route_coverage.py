@@ -570,11 +570,14 @@ def test_dashboard_pivot_owner(reload_app, tmp_path):
         r = client.get("/?view=owner")
     assert r.status_code == 200
     assert r.context["pivot_view"] == "owner"
-    assert r.context["pivot_groups"] == []
+    # Pivots group every inventory row, uploaded files included (#113): the
+    # file has no endpoint owner, so it is Unassigned.
+    assert [(g.key, g.count) for g in r.context["pivot_groups"]] == [("Unassigned", 1)]
     assert r.context["entries"] == []
-    assert 'data-testid="empty-pivot"' in r.text
+    assert 'data-testid="empty-pivot"' not in r.text
     assert "Inventory filters do not apply" in r.text
-    assert "own.example.com" not in r.text  # Uploaded files have no host owner group.
+    # Rows load on expand; the group table itself lists groups, not names.
+    assert "own.example.com" not in r.text
 
 
 def test_dashboard_pivot_renewal_method(reload_app, tmp_path):
@@ -598,9 +601,11 @@ def test_dashboard_pivot_renewal_method(reload_app, tmp_path):
         r = client.get("/?view=renewal_method")
     assert r.status_code == 200
     assert r.context["pivot_view"] == "renewal_method"
-    assert r.context["pivot_groups"] == []
+    # An uploaded file has no renewal method recorded: it groups as Unknown
+    # rather than vanishing from the view (#113).
+    assert [(g.key, g.count) for g in r.context["pivot_groups"]] == [("Unknown", 1)]
     assert r.context["entries"] == []
-    assert 'data-testid="empty-pivot"' in r.text
+    assert 'data-testid="empty-pivot"' not in r.text
     assert "Inventory filters do not apply" in r.text
     assert "rm.example.com" not in r.text  # Renewal methods belong to registered hosts.
 

@@ -5,11 +5,33 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from cert_watch.database.connection import _connect, _sql_now
-from cert_watch.database.dashboard import _load_unified_filtered
 from cert_watch.database.schema import init_schema
 
 _URGENCY_ORDER = ("expired", "critical", "warning", "healthy", "gray")
+
+_METHOD_LABELS = {
+    "acme": "ACME",
+    "cert-manager": "cert-manager",
+    "manual": "Manual",
+}
+
+# The raw group column of each pivot in inventory_candidates_sql's rows.
+_GROUP_COLUMN = {"issuer": "grp_issuer", "owner": "grp_owner", "renewal_method": "grp_method"}
+
+
+def _friendly_key(raw: str | None, pivot: str) -> str:
+    """The group label a raw group value is shown under for *pivot*."""
+    from cert_watch.filters import friendly_issuer
+
+    raw = raw or ""
+    if pivot == "issuer":
+        return friendly_issuer(raw) if raw else "Unknown"
+    if pivot == "owner":
+        return raw or "Unassigned"
+    if pivot == "renewal_method":
+        return _METHOD_LABELS.get(raw, raw) if raw else "Unknown"
+    return "Unknown"
+
 
 def list_fleet_pivot(
     db_path: str | Path,
@@ -18,137 +40,140 @@ def list_fleet_pivot(
     *,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Return fleet pivot groups using SQL-level aggregation.
+    """Return fleet pivot groups over the Browse inventory rows, counted in SQL.
 
-    Each group has ``key``, ``count``, ``worst_urgency``, ``earliest_expiry``.
-    The ``entries`` field is ``None`` — use :func:`get_pivot_group_entries`
-    to fetch entries for a specific group on demand (BC-048).
+    The groups partition the inventory rows (endpoints, pending ones included,
+    and uploaded files) that Home and Browse count, with the same status rule
+    (:mod:`cert_watch.status_rule`), aggregated in SQL so a pivot page does
+    not materialise the estate (#113 review). Each group has ``key``,
+    ``count``, ``worst_urgency`` (the most urgent row status; ``gray`` when
+    the group's only non-healthy rows are endpoints not yet scanned) and
+    ``earliest_expiry`` (the smallest effective days of any row -- the soonest
+    expiry in any stored chain -- negative once expired, ``None`` when no row
+    has a certificate). The ``entries`` field is ``None`` --
+    :func:`get_pivot_group_entries` returns a group's rows on demand (BC-048).
 
-    ``scope_tags`` restricts results to hosts/certificates whose effective tags
-    include at least one supplied tag (WI-051).
+    ``scope_tags`` restricts results to rows whose effective tags include at
+    least one supplied tag (WI-051).
     """
-    from cert_watch.database.dashboard import _add_effective_tag_filter
-    from cert_watch.filters import friendly_issuer
+    from cert_watch.database.chain_status_cache import prepare_status
+    from cert_watch.database.connection import _connect
+    from cert_watch.database.dashboard_page import inventory_candidates_sql
 
     init_schema(db_path)
-
-    _METHOD_LABELS = {
-        "acme": "ACME",
-        "cert-manager": "cert-manager",
-        "manual": "Manual",
-    }
-
-    # Determine the grouping column for scanned leaf certs
-    if pivot == "issuer":
-        group_col = "c.issuer"
-    elif pivot == "owner":
-        group_col = "COALESCE(h.owner_name, '')"
-    elif pivot == "renewal_method":
-        group_col = "COALESCE(h.renewal_method, '')"
-    else:
-        group_col = "'unknown'"
-
+    candidates = inventory_candidates_sql(
+        scope_tags=scope_tags, status=prepare_status(db_path, now)
+    )
+    if candidates is None:
+        return []
+    sql, params = candidates
+    column = _GROUP_COLUMN.get(pivot, "''")
+    groups: dict[str, dict[str, Any]] = {}
     with _connect(db_path) as conn:
-        # Scanned hosts: aggregate per group from leaf certificates
-        scanned_sql = f"""
-            SELECT {group_col} AS grp,
-                   CAST(MIN(CASE
-                        -- Expired certs map to -1 so the group's worst_urgency
-                        -- reaches "expired" (min_days < 0). Using julianday keeps
-                        -- the comparison robust to the stored T-separated ISO format;
-                        -- a plain string compare against a space-separated datetime
-                        -- and CAST-toward-zero would both miss same-day expiries.
-                        WHEN julianday(c.not_after) < julianday(?) THEN -1
-                        ELSE CAST(
-                            (julianday(c.not_after) - julianday(?))
-                            AS INTEGER
-                        )
-                   END) AS INTEGER) AS min_days,
-                   COUNT(*) AS cnt
-            FROM certificates c
-            JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
-            WHERE c.is_leaf = 1
-        """
-        # Both placeholders so far are the reference instant in the SELECT list.
-        scanned_params: list[Any] = [_sql_now(now)] * scanned_sql.count("?")
-        scanned_sql, scanned_params = _add_effective_tag_filter(
-            scanned_sql, scanned_params, scope_tags or (), col_cert="c.tags", col_host="h.tags"
+        rows = conn.execute(
+            f"SELECT {column} AS grp, urgency, COUNT(*) AS n, MIN(eff_days) AS min_days,"
+            f" MIN(sort_expiry) AS first_expiry FROM ({sql}) GROUP BY grp, urgency",
+            params,
+        ).fetchall()
+    # One row per (raw group value, status): bounded by the number of groups,
+    # not the estate. Raw values sharing a label (issuer DNs) merge here.
+    for row in rows:
+        key = _friendly_key(row["grp"], pivot)
+        group = groups.setdefault(
+            key, {"key": key, "count": 0, "_urgencies": set(), "earliest_expiry": None,
+                  "entries": None, "_first": row["first_expiry"]},
         )
-        scanned_sql += " GROUP BY grp"
-        rows = conn.execute(scanned_sql, scanned_params).fetchall()
-
-        # Pending hosts: hosts with no leaf certificate
-        # For issuer pivot, pending hosts have no cert so group by "Unknown"
-        pending_group_col = "''" if pivot == "issuer" else group_col
-        pending_sql = f"""
-            SELECT {pending_group_col} AS grp,
-                   COUNT(*) AS cnt
-            FROM hosts h
-            WHERE NOT EXISTS (
-                SELECT 1 FROM certificates c
-                WHERE c.hostname = h.hostname AND c.port = h.port AND c.is_leaf = 1
-            )
-        """
-        pending_params: list[Any] = []
-        pending_sql, pending_params = _add_effective_tag_filter(
-            pending_sql, pending_params, scope_tags or (), col_cert=None, col_host="h.tags"
-        )
-        pending_sql += " GROUP BY grp"
-        pending_rows = conn.execute(pending_sql, pending_params).fetchall()
+        group["_first"] = min(group["_first"], row["first_expiry"])
+        group["count"] += row["n"]
+        group["_urgencies"].add(row["urgency"] or "gray")
+        days = row["min_days"]
+        if days is not None and (
+            group["earliest_expiry"] is None or days < group["earliest_expiry"]
+        ):
+            group["earliest_expiry"] = int(days)
 
     result: list[dict[str, Any]] = []
-
-    for r in rows:
-        d = dict(r)
-        raw_key = d["grp"] or ""
-        min_days = d["min_days"]
-
-        if min_days is not None and min_days < 0:
-            urgency = "expired"
-        elif min_days is not None and min_days < 7:
-            urgency = "critical"
-        elif min_days is not None and min_days < 30:
-            urgency = "warning"
-        else:
-            urgency = "healthy"
-
-        result.append({
-            "key": raw_key,
-            "count": d["cnt"],
-            "worst_urgency": urgency,
-            "earliest_expiry": min_days,
-            "entries": None,
-        })
-
-    for r in pending_rows:
-        d = dict(r)
-        raw_key = d["grp"] or ""
-        existing = next((g for g in result if g["key"] == raw_key), None)
-        if existing:
-            existing["count"] += d["cnt"]
-            if existing["worst_urgency"] == "healthy":
-                existing["worst_urgency"] = "gray"
-        else:
-            result.append({
-                "key": raw_key,
-                "count": d["cnt"],
-                "worst_urgency": "gray",
-                "earliest_expiry": None,
-                "entries": None,
-            })
-
-    # Apply friendly labels to group keys
-    for g in result:
-        raw = g["key"] or ""
-        if pivot == "issuer":
-            g["key"] = friendly_issuer(raw) if raw else "Unknown"
-        elif pivot == "owner":
-            g["key"] = raw or "Unassigned"
-        elif pivot == "renewal_method":
-            g["key"] = _METHOD_LABELS.get(raw, raw) if raw else "Unknown"
-
-    result.sort(key=lambda g: g["count"], reverse=True)
+    # Largest group first; among equals, the one whose leaf expires first.
+    ordered = sorted(groups.values(), key=lambda g: (-g["count"], g["_first"], g["key"]))
+    for group in ordered:
+        del group["_first"]
+        urgencies = group.pop("_urgencies")
+        worst = next((u for u in _URGENCY_ORDER if u in urgencies), "gray")
+        if worst == "healthy" and "gray" in urgencies:
+            # A healthy group that still has never-scanned endpoints is not
+            # known to be healthy.
+            worst = "gray"
+        group["worst_urgency"] = worst
+        result.append(group)
     return result
+
+
+def get_pivot_group_page(
+    db_path: str | Path,
+    pivot: str,
+    group_key: str,
+    scope_tags: list[str] | tuple[str, ...] | None = None,
+    *,
+    page: int = 1,
+    per_page: int = 100,
+    now: datetime | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """One page of the inventory rows of one pivot group, and the group's size.
+
+    Used to lazily load a pivot group when it is expanded (BC-048).
+    ``group_key`` is the *friendly* key as displayed in the pivot table (e.g.
+    "Let's Encrypt", "alice", "ACME"). The group is selected in SQL from the
+    rows :func:`list_fleet_pivot` counted, so the total always equals the
+    group's count, and only the requested page is built: expanding a
+    5,000-row group costs one page, not the group and never the estate.
+    Rows come soonest-expiring first. ``per_page=0`` returns the whole group.
+    Rows are judged at ``now`` (default: the time of the call), so a caller
+    that injected an instant into :func:`list_fleet_pivot` gets the same
+    statuses here.
+
+    ``scope_tags`` restricts results to entries whose effective tags
+    (cert ∪ host) include at least one supplied tag (WI-051/WI-128).
+    """
+    from datetime import UTC
+
+    from cert_watch.database.connection import _connect
+    from cert_watch.database.dashboard_page import (
+        build_inventory_entries,
+        inventory_candidates_sql,
+    )
+
+    init_schema(db_path)
+    now = now or datetime.now(UTC)
+    candidates = inventory_candidates_sql(scope_tags=scope_tags)
+    if candidates is None:
+        return [], 0
+    sql, params = candidates
+    column = _GROUP_COLUMN.get(pivot, "''")
+    with _connect(db_path) as conn:
+        raws = [
+            row["grp"]
+            for row in conn.execute(
+                f"SELECT DISTINCT {column} AS grp FROM ({sql})", params
+            ).fetchall()
+            if _friendly_key(row["grp"], pivot) == group_key
+        ]
+        if not raws:
+            return [], 0
+        ph = ",".join("?" * len(raws))
+        group_sql = f"SELECT etype, ekey, sort_expiry FROM ({sql}) WHERE {column} IN ({ph})"
+        group_params = [*params, *raws]
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM ({group_sql})", group_params
+        ).fetchone()[0]
+        page_sql = f"{group_sql} ORDER BY sort_expiry ASC, ekey ASC"
+        if per_page > 0:
+            page_sql += " LIMIT ? OFFSET ?"
+            group_params += [per_page, max(0, (page - 1) * per_page)]
+        ordered = conn.execute(page_sql, group_params).fetchall()
+        entries = build_inventory_entries(conn, ordered, now=now)
+    for entry in entries:
+        entry["_pivot_key"] = group_key
+    return entries, total
 
 
 def get_pivot_group_entries(
@@ -156,77 +181,14 @@ def get_pivot_group_entries(
     pivot: str,
     group_key: str,
     scope_tags: list[str] | tuple[str, ...] | None = None,
+    *,
+    now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Return unified entries for a single pivot group.
-
-    Used to lazily load entries when a pivot group is expanded (BC-048).
-    ``group_key`` is the *friendly* key as displayed in the pivot table
-    (e.g. "Let's Encrypt", "alice", "ACME").
-
-    Uses SQL-level filtering so only matching hosts and their certs are
-    materialised at fleet scale.
-
-    ``scope_tags`` restricts results to entries whose effective tags
-    (cert ∪ host) include at least one supplied tag (WI-051/WI-128).
-    """
-    from cert_watch.filters import friendly_issuer
-
-    _METHOD_LABELS = {
-        "acme": "ACME",
-        "cert-manager": "cert-manager",
-        "manual": "Manual",
-    }
-
-    # Map the friendly group_key back to raw DB values for SQL filtering
-    if pivot == "issuer":
-        entries = _load_unified_filtered(db_path)
-    elif pivot == "owner":
-        if group_key == "Unassigned":
-            entries = _load_unified_filtered(
-                db_path, filter_col="owner_name", filter_values=[""], filter_include_null=True,
-            )
-        else:
-            entries = _load_unified_filtered(
-                db_path, filter_col="owner_name", filter_values=[group_key],
-            )
-    elif pivot == "renewal_method":
-        if group_key == "Unknown":
-            entries = _load_unified_filtered(
-                db_path, filter_col="renewal_method", filter_values=[""], filter_include_null=True,
-            )
-        else:
-            # Reverse-label lookup: accept any raw value that maps to the friendly label
-            raw_methods = [k for k, v in _METHOD_LABELS.items() if v == group_key]
-            if raw_methods:
-                entries = _load_unified_filtered(
-                    db_path, filter_col="renewal_method", filter_values=raw_methods,
-                )
-            else:
-                entries = _load_unified_filtered(
-                    db_path, filter_col="renewal_method", filter_values=[group_key],
-                )
-    else:
-        entries = _load_unified_filtered(db_path)
-
-    for e in entries:
-        if pivot == "issuer":
-            raw = e.get("issuer") or ""
-            key = friendly_issuer(raw) if raw else "Unknown"
-        elif pivot == "owner":
-            key = e.get("owner_name") or "Unassigned"
-        elif pivot == "renewal_method":
-            raw = e.get("renewal_method") or ""
-            key = _METHOD_LABELS.get(raw, raw) if raw else "Unknown"
-        else:
-            key = "Unknown"
-        e["_pivot_key"] = key
-
-    if scope_tags:
-        from cert_watch.database.dashboard_helpers import _entry_matches_scope_tag
-
-        entries = [e for e in entries if _entry_matches_scope_tag(e, scope_tags)]
-
-    return [e for e in entries if e.get("_pivot_key") == group_key]
+    """Every inventory row of one pivot group (see :func:`get_pivot_group_page`)."""
+    entries, _ = get_pivot_group_page(
+        db_path, pivot, group_key, scope_tags, per_page=0, now=now
+    )
+    return entries
 
 
 def group_entries_by_fingerprint(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:

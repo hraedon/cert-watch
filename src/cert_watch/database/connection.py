@@ -48,6 +48,19 @@ def _cw_casefold(value: str | None) -> str:
     return str(value).casefold()
 
 
+def _cw_tag_set(value: str | None) -> str:
+    """A tag column as ``,tag1,tag2,``: parsed and casefolded like Python does.
+
+    The scope filter matches ``%,tag,%`` against this, so a stored
+    ``"staging, edge"`` is in scope ``edge`` exactly as ``tags_match`` and the
+    Python scope checks say it is. Matching the raw column missed it: the SQL
+    counts and the grouped Browse rows (filtered in Python) disagreed.
+    """
+    from cert_watch.tags import parse_tags
+
+    return "," + ",".join(tag.casefold() for tag in parse_tags(value)) + ","
+
+
 class _ThreadConnections:
     """Per-thread connection cache that closes its connections when dropped.
 
@@ -151,6 +164,10 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path_str, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.create_function("cw_casefold", 1, _cw_casefold)
+    conn.create_function("cw_tag_set", 1, _cw_tag_set, deterministic=True)
+    from cert_watch.status_rule import register_sql_functions
+
+    register_sql_functions(conn)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=15000")
     conn.execute("PRAGMA foreign_keys=ON")

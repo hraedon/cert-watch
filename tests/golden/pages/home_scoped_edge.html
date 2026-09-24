@@ -110,7 +110,7 @@ Browse inventory</a>
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>
 
 Tracked</span>
-  <div class="cw-stat-val">0</div>
+  <div class="cw-stat-val">1</div>
   <div class="cw-stat-sub">endpoints / files</div>
 </a>
 
@@ -168,9 +168,18 @@ Healthy</span>
     <div class="cw-panel-body">
       <div class="cw-chiprow">
         <b>Scan coverage</b>
-        <span class="cw-muted">No monitored endpoints</span>
+
+        <span>0 of 1 monitored endpoints have current observations</span>
+
       </div>
       <p class="cw-hint">Current means a successful scan within its configured cadence, with no later incomplete attempt. Uploaded files are excluded.</p>
+
+      <div class="cw-chiprow">
+        <span class="cw-chip t-muted">0 overdue</span>
+        <span class="cw-chip t-muted">1 without a successful scan</span>
+        <span class="cw-chip t-muted">0 incomplete within cadence</span>
+
+      </div>
 
     </div>
   </div>

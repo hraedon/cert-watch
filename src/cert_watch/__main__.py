@@ -172,7 +172,7 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(1)
         ok, msg = verify_report_signature(report_data, signing_key)
         if ok:
-            print(f"PASS — {msg}")
+            print("PASS — signature and content hash verified")
             print(f"  Generated at: {report_data.get('generated_at', 'unknown')}")
             print(f"  Content SHA-256: {report_data.get('content_sha256', '')}")
         else:

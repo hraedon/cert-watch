@@ -269,23 +269,39 @@ def _group_scan_batches(
             })
     # Sort by newest batch first
     batches.sort(key=lambda b: b["_ts"], reverse=True)
-    # Compute summary fields
+    # Compute summary fields. A batch counts *endpoints*: an endpoint retried
+    # inside the window is one endpoint, judged by its latest attempt there.
+    # Counting rows reported "70/78 hosts" for a 38-endpoint estate (#113).
     for batch in batches:
-        hosts = batch["hosts"]
-        total = len(hosts)
-        failures = sum(1 for h in hosts if h.get("status") == "failure")
-        successes = total - failures
-        if failures == 0:
+        attempts = batch["hosts"]
+        latest: dict[tuple[str, int], dict[str, Any]] = {}
+        for row in attempts:  # newest first, so the first row per key wins
+            latest.setdefault((row.get("hostname", ""), row.get("port", 0)), row)
+        endpoints = list(latest.values())
+        total = len(endpoints)
+        # Only a full success is a success. A ``partial`` scan (valid status,
+        # recorded when a scan completes without everything it needed) is
+        # incomplete, like the readiness probe and scan freshness treat it;
+        # counting it as a success rendered "1/1, success" (#113 review).
+        successes = sum(1 for h in endpoints if h.get("status") == "success")
+        failures = sum(1 for h in endpoints if h.get("status") == "failure")
+        incomplete = total - successes - failures
+        if successes == total:
             result = "success"
-        elif successes == 0:
+        elif failures == total:
             result = "failure"
         else:
             result = "partial"
+        batch["hosts"] = endpoints
+        batch["attempts"] = len(attempts)
         batch["total"] = total
         batch["failures"] = failures
+        batch["incomplete"] = incomplete
         batch["successes"] = successes
         batch["result"] = result
-        batch["trigger"] = "Scheduled" if total > 1 else "Manual"
+        # No trigger is recorded (scheduled, manual, API and import scans
+        # write identical rows), so none is claimed. The old guess labelled
+        # every multi-host batch "Scheduled".
         # Remove internal sort key
         del batch["_ts"]
     return batches

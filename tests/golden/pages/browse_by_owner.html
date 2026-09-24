@@ -126,8 +126,8 @@ Add host</button>
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>
 
 Tracked</span>
-  <div class="cw-stat-val">2</div>
-  <div class="cw-stat-sub">endpoints</div>
+  <div class="cw-stat-val">6</div>
+  <div class="cw-stat-sub">endpoints / files</div>
 </div>
 
 
@@ -138,8 +138,8 @@ Tracked</span>
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
 
 Expired</span>
-  <div class="cw-stat-val">0</div>
-  <div class="cw-stat-sub">none</div>
+  <div class="cw-stat-val t-expired">1</div>
+  <div class="cw-stat-sub">needs attention</div>
 </div>
 
 
@@ -150,8 +150,8 @@ Expired</span>
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
 
 Critical</span>
-  <div class="cw-stat-val">0</div>
-  <div class="cw-stat-sub">none</div>
+  <div class="cw-stat-val t-crit">1</div>
+  <div class="cw-stat-sub">&lt; 7 days</div>
 </div>
 
 
@@ -162,7 +162,7 @@ Critical</span>
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v5l3 2"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
 
 Warning</span>
-  <div class="cw-stat-val t-warn">1</div>
+  <div class="cw-stat-val t-warn">3</div>
   <div class="cw-stat-sub">expiry or trust issue</div>
 </div>
 
@@ -196,7 +196,7 @@ Calendar · all</a>
     </nav>
   </div>
 
-    <p class="cw-hint">Group views cover all scanned endpoints and pending hosts in your scope. Inventory filters do not apply.</p>
+    <p class="cw-hint">Group views cover every endpoint and uploaded file in your scope, the same rows as Inventory. Inventory filters do not apply.</p>
 
 
 
@@ -208,7 +208,7 @@ Calendar · all</a>
       <thead>
         <tr>
           <th>Owner</th>
-          <th class="num">Certs</th>
+          <th class="num">Tracked</th>
           <th>Worst status</th>
           <th class="num">Earliest expiry</th>
         </tr>
@@ -220,18 +220,34 @@ Calendar · all</a>
 
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
 
-</span> <span class="cw-id">Messaging Team</span></td>
-          <td class="num">1</td>
-          <td><span class="cw-status t-ok">
-  <span class="dot" aria-hidden="true"></span>Healthy
+</span> <span class="cw-id">Unassigned</span></td>
+          <td class="num">4</td>
+          <td><span class="cw-status t-expired">
+  <span class="dot" aria-hidden="true"></span>Expired
 </span></td>
-          <td class="num">60 days</td>
+          <td class="num">expired 400 days ago</td>
         </tr>
-        <tr class="cw-subrow cw-hidden" id="pivot-detail-1" data-pivot="owner" data-group-key="Messaging Team">
-          <td colspan="4">Click to load 1 certificate…</td>
+        <tr class="cw-subrow cw-hidden" id="pivot-detail-1" data-pivot="owner" data-group-key="Unassigned">
+          <td colspan="4">Click to load 4 tracked entries…</td>
         </tr>
 
         <tr data-expand="pivot-detail-2" tabindex="0" role="button" aria-expanded="false" aria-controls="pivot-detail-2">
+          <td><span class="chev">
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+
+</span> <span class="cw-id">Messaging Team</span></td>
+          <td class="num">1</td>
+          <td><span class="cw-status t-warn">
+  <span class="dot" aria-hidden="true"></span>Warning
+</span></td>
+          <td class="num">60 days</td>
+        </tr>
+        <tr class="cw-subrow cw-hidden" id="pivot-detail-2" data-pivot="owner" data-group-key="Messaging Team">
+          <td colspan="4">Click to load 1 tracked entry…</td>
+        </tr>
+
+        <tr data-expand="pivot-detail-3" tabindex="0" role="button" aria-expanded="false" aria-controls="pivot-detail-3">
           <td><span class="chev">
 
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
@@ -243,8 +259,8 @@ Calendar · all</a>
 </span></td>
           <td class="num">—</td>
         </tr>
-        <tr class="cw-subrow cw-hidden" id="pivot-detail-2" data-pivot="owner" data-group-key="Edge Team">
-          <td colspan="4">Click to load 1 certificate…</td>
+        <tr class="cw-subrow cw-hidden" id="pivot-detail-3" data-pivot="owner" data-group-key="Edge Team">
+          <td colspan="4">Click to load 1 tracked entry…</td>
         </tr>
 
       </tbody>

@@ -43,10 +43,12 @@ def test_metrics_exposes_alert_lifecycle_statuses(tmp_path, reload_app):
     assert 'cert_watch_alerts{status="pending"} 1.0' in response.text
     assert 'cert_watch_alerts{status="sending"} 1.0' in response.text
     assert 'cert_watch_alerts{status="failed"} 2.0' in response.text
-    assert "cert_watch_alerts_failed_recent 0.0" in response.text
+    # Created failed just now, so both became failed in the last 24 hours --
+    # with no attempt at all, which is why the window is on failed_at (#113).
+    assert "cert_watch_alerts_failed_recent 2.0" in response.text
 
 
-def test_metrics_recent_failed_alerts_uses_last_attempt_24h_window(
+def test_metrics_recent_failed_alerts_uses_failed_at_24h_window(
     tmp_path, reload_app,
 ):
     from datetime import UTC, datetime, timedelta
@@ -66,12 +68,13 @@ def test_metrics_recent_failed_alerts_uses_last_attempt_24h_window(
     ))
     with _connect(db) as conn:
         conn.execute(
-            "UPDATE alerts SET last_attempt_at = ? WHERE id = ?",
+            "UPDATE alerts SET failed_at = ? WHERE id = ?",
             ((datetime.now(UTC) - timedelta(hours=2)).isoformat(), recent),
         )
         conn.execute(
-            "UPDATE alerts SET last_attempt_at = ? WHERE id = ?",
-            ((datetime.now(UTC) - timedelta(hours=25)).isoformat(), old),
+            "UPDATE alerts SET failed_at = ?, last_attempt_at = ? WHERE id = ?",
+            ((datetime.now(UTC) - timedelta(hours=25)).isoformat(),
+             (datetime.now(UTC) - timedelta(hours=1)).isoformat(), old),
         )
         conn.commit()
 

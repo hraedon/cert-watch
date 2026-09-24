@@ -216,7 +216,10 @@ def test_fleet_pivot_surfaces_expired_urgency(tmp_path):
     assert groups[0]["earliest_expiry"] < 0
 
 
-def test_fleet_pivot_healthy_unaffected(tmp_path):
+def test_fleet_pivot_healthy_unaffected(tmp_path, monkeypatch):
+    # The pivot shares the row status rule, chain floor included; this test is
+    # about the date boundary only.
+    monkeypatch.setattr("cert_watch.cert_chain.chain_status", lambda *args: "public")
     db = tmp_path / "cw.sqlite3"
     init_schema(db)
     hosts = SqliteHostRepository(db)

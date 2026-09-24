@@ -20,47 +20,69 @@
     var key = row.getAttribute('data-group-key');
     cell.textContent = 'Loading…';
 
-    fetch('/api/pivot/' + encodeURIComponent(pivot) + '/' + encodeURIComponent(key))
-      .then(function (r) { if (!r.ok) throw new Error('status ' + r.status); return r.json(); })
-      .then(function (data) {
-        var frag = document.createDocumentFragment();
-        (data.entries || []).forEach(function (entry) {
-          var div = document.createElement('div');
-          div.className = 'row';
-          var name = entry.name || entry.host || '—';
-          var urg = VALID_URGENCY[entry.urgency] ? entry.urgency : 'gray';
-          var tone = { expired: 't-expired', critical: 't-crit', warning: 't-warn', healthy: 't-ok', gray: 't-muted' }[urg];
-          var link;
-          if (entry.id) {
-            link = document.createElement('a');
-            link.href = '/certificates/' + encodeURIComponent(entry.id);
-            link.className = 'cw-id';
-            link.textContent = name;
-          } else {
-            link = document.createElement('span');
-            link.className = 'cw-id';
-            link.textContent = name;
+    function entryRow(entry) {
+      var div = document.createElement('div');
+      div.className = 'row';
+      var name = entry.name || entry.host || '—';
+      var urg = VALID_URGENCY[entry.urgency] ? entry.urgency : 'gray';
+      var tone = { expired: 't-expired', critical: 't-crit', warning: 't-warn', healthy: 't-ok', gray: 't-muted' }[urg];
+      var link;
+      if (entry.id) {
+        link = document.createElement('a');
+        link.href = '/certificates/' + encodeURIComponent(entry.id);
+        link.className = 'cw-id';
+        link.textContent = name;
+      } else {
+        link = document.createElement('span');
+        link.className = 'cw-id';
+        link.textContent = name;
+      }
+      div.appendChild(link);
+      var pill = document.createElement('span');
+      pill.className = 'cw-status ' + tone;
+      pill.innerHTML = '<span class="dot" aria-hidden="true"></span>';
+      pill.appendChild(document.createTextNode(entry.urgency_label || 'Unknown'));
+      div.appendChild(pill);
+      if (entry.days_remaining != null) {
+        var days = document.createElement('span');
+        days.className = 'cw-muted mono';
+        days.textContent = entry.days_remaining + ' days';
+        div.appendChild(days);
+      }
+      return div;
+    }
+
+    /* A large group is paged (#113 review): show the first page and offer
+     * the rest a page at a time instead of loading thousands of rows. */
+    function load(page, more) {
+      fetch('/api/pivot/' + encodeURIComponent(pivot) + '/' + encodeURIComponent(key) +
+            '?page=' + page)
+        .then(function (r) { if (!r.ok) throw new Error('status ' + r.status); return r.json(); })
+        .then(function (data) {
+          var frag = document.createDocumentFragment();
+          (data.entries || []).forEach(function (entry) { frag.appendChild(entryRow(entry)); });
+          if (more) { more.remove(); } else { cell.textContent = ''; }
+          cell.appendChild(frag);
+          if (data.has_more) {
+            var shown = cell.querySelectorAll('.row').length;
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'cw-btn ghost sm';
+            btn.textContent = 'Show more (' + (data.total - shown) + ' more)';
+            btn.addEventListener('click', function (ev) {
+              ev.stopPropagation();
+              btn.disabled = true;
+              load(page + 1, btn);
+            });
+            cell.appendChild(btn);
           }
-          div.appendChild(link);
-          var pill = document.createElement('span');
-          pill.className = 'cw-status ' + tone;
-          pill.innerHTML = '<span class="dot" aria-hidden="true"></span>';
-          pill.appendChild(document.createTextNode(entry.urgency_label || 'Unknown'));
-          div.appendChild(pill);
-          if (entry.days_remaining != null) {
-            var days = document.createElement('span');
-            days.className = 'cw-muted mono';
-            days.textContent = entry.days_remaining + ' days';
-            div.appendChild(days);
-          }
-          frag.appendChild(div);
+        })
+        .catch(function (err) {
+          if (more) { more.disabled = false; more.textContent = 'Failed to load: ' + err.message; return; }
+          cell.textContent = 'Failed to load: ' + err.message;
+          row.removeAttribute('data-loaded');
         });
-        cell.textContent = '';
-        cell.appendChild(frag);
-      })
-      .catch(function (err) {
-        cell.textContent = 'Failed to load: ' + err.message;
-        row.removeAttribute('data-loaded');
-      });
+    }
+    load(1, null);
   });
 })();

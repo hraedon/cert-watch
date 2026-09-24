@@ -952,7 +952,7 @@ def test_migration_0033_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
             conn.execute(statement)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0037", "0038"]
+    assert run_pending_migrations(db, backup=False) == ["0037", "0038", "0039", "0040"]
     with sqlite3.connect(str(db)) as conn:
         assert "deferred_since" in _table_columns(conn, "alerts")
         ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0033'").fetchall()
@@ -974,7 +974,7 @@ def test_migration_0033_tolerates_a_column_added_by_hand_without_the_ledger(
         conn.execute(COLUMN_SQL)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0033", "0037", "0038"]
+    assert run_pending_migrations(db, backup=False) == ["0033", "0037", "0038", "0039", "0040"]
 
 
 # ── 0034: alerts.trigger_cert_id (stable resolve keying, #62) ───────────────
@@ -1014,7 +1014,7 @@ def test_migration_0034_backfills_existing_alerts_with_their_trigger_row(
         )
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0034", "0037", "0038"]
+    assert run_pending_migrations(db, backup=False) == ["0034", "0037", "0038", "0039", "0040"]
     with sqlite3.connect(str(db)) as conn:
         row = conn.execute(
             "SELECT trigger_cert_id FROM alerts WHERE id = 'a1'"
@@ -1044,7 +1044,7 @@ def test_migration_0034_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
             conn.execute(statement)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0037", "0038"]
+    assert run_pending_migrations(db, backup=False) == ["0037", "0038", "0039", "0040"]
     with sqlite3.connect(str(db)) as conn:
         assert "trigger_cert_id" in _table_columns(conn, "alerts")
         ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0034'").fetchall()
@@ -1066,7 +1066,7 @@ def test_migration_0034_tolerates_a_column_added_by_hand_without_the_ledger(
         conn.execute(COLUMN_SQL)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0034", "0037", "0038"]
+    assert run_pending_migrations(db, backup=False) == ["0034", "0037", "0038", "0039", "0040"]
 
 
 def test_migration_0035_preserves_legacy_tls_verified_values(db_path: Path) -> None:
@@ -1113,7 +1113,7 @@ def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) ->
     )
 
     assert run_pending_migrations(db, backup=False) == [
-        "0031", "0032", "0033", "0034", "0035", "0036", "0037", "0038"
+        "0031", "0032", "0033", "0034", "0035", "0036", "0037", "0038", "0039", "0040"
     ]
 
     with sqlite3.connect(str(db)) as conn:
@@ -1147,7 +1147,7 @@ def test_reconciled_migrations_upgrade_old_review_feature_database(
     )
 
     assert run_pending_migrations(db, backup=False) == [
-        "0030", "0031", "0032", "0033", "0034", "0035", "0036", "0037", "0038"
+        "0030", "0031", "0032", "0033", "0034", "0035", "0036", "0037", "0038", "0039", "0040"
     ]
 
     with sqlite3.connect(str(db)) as conn:
@@ -1643,3 +1643,41 @@ def test_repository_add_stores_the_canonical_spelling_and_finds_aliases(db_path:
     # Re-adding under another spelling is the same idempotent add.
     assert repo.add("victim.example.test", 443) == host_id
     assert repo.count_all() == 1
+
+
+def test_migration_0040_dates_a_zero_attempt_give_up_to_the_upgrade(tmp_path: Path) -> None:
+    """1.0.2 recorded no time for an alert that gave up without an attempt.
+    One that gave up moments before the upgrade must count as a recent
+    failure afterwards, not be dated to its (weeks-old) creation (#113)."""
+    from datetime import UTC, datetime, timedelta
+
+    import cert_watch.migrations.registry  # noqa: F401 — registers migrations
+    from cert_watch.database.connection import close_connections
+    from cert_watch.migrations.runner import run_pending_migrations
+
+    db = tmp_path / "upgrade-102.sqlite3"
+    init_schema(db)
+    close_connections()
+    created = (datetime.now(UTC) - timedelta(days=30)).isoformat()
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute("DELETE FROM schema_version WHERE id = '0040'")
+        conn.execute("ALTER TABLE alerts DROP COLUMN failed_at")
+        conn.executemany(
+            "INSERT INTO alerts (id, cert_id, alert_type, status, message, created_at,"
+            " last_attempt_at) VALUES (?, ?, 'expiry_warning', ?, 'm', ?, ?)",
+            [
+                ("attempted", "c1", "failed", "2026-01-01T00:00:00+00:00",
+                 "2026-01-02T03:04:05+00:00"),
+                ("gave-up-just-now", "c2", "failed", created, None),
+                ("still-pending", "c3", "pending", created, None),
+            ],
+        )
+        conn.commit()
+
+    before = datetime.now(UTC)
+    assert run_pending_migrations(db, backup=False) == ["0040"]
+    with sqlite3.connect(str(db)) as conn:
+        rows = dict(conn.execute("SELECT id, failed_at FROM alerts").fetchall())
+    assert rows["attempted"] == "2026-01-02T03:04:05+00:00"
+    assert rows["still-pending"] is None
+    assert datetime.fromisoformat(rows["gave-up-just-now"]) >= before
