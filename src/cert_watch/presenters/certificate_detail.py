@@ -16,7 +16,9 @@ from cert_watch.certificate_model import Certificate
 from cert_watch.chain_guidance import ChainGuidance, describe_chain
 from cert_watch.filters import compute_urgency, friendly_issuer, issuer_cn, subject_cn
 from cert_watch.posture import GRADE_WORST_ORDER
+from cert_watch.scan_error_guidance import ScanErrorGuidance, describe_scan_error
 from cert_watch.scan_freshness import ScanEvidence
+from cert_watch.database import LatestScanRecord
 from cert_watch.services.certificate_detail import (
     CertificateDetailData,
     PendingHostDetailData,
@@ -202,6 +204,12 @@ class CertificateDetailView:
     endpoint_error: str
     # Reached through a link to an earlier certificate for this endpoint.
     superseded: bool = False
+    # The latest scan attempt failed; for a stored certificate, what is shown
+    # is from the last successful scan (#113).
+    scan_failed: bool = False
+    scan_at_label: str = ""
+    scan_guidance: ScanErrorGuidance | None = None
+    scanned: bool = False
 
     def template_context(self) -> dict[str, Any]:
         """Expose one stable boundary to Jinja or a future JSON serializer."""
@@ -456,6 +464,26 @@ def _chain_note(status: str) -> ChainNoteView:
     return ChainNoteView(tone, icon, label)
 
 
+def _scan_time_label(value: str) -> str:
+    """``2026-09-24T07:29:36+00:00`` -> ``2026-09-24 07:29 UTC``."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _latest_scan_fields(latest: LatestScanRecord | None) -> dict[str, Any]:
+    failed = latest is not None and latest.status == "failure"
+    return {
+        "scan_failed": failed,
+        "scan_at_label": _scan_time_label(latest.scanned_at) if latest else "",
+        "scan_guidance": describe_scan_error(latest.error_message) if failed and latest else None,
+    }
+
+
 def present_certificate_detail(
     data: CertificateDetailData,
     *,
@@ -464,6 +492,7 @@ def present_certificate_detail(
     endpoint_saved: bool = False,
     endpoint_error: str = "",
     superseded: bool = False,
+    scanned: bool = False,
     now: datetime | None = None,
 ) -> CertificateDetailView:
     """Build either stored-certificate or pending-host detail view."""
@@ -526,6 +555,8 @@ def present_certificate_detail(
             ),
             endpoint_saved=endpoint_saved,
             endpoint_error=endpoint_error,
+            **_latest_scan_fields(latest),
+            scanned=scanned,
         )
 
     technical = present_certificate_technical_details(
@@ -567,9 +598,9 @@ def present_certificate_detail(
         renewal_method_label=renewal_label,
         renewal_method_indicator=renewal_indicator,
         all_tags=tuple(data.all_tags),
-        scan_status=None,
-        scan_error=None,
-        scan_at=None,
+        scan_status=data.latest_scan.status if data.latest_scan else None,
+        scan_error=data.latest_scan.error_message if data.latest_scan else None,
+        scan_at=data.latest_scan.scanned_at if data.latest_scan else None,
         scan_evidence=data.scan_evidence,
         key_type=technical.key_type,
         sig_alg=technical.sig_alg,
@@ -629,4 +660,6 @@ def present_certificate_detail(
         endpoint_saved=endpoint_saved,
         endpoint_error=endpoint_error,
         superseded=superseded,
+        **_latest_scan_fields(data.latest_scan),
+        scanned=scanned,
     )

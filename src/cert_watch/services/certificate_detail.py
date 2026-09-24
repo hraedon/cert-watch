@@ -20,6 +20,7 @@ from cert_watch.database import (
     SqliteCertificateRepository,
     SqliteTrustAnchorRepository,
     distinct_tags,
+    get_latest_scan_record,
     get_pending_host_detail_records,
     get_posture_for_cert,
     get_renewal_history,
@@ -50,6 +51,9 @@ class StoredCertificateDetailData:
     effective_tags: list[str]
     all_tags: list[str]
     alerts: tuple[Alert, ...] = ()
+    # The endpoint's latest scan attempt. A failed attempt leaves the stored
+    # certificate in place, so the page must say the evidence is old (#113).
+    latest_scan: LatestScanRecord | None = None
 
 
 @dataclass(frozen=True)
@@ -128,7 +132,9 @@ def load_certificate_detail(
         posture = _fallback_posture(stored.cert, status)
     repo = SqliteCertificateRepository(db_path)
     evidence = None
+    latest_scan = None
     if stored.cert.source == "scanned" and stored.host is not None:
+        latest_scan = get_latest_scan_record(db_path, stored.hostname, stored.port)
         evidence = load_scan_evidence(
             db_path,
             host_id=stored.host.id,
@@ -162,4 +168,5 @@ def load_certificate_detail(
                 reverse=True,
             )[:5]
         ),
+        latest_scan=latest_scan,
     )

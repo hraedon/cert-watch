@@ -20,6 +20,17 @@ All notable changes to cert-watch are documented in this file.
   resolves only while its successor, its lifecycle event or an alert still
   records the endpoint. Scope still applies: a link never reveals a
   certificate the viewer can't see (#113).
+- A certificate's detail page says when the endpoint's latest scan failed.
+  It previously showed the last good certificate as "Healthy" with its grade
+  and never showed the error. The page now marks the latest scan as failed,
+  shows when, gives a plain-language cause and a next step for common errors
+  (DNS, refused or timed-out connections, non-TLS ports, dropped or rejected
+  handshakes, blocked addresses), keeps the raw error beside it, and notes
+  that the certificate shown is from the last successful scan. Pending hosts
+  get the same explanation (#113).
+- "Scan now" on a detail page returns to that page instead of Home, and the
+  detail page now shows the flash messages that actions returning to it set
+  (#113).
 
 ## [1.0.2] - 2026-09-23
 

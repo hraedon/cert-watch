@@ -553,12 +553,19 @@ async def scan_all_hosts(
 async def scan_host_now(
     request: Request,
     host_id: IdParam,
+    return_to: str = Form(""),
     _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
+    # The detail page's Scan now returns to that endpoint's page (#113); the
+    # Home queue's returns Home. Only these two fixed targets exist, so the
+    # field can't be used to redirect anywhere else.
+    base = f"/certificates/{host_id}" if return_to == "detail" else "/"
+
+    def back(query: str = "") -> RedirectResponse:
+        return RedirectResponse(url=f"{base}?{query}" if query else base, status_code=303)
+
     if not check_rate_limit(f"scan_host:{_extract_client_ip(request)}", 10, 60):
-        return RedirectResponse(
-            url=f"/?error={quote('rate limited: too many scan requests')}", status_code=303
-        )
+        return back(f"error={quote('rate limited: too many scan requests')}")
     db = _db_path(request)
     host = SqliteHostRepository(db).get(host_id)
     if host is None:
@@ -578,10 +585,11 @@ async def scan_host_now(
     except ScopeDeniedError as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     if result.status == "success":
-        return RedirectResponse(url="/", status_code=303)
+        return back("scanned=1" if return_to == "detail" else "")
     if result.status == "store_error":
-        return RedirectResponse(
-            url=f"/?warning={quote('scan succeeded but store failed')}", status_code=303
-        )
+        return back(f"warning={quote('scan succeeded but store failed')}")
+    if return_to == "detail":
+        # The page itself explains the failure (cause, next step, raw error).
+        return back("scanned=1")
     msg = f"scan failed for {host.hostname}:{host.port}: {result.error}"
-    return RedirectResponse(url=f"/?warning={quote(msg)}", status_code=303)
+    return back(f"warning={quote(msg)}")

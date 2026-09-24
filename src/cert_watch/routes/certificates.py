@@ -130,6 +130,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
         endpoint_saved=bool(request.query_params.get("endpoint_saved")),
         endpoint_error=request.query_params.get("endpoint_error", ""),
         superseded=bool(request.query_params.get("superseded")),
+        scanned=bool(request.query_params.get("scanned")),
     )
     return templates.TemplateResponse(
         request=request,
@@ -140,6 +141,10 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             "commit": __commit__,
             **get_auth_context(request),
             "active_page": "browse",
+            # Flash messages from actions that return here (tags, owner,
+            # Scan now); base.html renders them.
+            "error": request.query_params.get("error", ""),
+            "warning": request.query_params.get("warning", ""),
             **get_csrf_context(request),
         },
     )

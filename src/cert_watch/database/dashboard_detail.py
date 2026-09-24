@@ -167,24 +167,29 @@ def get_pending_host_detail_records(
         host_row = conn.execute("SELECT * FROM hosts WHERE id = ?", (host_id,)).fetchone()
         if host_row is None:
             return None
+    return PendingHostDetailRecords(
+        host=SqliteHostRepository._row_to_host(host_row),
+        latest_scan=get_latest_scan_record(db_path, host_row["hostname"], host_row["port"]),
+    )
+
+
+def get_latest_scan_record(
+    db_path: str | Path, hostname: str, port: int
+) -> LatestScanRecord | None:
+    """The endpoint's most recent scan attempt, whatever its outcome."""
+    with _connect(db_path) as conn:
         scan_row = conn.execute(
             "SELECT status, scanned_at, error_message FROM scan_history "
             "WHERE hostname = ? AND port = ? "
-            "ORDER BY scanned_at DESC LIMIT 1",
-            (host_row["hostname"], host_row["port"]),
+            "ORDER BY scanned_at DESC, id DESC LIMIT 1",
+            (hostname, port),
         ).fetchone()
-    latest = (
-        LatestScanRecord(
-            status=scan_row["status"],
-            scanned_at=scan_row["scanned_at"],
-            error_message=scan_row["error_message"],
-        )
-        if scan_row is not None
-        else None
-    )
-    return PendingHostDetailRecords(
-        host=SqliteHostRepository._row_to_host(host_row),
-        latest_scan=latest,
+    if scan_row is None:
+        return None
+    return LatestScanRecord(
+        status=scan_row["status"],
+        scanned_at=scan_row["scanned_at"],
+        error_message=scan_row["error_message"],
     )
 
 
