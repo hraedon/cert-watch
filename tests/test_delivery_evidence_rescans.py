@@ -120,7 +120,9 @@ def test_rescan_preserves_original_alert_and_exact_delivery_evidence(
         db, HOSTNAME, 443, _certificate(changed=changed), [], True,
     )
 
-    assert replaced_id == cert_id and new_id != cert_id
+    assert replaced_id == cert_id
+    # A different certificate gets a new id; the same one keeps its id (#113).
+    assert (new_id != cert_id) if changed else (new_id == cert_id)
     if changed:
         # A different certificate. The old one's alert stays with it as
         # closed history and does not follow the endpoint to its successor.
@@ -132,9 +134,11 @@ def test_rescan_preserves_original_alert_and_exact_delivery_evidence(
         # threshold fires again on the next cycle and re-notifies for ever.
         assert _stored_rows(db, alert_id) == _rebound(original, new_id)
         assert [item.id for item in repo.list_for_cert(new_id)] == [alert_id]
-    with _connect(db) as conn:
-        assert conn.execute("SELECT id FROM certificates WHERE id = ?", (cert_id,)).fetchone() \
-            is None
+    if changed:
+        with _connect(db) as conn:
+            assert conn.execute(
+                "SELECT id FROM certificates WHERE id = ?", (cert_id,)
+            ).fetchone() is None
     assert repo.list_pending() == []
     assert latest_outcomes(db, [alert_id]) == {alert_id: outcome or "unknown"}
 

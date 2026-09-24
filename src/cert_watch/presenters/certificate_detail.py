@@ -200,6 +200,8 @@ class CertificateDetailView:
     source_meta: str
     endpoint_saved: bool
     endpoint_error: str
+    # Reached through a link to an earlier certificate for this endpoint.
+    superseded: bool = False
 
     def template_context(self) -> dict[str, Any]:
         """Expose one stable boundary to Jinja or a future JSON serializer."""
@@ -461,6 +463,7 @@ def present_certificate_detail(
     slack_configured: bool,
     endpoint_saved: bool = False,
     endpoint_error: str = "",
+    superseded: bool = False,
     now: datetime | None = None,
 ) -> CertificateDetailView:
     """Build either stored-certificate or pending-host detail view."""
@@ -625,4 +628,5 @@ def present_certificate_detail(
         source_meta=source_meta,
         endpoint_saved=endpoint_saved,
         endpoint_error=endpoint_error,
+        superseded=superseded,
     )

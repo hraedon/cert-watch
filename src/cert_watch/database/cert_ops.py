@@ -100,6 +100,14 @@ def _do_replace(
         and old_leaf_row["fingerprint_sha256"] == leaf.fingerprint_sha256
     )
     carried: list[str] = list(old_leaves) if unchanged else []
+    # The same certificate keeps its id (#113): detail links, bookmarks and
+    # webhook URLs name that id, and every rescan used to break them. Its
+    # lineage is kept too -- the row must not "replace" itself, or the expiry
+    # and renewal rules would treat it as superseded.
+    lineage_id: str | None = replaces_id
+    if unchanged and old_leaf_row is not None:
+        leaf_id = old_leaf_row["id"]
+        lineage_id = old_leaf_row["replaces_cert_id"]
     if old_all_ids:
         from cert_watch.database.alert_store import AlertStore
 
@@ -165,7 +173,7 @@ def _do_replace(
             1,
             None,
             cv,
-            replaces_id,
+            lineage_id,
             now,
             now,
         ),

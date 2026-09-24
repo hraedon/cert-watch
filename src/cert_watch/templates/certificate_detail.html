@@ -80,6 +80,10 @@
     </div>
   </div>
 
+  {%- if superseded and cert %}
+  <p class="cw-note" role="status" data-testid="cert-superseded-note">{{ icons.svg_icon('info', 14) }}<span>The link you followed named an earlier certificate for this endpoint. This is the certificate it serves now.</span></p>
+  {%- endif %}
+
   {% if scan_error and not cert %}
   <div class="cw-panel">
     <div class="cw-panel-body">

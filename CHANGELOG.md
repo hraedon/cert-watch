@@ -11,6 +11,15 @@ All notable changes to cert-watch are documented in this file.
 - A signed-in user who is not an administrator and opens a Settings page is
   sent to Home with "Settings are available to administrators only." It
   previously redirected to `/settings` forever (#113).
+- Certificate links keep working after a rescan. A rescan that sees the same
+  certificate keeps its id, so detail pages, bookmarks, API ids and renewal
+  webhook links no longer break on the next scan. A link to a certificate
+  that has since been renewed, or to an endpoint's host id, now opens the
+  endpoint's current certificate with a short note, instead of "certificate
+  not found". For a certificate replaced before this release, the link
+  resolves only while its successor, its lifecycle event or an alert still
+  records the endpoint. Scope still applies: a link never reveals a
+  certificate the viewer can't see (#113).
 
 ## [1.0.2] - 2026-09-23
 

@@ -67,6 +67,97 @@ def get_stored_certificate_detail_records(
     )
 
 
+@dataclass(frozen=True)
+class CurrentCertificateRef:
+    """Where an id that no longer names a certificate row now points."""
+
+    cert_id: str
+    # True when the id named an earlier certificate for the endpoint (a
+    # renewal replaced it); False when it was the endpoint's own host id.
+    superseded: bool
+
+
+def _current_leaf_for_endpoint(conn: Any, hostname: str, port: int) -> str | None:
+    row = conn.execute(
+        "SELECT id FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1 "
+        "ORDER BY created_at DESC LIMIT 1",
+        (hostname, port),
+    ).fetchone()
+    return str(row["id"]) if row is not None else None
+
+
+def resolve_current_certificate(
+    db_path: str | Path, stale_id: str
+) -> CurrentCertificateRef | None:
+    """Map an id with no certificate row to the endpoint's current leaf.
+
+    Certificate ids change when a certificate is renewed (and, before #113,
+    on every rescan), so links to them go stale. The endpoint survives, and
+    each of these still records which endpoint an old id belonged to:
+
+    1. a host id (the stable address of an endpoint);
+    2. the successor row, whose ``replaces_cert_id`` names the old id;
+    3. the ``cert_added`` / ``cert_renewed`` lifecycle event written when the
+       id was issued (kept for the event-log retention period);
+    4. an alert that fired on the id (alerts record the host name only, so
+       this resolves only when one scanned endpoint has that name).
+
+    Returns ``None`` when none of them knows the id. Performs no scope
+    check: the caller must authorize the returned certificate.
+    """
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        host = conn.execute(
+            "SELECT hostname, port FROM hosts WHERE id = ?", (stale_id,)
+        ).fetchone()
+        if host is not None:
+            current = _current_leaf_for_endpoint(conn, host["hostname"], host["port"])
+            return CurrentCertificateRef(current, superseded=False) if current else None
+
+        successor = conn.execute(
+            "SELECT hostname, port FROM certificates "
+            "WHERE replaces_cert_id = ? AND is_leaf = 1 AND hostname IS NOT NULL",
+            (stale_id,),
+        ).fetchone()
+        endpoint: tuple[str, int] | None = (
+            (successor["hostname"], successor["port"]) if successor is not None else None
+        )
+
+        if endpoint is None:
+            event = conn.execute(
+                "SELECT json_extract(payload, '$.hostname') AS hostname, "
+                "json_extract(payload, '$.port') AS port FROM event_log "
+                "WHERE event_type IN ('cert_added', 'cert_renewed') "
+                "AND (json_extract(payload, '$.cert_id') = ? "
+                "OR json_extract(payload, '$.replaced_cert_id') = ?) "
+                "ORDER BY id DESC LIMIT 1",
+                (stale_id, stale_id),
+            ).fetchone()
+            if event is not None and event["hostname"] and event["port"] is not None:
+                endpoint = (str(event["hostname"]), int(event["port"]))
+
+        if endpoint is None:
+            alert = conn.execute(
+                "SELECT hostname FROM alerts WHERE (cert_id = ? OR trigger_cert_id = ?) "
+                "AND hostname IS NOT NULL AND hostname != '' LIMIT 1",
+                (stale_id, stale_id),
+            ).fetchone()
+            if alert is not None:
+                leaves = conn.execute(
+                    "SELECT id FROM certificates WHERE hostname = ? AND is_leaf = 1 "
+                    "LIMIT 2",
+                    (alert["hostname"],),
+                ).fetchall()
+                if len(leaves) == 1:
+                    return CurrentCertificateRef(str(leaves[0]["id"]), superseded=True)
+            return None
+
+        current = _current_leaf_for_endpoint(conn, *endpoint)
+    if current is None or current == stale_id:
+        return None
+    return CurrentCertificateRef(current, superseded=True)
+
+
 def get_pending_host_detail_records(
     db_path: str | Path, host_id: str
 ) -> PendingHostDetailRecords | None:

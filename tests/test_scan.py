@@ -1295,7 +1295,7 @@ def test_store_scanned_unchanged_rescan_sends_no_resolve(
 
     with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
         leaf_id = store_scanned(entry, db, webhook_config=webhook_config)
-        assert leaf_id != first_leaf_id
+        assert leaf_id == first_leaf_id  # same certificate keeps its id (#113)
         mock_urlopen.assert_not_called()
 
     # The sent alert was carried onto the rewritten row, not resolved
@@ -1389,7 +1389,7 @@ def test_store_scanned_pagerduty_resolve_survives_row_rewrites(
         rewritten_id = store_scanned(
             unchanged_entry, db, webhook_config=webhook_config,
         )
-        assert rewritten_id != first_leaf_id
+        assert rewritten_id == first_leaf_id  # same certificate keeps its id (#113)
         mock_urlopen.assert_not_called()
         carried = alert_repo.list_for_cert(rewritten_id)
         assert len(carried) == 1
@@ -1463,7 +1463,7 @@ def test_store_scanned_unchanged_rescan_defers_no_resolve(
     leaf_id = store_scanned(
         entry, db, webhook_config=webhook_config, _deferred=deferred,
     )
-    assert leaf_id != first_leaf_id
+    assert leaf_id == first_leaf_id  # same certificate keeps its id (#113)
     assert deferred.replaced_cert_id is None
 
     with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
@@ -2237,7 +2237,7 @@ def test_store_scanned_webhook_resolve_failure_does_not_roll_back(
 
     second_id = store_scanned(entry, db, webhook_config=webhook_config)
     assert second_id
-    assert second_id != first_id
+    assert second_id == first_id  # same certificate keeps its id (#113)
     certs = repo.list_all()
     assert len(certs) == 1
     assert certs[0].fingerprint_sha256 == leaf.fingerprint_sha256

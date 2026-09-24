@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from urllib.parse import quote
+from pathlib import Path
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -16,6 +17,7 @@ from cert_watch.auth.guards import (
     write_form_guard,
 )
 from cert_watch.auth.scope import ScopeDeniedError
+from cert_watch.database import resolve_current_certificate
 from cert_watch.presenters.certificate_detail import present_certificate_detail
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth, get_templates
 from cert_watch.routes._scoped import (
@@ -68,6 +70,31 @@ templates = get_templates()
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
+def _redirect_to_current_certificate(
+    request: Request, db: Path, stale_id: str
+) -> RedirectResponse | None:
+    """Send a stale certificate id, or a host id, to the endpoint's current
+    certificate (#113): ids change on renewal, and links must survive that.
+
+    The target is authorized before its id is revealed; an out-of-scope
+    target answers exactly like an unknown id.
+    """
+    ref = resolve_current_certificate(db, stale_id)
+    if ref is None:
+        return None
+    if scope_read_denied(request, db, cert_id=ref.cert_id):
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
+    params = [
+        (key, value)
+        for key, value in request.query_params.multi_items()
+        if key != "superseded"
+    ]
+    if ref.superseded:
+        params.append(("superseded", "1"))
+    query = f"?{urlencode(params)}" if params else ""
+    return RedirectResponse(url=f"/certificates/{ref.cert_id}{query}", status_code=303)
+
+
 @router.get("/certificates/{cert_id}", response_class=HTMLResponse, response_model=None)
 def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | RedirectResponse:
     db = _db_path(request)
@@ -80,6 +107,10 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
         sched_hour=settings.sched_hour,
         sched_min=settings.sched_min,
     )
+    if data is None or isinstance(data, PendingHostDetailData):
+        moved = _redirect_to_current_certificate(request, db, cert_id)
+        if moved is not None:
+            return moved
     if data is None:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     denied = (
@@ -98,6 +129,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
         slack_configured=settings.webhook_kind == "slack",
         endpoint_saved=bool(request.query_params.get("endpoint_saved")),
         endpoint_error=request.query_params.get("endpoint_error", ""),
+        superseded=bool(request.query_params.get("superseded")),
     )
     return templates.TemplateResponse(
         request=request,
