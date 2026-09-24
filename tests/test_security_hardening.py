@@ -636,3 +636,32 @@ def test_new_guard_variants_have_stable_repr_and_reject_invalid_shape():
     assert "MutationGuard" in repr(admin_session_json_write_guard)
     with pytest.raises(ValueError, match="JSON guards"):
         MutationGuard("write", form=True, json_only=True)
+
+
+def test_json_nesting_is_bounded_explicitly_not_by_recursion():
+    """The depth bound must not depend on the interpreter's recursion guard.
+
+    Python 3.14.7 parsed the 100k-deep body in the test above without raising
+    RecursionError, so `json_body` accepted it; the bound is now a pre-parse
+    scan with a fixed limit.
+    """
+    import json
+
+    from cert_watch.routes.api._shared import (
+        MAX_JSON_DEPTH,
+        JsonBodyError,
+        _nesting_exceeds,
+        json_body,
+    )
+
+    def nested(depth: int) -> bytes:
+        return b'{"v":' + b"[" * (depth - 1) + b"0" + b"]" * (depth - 1) + b"}"
+
+    assert json_body(nested(MAX_JSON_DEPTH)) == {"v": json.loads(nested(MAX_JSON_DEPTH))["v"]}
+    with pytest.raises(JsonBodyError, match="invalid JSON"):
+        json_body(nested(MAX_JSON_DEPTH + 1))
+
+    # Brackets inside strings, including after escaped quotes, don't count.
+    assert not _nesting_exceeds(b'{"k": "' + b"[" * 500 + b'"}', 2)
+    assert not _nesting_exceeds(b'{"k": "\\"' + b"{" * 500 + b'"}', 2)
+    assert _nesting_exceeds(b'[[["x"]]]', 2)

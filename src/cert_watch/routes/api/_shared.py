@@ -60,6 +60,42 @@ def _has_lone_surrogate(value: Any) -> bool:
     return False
 
 
+# No API body is more than a few levels deep. The bound is explicit because
+# relying on RecursionError is interpreter-dependent: Python 3.14 guards C
+# recursion by remaining stack, so the same hostile body that raised on 3.13
+# parses cleanly on a host with a large stack.
+MAX_JSON_DEPTH = 64
+
+
+def _nesting_exceeds(raw: bytes, limit: int) -> bool:
+    """Whether ``raw`` nests arrays/objects deeper than ``limit``.
+
+    A linear byte scan run before parsing, so a hostile body is refused without
+    building it. Brackets inside strings are ignored; malformed input is left
+    for ``json.loads`` to reject.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:  # backslash
+                escaped = True
+            elif byte == 0x22:  # quote
+                in_string = False
+        elif byte == 0x22:
+            in_string = True
+        elif byte in (0x5B, 0x7B):  # [ {
+            depth += 1
+            if depth > limit:
+                return True
+        elif byte in (0x5D, 0x7D):  # ] }
+            depth -= 1
+    return False
+
+
 def json_body(raw: bytes, *, require_object: bool = True) -> Any:
     """Parse a request body as ``Request.json()`` would, raising
     :class:`JsonBodyError` with the message the API has always returned.
@@ -67,6 +103,8 @@ def json_body(raw: bytes, *, require_object: bool = True) -> Any:
     Used as the deferred input of a scope-enforcing service, so the body is
     judged only after the caller's scope on the target has been checked.
     """
+    if _nesting_exceeds(raw, MAX_JSON_DEPTH):
+        raise JsonBodyError("invalid JSON")
     try:
         body = json.loads(
             raw,
