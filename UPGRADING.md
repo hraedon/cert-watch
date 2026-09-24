@@ -23,6 +23,21 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
+## Upgrading from 1.0.0 to 1.0.1
+
+Nothing to migrate and nothing to reconfigure: install the new version and
+restart. On Windows/IIS, re-run the installer from the 1.0.1 source with your
+original arguments. The IIS steps under [Upgrade](#upgrade) below show how
+to recover them from the live site; from 1.0.1 on, the installer records
+them in `install-args.json`.
+
+If you ran `scripts\Verify-Install.ps1` on an earlier version, delete any
+`verify-report.json` / `verify-report.md` it wrote (by default in
+`<InstallDir>\logs\`, or the directory you ran it from when that folder
+didn't exist) and any copies you shared: they can contain your
+`web.config` verbatim, including secrets set inline rather than through a
+`*_FILE` variable. See the 1.0.1 entry in [CHANGELOG.md](CHANGELOG.md).
+
 ## Upgrading from 0.9 to 1.0
 
 1.0 is the release where cert-watch's defaults became strict. Most
