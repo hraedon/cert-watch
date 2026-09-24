@@ -8,6 +8,8 @@ All notable changes to cert-watch are documented in this file.
 
 - The container image runs Python 3.14 (was 3.13); CI also runs the unit
   suite on 3.14.
+- The container image no longer includes the base image's system `pip`, which
+  the app never used; its vendored libraries failed the release image scan.
 
 ### Fixed
 
