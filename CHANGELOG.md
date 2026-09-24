@@ -4,8 +4,31 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- `scripts/Verify-Install.ps1` no longer copies `web.config` into its
+  diagnostics. Earlier versions wrote the raw file, including any secret set
+  directly as an environment variable there (for example
+  `LDAP_BIND_PASSWORD`), to `logs\verify-report.json` and `.md` whenever a
+  check failed or warned, and the IIS-005 preload check always failed. If you
+  ran the verifier and set secrets inline rather than through `*_FILE`, delete
+  old `verify-report.*` files and any copies you attached to tickets, and
+  consider rotating those secrets. Reports are now built from allowlisted,
+  format-checked facts only; log contents and error messages are never
+  included (see the script's help for what a report contains).
+- `Verify-Install.ps1 -SkipCertCheck` no longer changes the process-wide
+  certificate validation callback; the bypass applies to its own requests only.
+
 ### Fixed
 
+- `Verify-Install.ps1`: the IIS-005 preload check no longer fails on every
+  install; `-SkipCertCheck` works on Windows PowerShell 5.1; a new IIS-006
+  check warns when IIS is up but the cert-watch backend process isn't (for
+  example after `web.config` is saved).
+- `install-windows.ps1` recognises an upgrade and no longer prints first-run
+  admin guidance over an existing database, and records its non-secret
+  arguments in `<InstallDir>\install-args.json` so the next upgrade can reuse
+  them.
 - `cert-watch verify-report` prints a clean `FAIL` and exits 1 when the report
   file is missing, unreadable, not UTF-8, or nested too deeply to parse,
   instead of a Python traceback (#66).
