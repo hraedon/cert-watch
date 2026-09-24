@@ -2,6 +2,13 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Settings → Tags no longer fails with a server error once any alert group
+  exists (#113).
+
 ## [1.0.2] - 2026-09-23
 
 A patch release. No schema migrations and no configuration changes. The main

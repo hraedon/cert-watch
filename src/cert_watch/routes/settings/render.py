@@ -218,7 +218,8 @@ def _build_tag_registry(db: Any) -> list[dict[str, Any]]:
 
     groups_by_tag: dict[str, list[str]] = {}
     for grp in SqliteAlertGroupRepository(db).list_all():
-        for t in parse_tags(getattr(grp, "match_tags", "") or ""):
+        # ``match_tags`` is already parsed to a list by the repository.
+        for t in grp.match_tags:
             groups_by_tag.setdefault(t, []).append(grp.name)
 
     all_tags = sorted(
