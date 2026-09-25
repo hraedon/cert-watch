@@ -95,7 +95,8 @@ def _classify_automation(
     has_acme_issuer = any(_is_acme_issuer(iss) for iss in issuers)
 
     max_lifetime = max(observed_lifetimes) if observed_lifetimes else 0
-    all_short_lived = unknown_count == 0 and bool(observed_lifetimes) and all(
+    validity_complete = unknown_count == 0 and bool(observed_lifetimes)
+    all_short_lived = validity_complete and all(
         lt <= 90 for lt in observed_lifetimes
     )
 
@@ -121,7 +122,10 @@ def _classify_automation(
     if max_lifetime > 90 or has_late_renewals:
         return "manual", evidence
 
-    if all_short_lived and consistent_cadence and has_acme_issuer:
+    # The lifetime cap is enforced by the early return above.  Keeping the
+    # positive branch about completeness (rather than repeating ``<= 90``)
+    # makes that safety boundary independently testable and auditable.
+    if validity_complete and consistent_cadence and has_acme_issuer:
         return "likely-automated", evidence
 
     return "manual", evidence
