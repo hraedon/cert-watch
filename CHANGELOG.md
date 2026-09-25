@@ -16,7 +16,9 @@ All notable changes to cert-watch are documented in this file.
   and delivery claims evaluate the caller's writable (not merely visible) tag
   set inside the locked write statement, including alerts on tagged uploaded
   certificates that have no host row. Mixed-case scope tags and same-name
-  hosts on different ports are covered explicitly (#122).
+  hosts on different ports are covered explicitly. Case-variant per-tag roles
+  now retain their highest grant, and a scoped caller with no writable tag
+  selects nothing instead of falling back to unrestricted bulk access (#122).
 
 ### Fixed
 

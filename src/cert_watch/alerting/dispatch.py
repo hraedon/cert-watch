@@ -205,7 +205,7 @@ class Dispatcher:
         *,
         transports: Sequence[Transport] | None = None,
         budget_seconds: float = ALERT_CYCLE_BUDGET_SECONDS,
-        scope_tags: tuple[str, ...] = (),
+        scope_tags: tuple[str, ...] | None = (),
         ignore_backoff: bool = False,
         clock: Callable[[], datetime] | None = None,
         monotonic_clock: Callable[[], float] = monotonic,

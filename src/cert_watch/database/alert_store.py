@@ -302,13 +302,13 @@ class AlertStore:
         lease_expires_at: datetime,
         now: datetime,
         limit: int = 1000,
-        scope_tags: tuple[str, ...] = (),
+        scope_tags: tuple[str, ...] | None = (),
         ignore_backoff: bool = False,
     ) -> list[Alert]:
         """Atomically claim eligible pending rows and expired leases."""
         if not lease_owner:
             raise ValueError("lease_owner is required")
-        if limit <= 0:
+        if limit <= 0 or scope_tags is None:
             return []
 
         pending_due = "a.next_attempt_at IS NULL OR a.next_attempt_at <= ?"

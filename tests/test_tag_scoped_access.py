@@ -252,6 +252,41 @@ class TestScopedRepoMethods:
             "host-b.example.com",
         }
 
+    def test_no_writable_scope_selects_nothing(self, db: Path):
+        from cert_watch.auth.scope import writable_scope_tags
+        from cert_watch.database import SqliteAlertRepository, SqliteHostRepository
+        from cert_watch.database.alert_store import AlertStore
+
+        _seed_two_teams(db)
+        auth = AuthContext.from_tier(
+            "defensive-case",
+            tier="viewer",
+            scope_tag="team-a",
+            tag_tiers={"team-b": "operator"},
+        )
+
+        no_writable_scope = writable_scope_tags(auth)
+        assert auth.may_write_any() is True
+        assert no_writable_scope is None
+        assert writable_scope_tags(AuthContext.system()) == ()
+        assert SqliteHostRepository(db).list_scoped(no_writable_scope) == []
+        assert SqliteAlertRepository(db).list_pending_scoped(no_writable_scope) == []
+        assert SqliteAlertRepository(db).mark_all_read(no_writable_scope) == 0
+        now = datetime.now(UTC)
+        assert AlertStore(db).claim(
+            lease_owner="none",
+            lease_expires_at=now + timedelta(minutes=5),
+            now=now,
+            scope_tags=no_writable_scope,
+            ignore_backoff=True,
+        ) == []
+
+        with _connect(db) as conn:
+            reads = dict(conn.execute("SELECT id, read FROM alerts").fetchall())
+            statuses = dict(conn.execute("SELECT id, status FROM alerts").fetchall())
+        assert reads == {"alert-a": 0, "alert-b": 0}
+        assert statuses == {"alert-a": "pending", "alert-b": "pending"}
+
     def test_alert_list_pending_scoped_filters_by_tag(self, db: Path):
         from cert_watch.database import SqliteAlertRepository
 
@@ -583,6 +618,29 @@ def _make_mixed_tier_app(db: Path, tmp_path: Path):
     return create_app(auth_provider=_Provider(), settings=settings), ["mixed-grp"]
 
 
+def _make_case_variant_tier_app(db: Path, tmp_path: Path):
+    """Operator + viewer roles for two spellings of the same scoped tag."""
+    from cert_watch.app import create_app
+    from cert_watch.config import Settings
+
+    role_repo = SqliteRoleRepository(db)
+    role_repo.add(Role(name="ops", permission_tier="operator", scope_tag="team-a"))
+    role_repo.add(Role(name="view", permission_tier="viewer", scope_tag="Team-A"))
+    settings = Settings(
+        db_path=db,
+        data_dir=tmp_path,
+        role_map={
+            "ops": {"groups": ["ops-grp"]},
+            "view": {"groups": ["view-grp"]},
+        },
+    )
+
+    class _Provider:
+        provider_name = "mock"
+
+    return create_app(auth_provider=_Provider(), settings=settings), ["ops-grp", "view-grp"]
+
+
 def _scoped_client(app, groups):
     from fastapi.testclient import TestClient
 
@@ -778,6 +836,71 @@ class TestFlushAlertQueueRoute:
             response = client.post("/alerts/flush", follow_redirects=False)
         assert response.status_code == 303
         assert seen_scope == [("team-a",)]
+
+
+def test_case_variant_roles_leave_out_of_scope_bulk_routes_empty(
+    db: Path, tmp_path: Path, monkeypatch
+):
+    """All three real bulk routes select nothing and reveal no hidden count."""
+    # Role resolution is set-based; pin the order that exposed the last-entry-wins
+    # collision in AuthContext.may_write_tags on the reviewed commit.
+    monkeypatch.setattr(
+        "cert_watch.auth.rbac.resolve_roles",
+        lambda *_args, **_kwargs: ["ops", "view"],
+    )
+    with _connect(db) as conn:
+        _insert_host(conn, "hidden.example.test", tags="team-z")
+        _insert_cert(conn, "hidden-cert", "hidden.example.test", tags="team-z")
+        _insert_alert(conn, "hidden-alert", "hidden-cert")
+        conn.commit()
+
+    flushed: list[str] = []
+    scanned: list[str] = []
+
+    def _fake_process(dispatcher):
+        from cert_watch.database import SqliteAlertRepository
+
+        flushed.extend(
+            alert.id
+            for alert in SqliteAlertRepository(db).list_pending_scoped(
+                dispatcher.scope_tags
+            )
+        )
+        return {"sent": len(flushed), "failed": 0}
+
+    async def _fake_scan(hostname, *_args, **_kwargs):
+        from cert_watch.services.host_management import ScanResult
+
+        scanned.append(hostname)
+        return ScanResult("success", "")
+
+    monkeypatch.setattr(
+        "cert_watch.alerting.dispatch.Dispatcher.process_pending", _fake_process
+    )
+    monkeypatch.setattr(
+        "cert_watch.services.host_management._scan_and_store", _fake_scan
+    )
+    app, groups = _make_case_variant_tier_app(db, tmp_path)
+    with _scoped_client(app, groups) as client:
+        visible = client.get("/api/alerts")
+        marked = client.post("/api/alerts/mark-all-read")
+        flushed_response = client.post("/alerts/flush", follow_redirects=False)
+        scan_response = client.post("/api/hosts/scan")
+
+    assert visible.status_code == 200
+    assert visible.json()["alerts"] == []
+    assert marked.status_code == 200
+    assert marked.json() == {"count": 0}
+    assert flushed_response.status_code == 303
+    assert flushed == []
+    assert scan_response.status_code == 200
+    assert scan_response.json() == {"scanned": 0, "failures": 0, "refused": 0}
+    assert scanned == []
+    with _connect(db) as conn:
+        row = conn.execute(
+            "SELECT read, status FROM alerts WHERE id = 'hidden-alert'"
+        ).fetchone()
+    assert tuple(row) == (0, "pending")
 
 
 class TestScopedFlushFullContract:

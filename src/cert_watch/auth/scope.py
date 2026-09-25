@@ -198,15 +198,16 @@ def ensure_write_scope(
         raise ScopeDeniedError(error)
 
 
-def writable_scope_tags(auth_ctx: Any) -> tuple[str, ...]:
+def writable_scope_tags(auth_ctx: Any) -> tuple[str, ...] | None:
     """Return the caller's tag-scoped write grants for a bulk mutation.
 
     An empty tuple retains the existing meaning of unrestricted access for
-    administrators and unscoped global writers. A scoped global writer gets
-    all visible tags; a caller whose writes come only from per-tag tiers gets
-    just the tags on which they are at least an operator. Read-only visibility
-    tags are deliberately excluded. ``None`` is the auth-disabled route case
-    and remains unrestricted, matching :func:`routes._scoped.scope_tags_from_auth`.
+    administrators, auth-disabled callers, and unscoped global writers. A
+    scoped global writer gets all visible tags; a caller whose writes come
+    only from per-tag tiers gets just the tags on which they are at least an
+    operator. Read-only visibility tags are deliberately excluded. ``None``
+    distinctly means a scoped caller has no writable tags and every bulk
+    consumer must therefore select nothing.
     """
     if auth_ctx is None:
         return ()
@@ -223,8 +224,9 @@ def writable_scope_tags(auth_ctx: Any) -> tuple[str, ...]:
 
     may_write_tags = getattr(auth_ctx, "may_write_tags", None)
     if not callable(may_write_tags):
-        return ()
-    return tuple(tag for tag in scope_tags if may_write_tags({tag}))
+        return None
+    writable = tuple(tag for tag in scope_tags if may_write_tags({tag}))
+    return writable or None
 
 
 def ensure_new_tags_in_scope(auth_ctx: Any, new_tags: str) -> None:

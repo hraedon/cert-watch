@@ -437,15 +437,18 @@ class SqliteAlertRepository(AlertRepository):
         return [self._row_to_alert(r) for r in rows]
 
     def list_pending_scoped(
-        self, scope_tags: tuple[str, ...] | list[str]
+        self, scope_tags: tuple[str, ...] | list[str] | None
     ) -> list[Alert]:
         """Return pending alerts whose effective (cert ∪ host) tags intersect
         *scope_tags* (WI-078).
 
         Empty *scope_tags* means no restriction — equivalent to
-        :meth:`list_pending`. Joins each alert to its certificate and host so a
-        tag-scoped user only flushes alerts inside their team scope.
+        :meth:`list_pending`; ``None`` means select nothing. Joins each alert
+        to its certificate and host so a tag-scoped user only flushes alerts
+        inside their team scope.
         """
+        if scope_tags is None:
+            return []
         if not scope_tags:
             return self.list_pending()
         from cert_watch.database.dashboard import _add_effective_tag_filter
@@ -463,16 +466,21 @@ class SqliteAlertRepository(AlertRepository):
             rows = conn.execute(sql, params).fetchall()
         return [self._row_to_alert(r) for r in rows]
 
-    def mark_all_read(self, scope_tags: tuple[str, ...] | list[str] = ()) -> int:
+    def mark_all_read(
+        self, scope_tags: tuple[str, ...] | list[str] | None = ()
+    ) -> int:
         """Mark all unread alerts as read; return the number updated (WI-078).
 
         When *scope_tags* is non-empty, only alerts whose certificate/host
         effective tags intersect the scope are marked — a tag-scoped user does
-        not clear alerts outside their team scope. Empty *scope_tags* marks all.
+        not clear alerts outside their team scope. Empty *scope_tags* marks all;
+        ``None`` marks none.
         """
         with _connect(self.db_path) as conn:
             begin_immediate(conn)
-            if scope_tags:
+            if scope_tags is None:
+                cur = conn.execute("UPDATE alerts SET read = 1 WHERE 0")
+            elif scope_tags:
                 from cert_watch.database.dashboard import _add_effective_tag_filter
 
                 # Select every in-scope cert (not just leaf certs) so the SCOPE
@@ -825,13 +833,17 @@ class SqliteHostRepository:
             rows = conn.execute("SELECT * FROM hosts ORDER BY added_at").fetchall()
         return [self._row_to_host(r) for r in rows]
 
-    def list_scoped(self, scope_tags: tuple[str, ...] | list[str]) -> list[HostEntry]:
+    def list_scoped(
+        self, scope_tags: tuple[str, ...] | list[str] | None
+    ) -> list[HostEntry]:
         """Return hosts whose tags intersect *scope_tags* (WI-078).
 
         Empty *scope_tags* means no scope restriction — equivalent to
-        :meth:`list_all`. Used by bulk operations (scan-all) so a tag-scoped
-        user only acts on hosts inside their team scope.
+        :meth:`list_all`; ``None`` means select nothing. Used by bulk operations
+        (scan-all) so a tag-scoped user only acts on hosts inside their team scope.
         """
+        if scope_tags is None:
+            return []
         if not scope_tags:
             return self.list_all()
         from cert_watch.database.dashboard import _add_effective_tag_filter

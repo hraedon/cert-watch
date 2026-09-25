@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 import textwrap
 from dataclasses import dataclass
 from typing import Any
@@ -287,24 +288,116 @@ def test_every_mutating_route_has_a_transaction_scope_classification() -> None:
     }
 
 
-def _source_and_calls(function: Any) -> tuple[str, list[ast.Call]]:
+def _source_and_tree(function: Any) -> tuple[str, ast.Module]:
     source = textwrap.dedent(inspect.getsource(function))
-    tree = ast.parse(source)
-    return source, [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    return source, ast.parse(source)
 
 
-def _call_positions(function: Any, marker: str) -> list[tuple[int, int]]:
-    source, calls = _source_and_calls(function)
+def _call_name(call: ast.Call) -> str | None:
+    if isinstance(call.func, ast.Name):
+        return call.func.id
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr
+    return None
+
+
+def _call_matches_marker(call: ast.Call, marker: str) -> bool:
+    """Match a real call target, keyword handoff, or SQL argument.
+
+    Source substrings are deliberately not considered: a log message that
+    merely names an authorization function is not an authorization call.
+    """
+    keyword = re.fullmatch(r"([A-Za-z_]\w*)=([A-Za-z_]\w*)", marker)
+    if keyword:
+        name, value = keyword.groups()
+        return any(
+            item.arg == name
+            and isinstance(item.value, ast.Name)
+            and item.value.id == value
+            for item in call.keywords
+        )
+
+    normalized = marker.strip('"\'')
+    if normalized.startswith(("BEGIN ", "UPDATE ", "DELETE ", "INSERT ")):
+        return any(
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and normalized in node.value
+            for arg in call.args
+            for node in ast.walk(arg)
+        )
+
+    if marker.isidentifier():
+        return _call_name(call) == marker or any(
+            isinstance(node, ast.Name) and node.id == marker
+            for value in (*call.args, *(item.value for item in call.keywords))
+            for node in ast.walk(value)
+        )
+
+    names = re.findall(r"[A-Za-z_]\w*", marker.partition("(")[0])
+    return bool(names) and _call_name(call) == names[-1]
+
+
+def _is_conditionally_reached(
+    tree: ast.Module, call: ast.Call, *, reject_nested_functions: bool = False
+) -> bool:
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    root_function = next(
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    )
+    child: ast.AST = call
+    while child in parents:
+        parent = parents[child]
+        if isinstance(
+            parent,
+            (
+                ast.If,
+                ast.IfExp,
+                ast.For,
+                ast.AsyncFor,
+                ast.While,
+                ast.Match,
+                ast.comprehension,
+                ast.BoolOp,
+            ),
+        ):
+            return True
+        if isinstance(parent, (ast.Try, ast.TryStar)) and child not in parent.body:
+            return True
+        if (
+            reject_nested_functions
+            and isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+            and parent is not root_function
+        ):
+            return True
+        child = parent
+    return False
+
+
+def _call_positions(
+    function: Any, marker: str, *, reject_conditionals: bool = False
+) -> list[tuple[int, int]]:
+    _source, tree = _source_and_tree(function)
     return [
         (node.lineno, node.col_offset)
-        for node in calls
-        if marker in (ast.get_source_segment(source, node) or ast.unparse(node))
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and _call_matches_marker(node, marker)
+        and not (
+            reject_conditionals
+            and _is_conditionally_reached(tree, node)
+        )
     ]
 
 
 def _assigned_call_positions(function: Any, target: str) -> list[tuple[int, int]]:
-    source = textwrap.dedent(inspect.getsource(function))
-    tree = ast.parse(source)
+    _source, tree = _source_and_tree(function)
     return [
         (node.value.lineno, node.value.col_offset)
         for node in ast.walk(tree)
@@ -315,12 +408,26 @@ def _assigned_call_positions(function: Any, target: str) -> list[tuple[int, int]
 
 
 def _endpoint_calls_service(endpoint: Any, service: Any) -> bool:
-    _source, calls = _source_and_calls(endpoint)
-    for call in calls:
+    _source, tree = _source_and_tree(endpoint)
+    for call in ast.walk(tree):
+        if not isinstance(call, ast.Call) or _is_conditionally_reached(
+            tree, call, reject_nested_functions=True
+        ):
+            continue
+        target: Any = None
         if isinstance(call.func, ast.Name):
-            if endpoint.__globals__.get(call.func.id) is service:
-                return True
-        elif isinstance(call.func, ast.Attribute) and call.func.attr == service.__name__:
+            target = endpoint.__globals__.get(call.func.id)
+        elif isinstance(call.func, ast.Attribute):
+            owner: Any = None
+            if isinstance(call.func.value, ast.Name):
+                owner = endpoint.__globals__.get(call.func.value.id)
+            elif isinstance(call.func.value, ast.Call) and isinstance(
+                call.func.value.func, ast.Name
+            ):
+                owner = endpoint.__globals__.get(call.func.value.func.id)
+            if owner is not None:
+                target = getattr(owner, call.func.attr, None)
+        if target is service:
             return True
     return False
 
@@ -341,7 +448,13 @@ def _mutation_guards(route: Any) -> list[MutationGuard]:
 def test_every_scoped_target_service_authorizes_between_begin_and_mutation() -> None:
     for route, contracts in _TARGET_CONTRACTS.items():
         for contract in contracts:
-            assert _call_positions(contract.authorizer, "ensure_write_scope_on"), route
+            assert _call_positions(
+                contract.authorizer,
+                "ensure_write_scope_on",
+                reject_conditionals=(
+                    contract.authorizer is not host_management._add_endpoints_authorized
+                ),
+            ), route
             for function, marker in contract.handoffs:
                 assert _call_positions(function, marker), (route, function.__qualname__, marker)
 
@@ -353,7 +466,15 @@ def test_every_scoped_target_service_authorizes_between_begin_and_mutation() -> 
             guard_positions = [
                 position
                 for marker in ("ensure_write_scope_on", "guard(conn)", "_guard(conn)")
-                for position in _call_positions(contract.transaction, marker)
+                for position in _call_positions(
+                    contract.transaction,
+                    marker,
+                    reject_conditionals=(
+                        marker == "ensure_write_scope_on"
+                        and contract.transaction
+                        is not host_management._add_endpoints_authorized
+                    ),
+                )
             ]
             mutation_positions = _call_positions(contract.transaction, contract.mutation)
             assert begin_positions and guard_positions and mutation_positions, route
