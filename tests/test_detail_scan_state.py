@@ -63,6 +63,9 @@ def test_detail_shows_the_current_scan_failure(tmp_path, reload_app, self_signed
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         page = client.get(f"/certificates/{cert_id}").text
+        browse = client.get("/browse?grouped=0").text
+        api_row = client.get("/api/certificates").json()["certificates"][0]
+        report = client.get("/api/reports/inventory.csv").text
 
     assert 'data-testid="cert-scan-failed-status"' in page
     assert 'data-testid="scan-failure-panel"' in page
@@ -72,6 +75,14 @@ def test_detail_shows_the_current_scan_failure(tmp_path, reload_app, self_signed
     assert "Next step:" in page
     assert "UNEXPECTED_EOF_WHILE_READING" in page
     assert "from the last successful scan" in page
+    # A fine last-seen certificate remains condition=ok, but no surface may
+    # describe the endpoint as healthy while current monitoring is failing.
+    assert api_row["status"]["condition"]["state"] == "ok"
+    assert api_row["status"]["monitoring"]["state"] == "failing"
+    assert api_row["urgency"] == "failing"
+    assert "Healthy" not in page
+    assert "Healthy" not in browse
+    assert ",healthy," not in report
 
 
 def test_detail_of_a_healthy_endpoint_has_no_failure_panel(

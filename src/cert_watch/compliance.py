@@ -58,6 +58,10 @@ class RemediationEntry:
     findings: list[str] = field(default_factory=list)
     owner: str = ""
     tags: str = ""
+    condition: str = ""
+    monitoring: str = ""
+    renewal: str = ""
+    delivery: str = ""
 
 
 @dataclass
@@ -166,6 +170,10 @@ def verify_report_signature(
                             findings=e.get("findings", []),
                             owner=e.get("owner", ""),
                             tags=e.get("tags", ""),
+                            condition=e.get("condition", ""),
+                            monitoring=e.get("monitoring", ""),
+                            renewal=e.get("renewal", ""),
+                            delivery=e.get("delivery", ""),
                         )
                         for e in b.get("entries", [])
                     ],
@@ -194,11 +202,32 @@ def verify_report_signature(
             rest = {k: v for k, v in d.items() if k not in ("content_sha256", "signature")}
             return json.dumps(rest, sort_keys=True, default=str)
 
-        if _unsigned(json.loads(json.dumps(report_to_dict(rebuilt), default=str))) != _unsigned(
-            report_json
-        ):
+        rebuilt_dict = json.loads(json.dumps(report_to_dict(rebuilt), default=str))
+        axis_keys = ("condition", "monitoring", "renewal", "delivery")
+        supplied_entries = [
+            entry for bucket in supplied_buckets for entry in bucket.get("entries", [])
+        ]
+        legacy_axes = all(
+            not any(key in entry for key in axis_keys) for entry in supplied_entries
+        )
+        if legacy_axes:
+            # Reports through 1.0.4 predate the four-axis fields. Preserve
+            # verification of those immutable signed artifacts by rebuilding
+            # their exact historical schema before hashing.
+            for bucket in rebuilt_dict["remediation_buckets"]:
+                for entry in bucket["entries"]:
+                    for key in axis_keys:
+                        entry.pop(key, None)
+        if _unsigned(rebuilt_dict) != _unsigned(report_json):
             return False, "report content does not match its signed values"
-        canonical = _canonical_json(rebuilt)
+        unsigned = {
+            key: value
+            for key, value in rebuilt_dict.items()
+            if key not in ("content_sha256", "signature")
+        }
+        canonical = json.dumps(
+            unsigned, sort_keys=True, separators=(",", ":")
+        ).encode()
         expected_hash = hashlib.sha256(canonical).hexdigest()
         derived_key = hmac.new(
             signing_key.encode(), b"compliance-report", hashlib.sha256
@@ -224,6 +253,7 @@ def _load_compliance_rows(
     *,
     scope_tag: str = "",
     scope_tags: tuple[str, ...] | list[str] = (),
+    axis_settings: Any = None,
 ) -> list[dict[str, Any]]:
     """Fetch minimal leaf-certificate rows for compliance reporting.
 
@@ -289,6 +319,15 @@ def _load_compliance_rows(
             )
         rows = conn.execute(sql, params).fetchall()
 
+    from cert_watch.database import list_dashboard_page
+
+    model_rows, _ = list_dashboard_page(
+        db_path,
+        per_page=0,
+        scope_tags=tuple(scope_tags),
+        axis_settings=axis_settings,
+    )
+    models = {row.get("id"): row for row in model_rows}
     result: list[dict[str, Any]] = []
     for r in rows:
         d = dict(r)
@@ -302,6 +341,7 @@ def _load_compliance_rows(
         # ``host`` is the endpoint (``name:port``); the port is carried
         # separately for the CSV. Uploaded files have no endpoint.
         host = f"{d['hostname']}:{d['port']}" if d["hostname"] else "(uploaded)"
+        model = models.get(d["id"], {})
         result.append(
             {
                 "id": d["id"],
@@ -313,9 +353,17 @@ def _load_compliance_rows(
                 "not_before": d["not_before"],
                 "not_after": not_after,
                 "days_remaining": days,
-                "urgency": effective_urgency(days, d["chain_status"]),
+                # Compatibility field now carries the honest overall display
+                # state; condition remains separately available below.
+                "urgency": model.get(
+                    "overall_state", effective_urgency(days, d["chain_status"])
+                ),
                 "owner_name": d["owner_name"],
                 "tags": d["tags"],
+                "condition": model.get("condition", ""),
+                "monitoring": model.get("monitoring", ""),
+                "renewal": model.get("renewal", ""),
+                "delivery": model.get("delivery", ""),
             }
         )
     return result
@@ -426,6 +474,7 @@ def build_compliance_report(
     version: str = "",
     commit: str = "",
     signing_key: str = "",
+    axis_settings: Any = None,
 ) -> ComplianceReport:
     """Build the compliance report over leaf certificates.
 
@@ -438,7 +487,12 @@ def build_compliance_report(
     from cert_watch.posture import tls_version_meets_1_2
 
     init_schema(db_path)
-    rows = _load_compliance_rows(db_path, scope_tag=scope_tag, scope_tags=scope_tags)
+    rows = _load_compliance_rows(
+        db_path,
+        scope_tag=scope_tag,
+        scope_tags=scope_tags,
+        axis_settings=axis_settings,
+    )
 
     total_certs = len(rows)
     host_set: set[str] = set()
@@ -556,6 +610,10 @@ def build_compliance_report(
             urgency=r.get("urgency", ""),
             owner=r.get("owner_name", ""),
             tags=r.get("tags", ""),
+            condition=r.get("condition", ""),
+            monitoring=r.get("monitoring", ""),
+            renewal=r.get("renewal", ""),
+            delivery=r.get("delivery", ""),
         )
         _p = posture_data.get(cid)
         if _p:
@@ -694,13 +752,15 @@ def report_to_csv_rows(report: ComplianceReport) -> list[list[str]]:
         if b.entries:
             rows.append([
                 "Host", "Port", "Subject", "Issuer",
-                "Not After", "Days Remaining", "Urgency",
+                "Not After", "Days Remaining", "Condition", "Monitoring",
+                "Renewal", "Delivery",
                 "Owner", "Tags", "Findings",
             ])
             for e in b.entries:
                 rows.append([
                     e.host, str(e.port), e.subject, e.issuer,
-                    e.not_after, str(e.days_remaining), e.urgency,
+                    e.not_after, str(e.days_remaining), e.condition, e.monitoring,
+                    e.renewal, e.delivery,
                     e.owner, e.tags, "; ".join(e.findings),
                 ])
         else:

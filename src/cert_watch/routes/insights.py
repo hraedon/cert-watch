@@ -23,10 +23,11 @@ from cert_watch.database import (
     list_tls_version_trends,
 )
 from cert_watch.readiness import build_readiness_report, readiness_report_to_dict
-from cert_watch.routes._deps import _db_path, get_templates
+from cert_watch.routes._deps import _db_path, _get_settings, get_templates
 from cert_watch.routes._scoped import enforce_scope_tag, scope_tags_from_auth
 from cert_watch.routes.api._shared import compliance_signing_key
 from cert_watch.security.csrf import get_csrf_context
+from cert_watch.status_model import AxisSettings
 
 logger = logging.getLogger("cert_watch.routes.insights")
 
@@ -178,6 +179,7 @@ def compliance_report_view(
         version=__version__,
         commit=__commit__,
         signing_key=signing_key,
+        axis_settings=AxisSettings.from_settings(_get_settings(request)),
     )
     return templates.TemplateResponse(
         request=request,

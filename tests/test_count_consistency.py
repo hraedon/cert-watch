@@ -166,7 +166,7 @@ def test_home_and_every_browse_view_agree(estate):
 
     for view in ("", "owner", "issuer", "renewal_method", "calendar"):
         data = _browse(estate, view)
-        assert data.pivot_stats == EXPECTED_STATS, view
+        assert data.pivot_stats == {**EXPECTED_STATS, "failing": 0, "gray": 0}, view
         assert data.tracked_total == EXPECTED_TRACKED, view
 
 
@@ -191,7 +191,7 @@ def test_owner_pivot_uses_the_row_status_and_real_expiry(estate):
     assert groups["Unassigned"]["worst_urgency"] == "expired"
     assert groups["Team B"]["earliest_expiry"] == -4
     assert groups["Team A"]["count"] == 3  # a, b and the pending endpoint
-    assert groups["Team A"]["worst_urgency"] == "critical"
+    assert groups["Team A"]["worst_urgency"] == "failing"
 
 
 def test_pivot_expiry_label_is_honest(estate):
@@ -308,7 +308,7 @@ def test_metrics_urgency_counts_match_the_dashboard(tmp_path, reload_app, monkey
         if line.startswith("cert_watch_certificates_by_urgency{"):
             label = line.split('urgency="', 1)[1].split('"', 1)[0]
             got[label] = int(float(line.rsplit(" ", 1)[1]))
-    assert got == EXPECTED_STATS
+    assert got == {**EXPECTED_STATS, "failing": 0, "gray": 0}
 
 
 def test_partial_scan_is_not_counted_as_a_success(tmp_path):

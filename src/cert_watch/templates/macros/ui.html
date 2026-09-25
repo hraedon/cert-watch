@@ -9,6 +9,7 @@
   {%- elif urgency == 'critical' -%}t-crit
   {%- elif urgency == 'warning' -%}t-warn
   {%- elif urgency == 'healthy' -%}t-ok
+  {%- elif urgency == 'failing' -%}t-crit
   {%- else -%}t-muted
   {%- endif -%}
 {%- endmacro %}

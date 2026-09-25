@@ -6,6 +6,7 @@ import json
 import sqlite3
 import threading
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,16 @@ def _cw_tag_set(value: str | None) -> str:
     from cert_watch.tags import parse_tags
 
     return "," + ",".join(tag.casefold() for tag in parse_tags(value)) + ","
+
+
+@lru_cache(maxsize=4096)
+def _cw_tags_overlap(*values: str | None) -> int:
+    """Whether the final tag list intersects the union of the preceding ones."""
+    from cert_watch.tags import merge_tags, tags_match
+
+    if len(values) < 2:
+        return 0
+    return int(tags_match(merge_tags(*values[:-1]), merge_tags(values[-1])))
 
 
 class _ThreadConnections:
@@ -165,6 +176,7 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.create_function("cw_casefold", 1, _cw_casefold)
     conn.create_function("cw_tag_set", 1, _cw_tag_set, deterministic=True)
+    conn.create_function("cw_tags_overlap", -1, _cw_tags_overlap, deterministic=True)
     from cert_watch.status_rule import register_sql_functions
 
     register_sql_functions(conn)

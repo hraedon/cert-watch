@@ -23,6 +23,18 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
+## Upgrading from 1.0.4
+
+Migration **0043** adds a small per-endpoint renewal-analytics table and
+backfills it from retained certificate history using the same Python
+classifier used by the renewal API, readiness report, digest and webhook.
+Startup time grows with retained history while this one-time backfill runs.
+Afterward, successful scans and history retention update the result in the
+same transaction as the history change. If history is changed outside
+cert-watch, a database trigger invalidates the affected result and Browse
+shows its renewal evidence as *Unknown* until cert-watch refreshes that
+endpoint; it never uses stale evidence.
+
 ## Upgrading from 1.0.3 to 1.0.4
 
 The manual `renewed` host status has been removed. Operators can still mark a

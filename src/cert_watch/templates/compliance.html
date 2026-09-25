@@ -113,7 +113,10 @@
             <th>Host</th>
             <th>Subject</th>
             <th class="num">Days</th>
-            <th>Urgency</th>
+            <th>Condition</th>
+            <th>Monitoring</th>
+            <th>Renewal</th>
+            <th>Delivery</th>
             <th>Owner</th>
             <th>Findings</th>
           </tr>
@@ -125,7 +128,11 @@
             <td class="mono">{{ e.host }}</td>
             <td>{{ e.subject }}</td>
             <td class="num">{{ e.days_remaining }}</td>
-            <td>{{ ui.status(e.urgency) }}</td>
+            {% set condition_labels = {'expired': 'Expired', 'le7': '≤7 days', '8to30': '8–30 days', 'ok': 'OK'} %}
+            <td>{{ condition_labels.get(e.condition, 'Unknown') }}</td>
+            <td>{{ e.monitoring | humanize_label }}</td>
+            <td>{{ e.renewal | humanize_label }}</td>
+            <td>{{ e.delivery | humanize_label }}</td>
             <td>{{ e.owner }}</td>
             <td class="cw-sub">{{ e.findings | join('; ') }}</td>
           </tr>

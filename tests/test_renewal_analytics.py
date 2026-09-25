@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from cert_watch.renewal_analytics import (
+    _classify_automation,
     _compute_host_from_entries,
     _compute_trend,
     _is_acme_issuer,
@@ -53,6 +54,107 @@ def _insert_history_row(
 
 def _iso(dt: datetime) -> str:
     return dt.isoformat()
+
+
+def _classify(
+    *,
+    periods: int = 3,
+    lifetimes: list[int] | None = None,
+    cadence: list[float] | None = None,
+    leads: list[float] | None = None,
+    issuer: str = "CN=ZeroSSL RSA Domain Secure Site CA",
+) -> str:
+    result, _evidence = _classify_automation(
+        [{"issuer": issuer} for _ in range(periods)],
+        lifetimes if lifetimes is not None else [90] * periods,
+        cadence if cadence is not None else [60.0] * max(periods - 1, 0),
+        leads if leads is not None else [30.0] * max(periods - 1, 0),
+    )
+    return result
+
+
+class TestAutomationClassifierBoundaries:
+    def test_requires_two_periods_and_two_cadence_intervals(self):
+        assert _classify(periods=1) == "unknown"
+        assert _classify(periods=2) == "manual"
+        assert _classify(periods=3) == "likely-automated"
+
+    def test_lifetime_cap_is_inclusive_at_90_days(self):
+        assert _classify(lifetimes=[90, 90, 90]) == "likely-automated"
+        assert _classify(lifetimes=[90, 91, 90]) == "manual"
+        _classification, at_cap = _classify_automation(
+            [{"issuer": "CN=ZeroSSL"}] * 3,
+            [90, 90, 90],
+            [60.0, 60.0],
+            [30.0, 30.0],
+        )
+        _classification, over_cap = _classify_automation(
+            [{"issuer": "CN=ZeroSSL"}] * 3,
+            [90, 91, 90],
+            [60.0, 60.0],
+            [30.0, 30.0],
+        )
+        assert at_cap["all_lifetimes_le_90"] is True
+        assert over_cap["all_lifetimes_le_90"] is False
+
+    def test_zero_lead_is_late_and_positive_lead_is_not(self):
+        assert _classify(leads=[0.0, 30.0]) == "manual"
+        assert _classify(leads=[0.1, 30.0]) == "likely-automated"
+
+    def test_cadence_spread_boundary_is_three_days(self):
+        assert _classify(cadence=[57.0, 63.0]) == "likely-automated"
+        assert _classify(cadence=[56.9, 63.1]) == "manual"
+
+    def test_acme_issuer_is_required_and_zerossl_counts(self):
+        assert _classify() == "likely-automated"
+        assert _classify(issuer="CN=Example Test CA") == "manual"
+
+    def test_incomplete_validity_or_chronology_is_unknown(self):
+        assert _classify(lifetimes=[90, 90]) == "unknown"
+        assert _classify(cadence=[60.0]) == "unknown"
+        assert _classify(leads=[30.0]) == "unknown"
+
+    def test_rounding_repeat_scans_and_partial_day_validity(self):
+        base = datetime(2026, 1, 1, tzinfo=UTC)
+        entries = []
+        for index in range(3):
+            first_seen = base + timedelta(days=60 * index)
+            not_before = first_seen - timedelta(hours=1)
+            not_after = not_before + timedelta(days=90)
+            if index < 2:
+                # The next deployment is one hour before this expiry.  The
+                # public analytics round 0.04 day to 0.0 before classifying it.
+                not_after = base + timedelta(days=60 * (index + 1), hours=1)
+                not_before = not_after - timedelta(days=90)
+            entries.append(
+                {
+                    "fingerprint_sha256": f"fp-{index}",
+                    "issuer": "CN=ZeroSSL RSA Domain Secure Site CA",
+                    "not_before": not_before.isoformat(),
+                    "not_after": not_after.isoformat(),
+                    "scanned_at": first_seen.isoformat(),
+                }
+            )
+        result = _compute_host_from_entries("rounding.example.test", entries)
+        assert result.renewal_lead_times == [0.0, 0.0]
+        assert result.automation_classification == "manual"
+
+        repeats = [
+            dict(entries[0], scanned_at=(base + timedelta(hours=i)).isoformat())
+            for i in range(3)
+        ]
+        repeated = _compute_host_from_entries("repeat.example.test", repeats)
+        assert repeated.cert_count == 1
+        assert repeated.automation_classification == "unknown"
+
+        partial = [dict(entry) for entry in entries]
+        partial[0]["not_after"] = (
+            datetime.fromisoformat(partial[0]["not_before"])
+            + timedelta(days=90, seconds=1)
+        ).isoformat()
+        partial_result = _compute_host_from_entries("partial.example.test", partial)
+        assert partial_result.observed_lifetimes[0] == 91
+        assert partial_result.automation_classification == "manual"
 
 
 class TestIsAcmeIssuer:

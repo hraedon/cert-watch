@@ -16,6 +16,7 @@ from cert_watch.certificate_model import Certificate
 from cert_watch.database import (
     SqliteCertificateRepository,
     SqliteHostRepository,
+    dashboard_overall_stats,
     init_schema,
     list_fleet_pivot,
     pivot_urgency_stats,
@@ -51,6 +52,11 @@ def _add_leaf(db, subject, *, not_after):
         fingerprint_sha256=subject,
     )
     replace_scanned(db, host, port, cert, [], True)
+    from cert_watch.scheduler import ScanHistory, record_scan_history
+
+    record_scan_history(
+        db, ScanHistory(host, port, "success", scanned_at=datetime.now(UTC))
+    )
 
 
 def test_pivot_stats_counts_same_day_expiry_as_expired(tmp_path, monkeypatch):
@@ -115,6 +121,8 @@ def test_pivot_stats_are_tag_scoped(tmp_path, monkeypatch):
     now = datetime.now(UTC)
 
     def scanned(host, *, not_after, tag):
+        from cert_watch.scheduler import ScanHistory, record_scan_history
+
         host_id = hosts.add(host, 443)
         cert = Certificate(
             subject=host,
@@ -124,6 +132,7 @@ def test_pivot_stats_are_tag_scoped(tmp_path, monkeypatch):
             fingerprint_sha256=host,
         )
         replace_scanned(db, host, 443, cert, [], True)
+        record_scan_history(db, ScanHistory(host, 443, "success", scanned_at=now))
         hosts.set_tags(host_id, tag)  # host tag → effective tag of its certs
 
     scanned("team-a.example.com", not_after=now - timedelta(hours=2), tag="team-a")
@@ -141,6 +150,11 @@ def test_pivot_stats_are_tag_scoped(tmp_path, monkeypatch):
         fingerprint_sha256="team-c.example.com",
     )
     replace_scanned(db, "team-c.example.com", 443, cert, [], True)
+    from cert_watch.scheduler import ScanHistory, record_scan_history
+
+    record_scan_history(
+        db, ScanHistory("team-c.example.com", 443, "success", scanned_at=now)
+    )
     repo = SqliteCertificateRepository(db, source="scanned")
     with _connect(db) as conn:
         cert_id = conn.execute(
@@ -149,13 +163,18 @@ def test_pivot_stats_are_tag_scoped(tmp_path, monkeypatch):
     repo.set_tags(cert_id, "team-c")
 
     # Admin (no scope) sees everything.
-    assert pivot_urgency_stats(db) == {"expired": 2, "critical": 1, "warning": 0, "healthy": 1}
+    assert pivot_urgency_stats(db) == {
+        "expired": 2, "critical": 1, "warning": 0, "healthy": 1,
+        "failing": 0, "gray": 0,
+    }
     # Scoped to team-a: only the one expired team-a cert.
     assert pivot_urgency_stats(db, scope_tags=["team-a"]) == {
         "expired": 1,
         "critical": 0,
         "warning": 0,
         "healthy": 0,
+        "failing": 0,
+        "gray": 0,
     }
     # Scoped to team-b: one expired + one healthy.
     assert pivot_urgency_stats(db, scope_tags=["team-b"]) == {
@@ -163,6 +182,8 @@ def test_pivot_stats_are_tag_scoped(tmp_path, monkeypatch):
         "critical": 0,
         "warning": 0,
         "healthy": 1,
+        "failing": 0,
+        "gray": 0,
     }
     # Scoped to team-c: matched via the cert's own tag (host untagged).
     assert pivot_urgency_stats(db, scope_tags=["team-c"]) == {
@@ -170,6 +191,16 @@ def test_pivot_stats_are_tag_scoped(tmp_path, monkeypatch):
         "critical": 1,
         "warning": 0,
         "healthy": 0,
+        "failing": 0,
+        "gray": 0,
+    }
+    assert dashboard_overall_stats(db, q="team-a.example.com") == {
+        "expired": 1,
+        "critical": 0,
+        "warning": 0,
+        "healthy": 0,
+        "failing": 0,
+        "gray": 0,
     }
 
 
@@ -184,7 +215,10 @@ def test_pivot_stats_bucket_boundaries(tmp_path, monkeypatch):
     _add_leaf(db, "ok.example.com", not_after=now + timedelta(days=200))
 
     stats = pivot_urgency_stats(db)
-    assert stats == {"expired": 1, "critical": 1, "warning": 1, "healthy": 1}
+    assert stats == {
+        "expired": 1, "critical": 1, "warning": 1, "healthy": 1,
+        "failing": 0, "gray": 0,
+    }
 
 
 def test_fleet_pivot_surfaces_expired_urgency(tmp_path):
@@ -208,6 +242,14 @@ def test_fleet_pivot_surfaces_expired_urgency(tmp_path):
         fingerprint_sha256="expired.example.com",
     )
     replace_scanned(db, "expired.example.com", 443, expired, [], True)
+    from cert_watch.scheduler import ScanHistory, record_scan_history
+
+    record_scan_history(
+        db,
+        ScanHistory(
+            "expired.example.com", 443, "success", scanned_at=now - timedelta(hours=1)
+        ),
+    )
 
     groups = list_fleet_pivot(db, "issuer")
     assert len(groups) == 1
@@ -216,7 +258,7 @@ def test_fleet_pivot_surfaces_expired_urgency(tmp_path):
     assert groups[0]["earliest_expiry"] < 0
 
 
-def test_fleet_pivot_healthy_unaffected(tmp_path, monkeypatch):
+def test_fleet_pivot_never_scanned_is_not_healthy(tmp_path, monkeypatch):
     # The pivot shares the row status rule, chain floor included; this test is
     # about the date boundary only.
     monkeypatch.setattr("cert_watch.cert_chain.chain_status", lambda *args: "public")
@@ -235,5 +277,5 @@ def test_fleet_pivot_healthy_unaffected(tmp_path, monkeypatch):
     replace_scanned(db, "ok.example.com", 443, cert, [], True)
 
     groups = list_fleet_pivot(db, "issuer")
-    assert groups[0]["worst_urgency"] == "healthy"
+    assert groups[0]["worst_urgency"] == "gray"
     assert groups[0]["earliest_expiry"] >= 0

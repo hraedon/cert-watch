@@ -9,8 +9,9 @@ from cert_watch.database.schema import init_schema
 
 if TYPE_CHECKING:
     from cert_watch.database.chain_status_cache import StatusContext
+    from cert_watch.status_model import AxisSettings, StatusModelContext
 
-_URGENCY_ORDER = ("expired", "critical", "warning", "healthy", "gray")
+_URGENCY_ORDER = ("expired", "failing", "critical", "warning", "gray", "healthy")
 
 _METHOD_LABELS = {
     "acme": "ACME",
@@ -43,6 +44,8 @@ def list_fleet_pivot(
     *,
     now: datetime | None = None,
     status: StatusContext | None = None,
+    axes: StatusModelContext | None = None,
+    axis_settings: AxisSettings | None = None,
 ) -> list[dict[str, Any]]:
     """Return fleet pivot groups over the Browse inventory rows, counted in SQL.
 
@@ -65,18 +68,27 @@ def list_fleet_pivot(
     from cert_watch.database.dashboard_page import inventory_candidates_sql
 
     init_schema(db_path)
-    candidates = inventory_candidates_sql(
-        scope_tags=scope_tags, status=status or prepare_status(db_path, now)
+    from cert_watch.status_model import (
+        prepare_status_model_context,
+        register_status_model_functions,
     )
+
+    status = status or prepare_status(db_path, now)
+    axes = axes or prepare_status_model_context(
+        db_path, certificate_status=status, settings=axis_settings
+    )
+    candidates = inventory_candidates_sql(scope_tags=scope_tags, status=status, axes=axes)
     if candidates is None:
         return []
     sql, params = candidates
     column = _GROUP_COLUMN.get(pivot, "''")
     groups: dict[str, dict[str, Any]] = {}
     with _connect(db_path) as conn:
+        register_status_model_functions(conn, axes)
         rows = conn.execute(
-            f"SELECT {column} AS grp, urgency, COUNT(*) AS n, MIN(eff_days) AS min_days,"
-            f" MIN(sort_expiry) AS first_expiry FROM ({sql}) GROUP BY grp, urgency",
+            f"SELECT {column} AS grp, overall_state, COUNT(*) AS n,"
+            f" MIN(eff_days) AS min_days, MIN(sort_expiry) AS first_expiry"
+            f" FROM ({sql}) GROUP BY grp, overall_state",
             params,
         ).fetchall()
     # One row per (raw group value, status): bounded by the number of groups,
@@ -84,12 +96,19 @@ def list_fleet_pivot(
     for row in rows:
         key = _friendly_key(row["grp"], pivot)
         group = groups.setdefault(
-            key, {"key": key, "count": 0, "_urgencies": set(), "earliest_expiry": None,
-                  "entries": None, "_first": row["first_expiry"]},
+            key,
+            {
+                "key": key,
+                "count": 0,
+                "_urgencies": set(),
+                "earliest_expiry": None,
+                "entries": None,
+                "_first": row["first_expiry"],
+            },
         )
         group["_first"] = min(group["_first"], row["first_expiry"])
         group["count"] += row["n"]
-        group["_urgencies"].add(row["urgency"] or "gray")
+        group["_urgencies"].add(row["overall_state"] or "gray")
         days = row["min_days"]
         if days is not None and (
             group["earliest_expiry"] is None or days < group["earliest_expiry"]
@@ -103,10 +122,6 @@ def list_fleet_pivot(
         del group["_first"]
         urgencies = group.pop("_urgencies")
         worst = next((u for u in _URGENCY_ORDER if u in urgencies), "gray")
-        if worst == "healthy" and "gray" in urgencies:
-            # A healthy group that still has never-scanned endpoints is not
-            # known to be healthy.
-            worst = "gray"
         group["worst_urgency"] = worst
         result.append(group)
     return result
@@ -122,6 +137,8 @@ def get_pivot_group_page(
     per_page: int = 100,
     now: datetime | None = None,
     status: StatusContext | None = None,
+    axes: StatusModelContext | None = None,
+    axis_settings: AxisSettings | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """One page of the inventory rows of one pivot group, and the group's size.
 
@@ -149,12 +166,22 @@ def get_pivot_group_page(
 
     init_schema(db_path)
     status = status or prepare_status(db_path, now)
-    candidates = inventory_candidates_sql(scope_tags=scope_tags)
+    from cert_watch.status_model import (
+        attach_status_models,
+        prepare_status_model_context,
+        register_status_model_functions,
+    )
+
+    axes = axes or prepare_status_model_context(
+        db_path, certificate_status=status, settings=axis_settings
+    )
+    candidates = inventory_candidates_sql(scope_tags=scope_tags, status=status, axes=axes)
     if candidates is None:
         return [], 0
     sql, params = candidates
     column = _GROUP_COLUMN.get(pivot, "''")
     with _connect(db_path) as conn:
+        register_status_model_functions(conn, axes)
         raws = [
             row["grp"]
             for row in conn.execute(
@@ -165,7 +192,13 @@ def get_pivot_group_page(
         if not raws:
             return [], 0
         ph = ",".join("?" * len(raws))
-        group_sql = f"SELECT etype, ekey, sort_expiry FROM ({sql}) WHERE {column} IN ({ph})"
+        group_sql = (
+            "SELECT etype, ekey, hostname, port, sort_expiry, chain_status, eff_days, condition,"
+            " monitoring, monitoring_last_success, monitoring_last_attempt,"
+            " monitoring_attempt_status, monitoring_error, monitoring_first_failed,"
+            " renewal, has_successor, delivery, overall_state"
+            f" FROM ({sql}) WHERE {column} IN ({ph})"
+        )
         group_params = [*params, *raws]
         total = conn.execute(
             f"SELECT COUNT(*) FROM ({group_sql})", group_params
@@ -175,7 +208,8 @@ def get_pivot_group_page(
             page_sql += " LIMIT ? OFFSET ?"
             group_params += [per_page, max(0, (page - 1) * per_page)]
         ordered = conn.execute(page_sql, group_params).fetchall()
-        entries = build_inventory_entries(conn, ordered, status=status)
+        entries = build_inventory_entries(db_path, conn, ordered, status=status, axes=axes)
+    attach_status_models(db_path, entries, axes)
     for entry in entries:
         entry["_pivot_key"] = group_key
     return entries, total
@@ -196,7 +230,9 @@ def get_pivot_group_entries(
     return entries
 
 
-def group_entries_by_fingerprint(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def group_entries_by_fingerprint(
+    entries: list[dict[str, Any]], *, force: bool = False
+) -> list[dict[str, Any]]:
     """Group scanned entries sharing the same leaf fingerprint into single rows.
 
     Entries with ``kind != "scanned"`` or no fingerprint pass through unchanged.
@@ -219,7 +255,7 @@ def group_entries_by_fingerprint(entries: list[dict[str, Any]]) -> list[dict[str
     for e in entries:
         fp = e.get("fingerprint_sha256") if e.get("kind") == "scanned" else None
 
-        if not fp or len(fp_groups.get(fp, [])) <= 1:
+        if not fp or (len(fp_groups.get(fp, [])) <= 1 and not force):
             result.append(e)
             continue
 
@@ -278,6 +314,7 @@ def group_entries_by_fingerprint(entries: list[dict[str, Any]]) -> list[dict[str
             "renewal_status": first.get("renewal_status", "pending"),
             "renewal_method": first.get("renewal_method", ""),
             "runbook_url": first.get("runbook_url", ""),
+            "tags": first.get("tags", ""),
         })
 
     return result

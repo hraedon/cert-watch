@@ -966,11 +966,11 @@ class TestReportIssue113:
         assert "(uploaded)<" in html
 
     def test_bucket_edges_follow_the_status_thresholds(self, tmp_path, monkeypatch):
-        """7 days left is Warning (critical is < 7), so it is not listed as
-        expiring within 7 days; 30 days left is not within 30."""
+        """Compliance buckets use the legacy status-rule exclusive edges."""
         from datetime import UTC, datetime, timedelta
 
         from cert_watch.certificate_model import Certificate
+        from cert_watch.scheduler import ScanHistory, record_scan_history
         from tests._helpers import seed_certificate, seed_host
 
         monkeypatch.setattr("cert_watch.cert_chain.chain_status", lambda *a: "public")
@@ -988,6 +988,15 @@ class TestReportIssue113:
                 ),
                 cert_id=f"c-{name}", hostname=f"{name}.example.test", port=443,
                 source="scanned",
+            )
+            record_scan_history(
+                db,
+                ScanHistory(
+                    f"{name}.example.test",
+                    443,
+                    "success",
+                    scanned_at=now - timedelta(hours=1),
+                ),
             )
         report = build_compliance_report(str(db))
         buckets = {b.label: [e.subject for e in b.entries] for b in report.remediation_buckets}

@@ -54,6 +54,7 @@ _URGENCY_LABELS = {
     "critical": "Critical",
     "warning": "Warning",
     "healthy": "Healthy",
+    "failing": "Scan failing",
     "gray": "Unknown",
     "neutral": "—",
 }
@@ -64,6 +65,7 @@ _URGENCY_TONES = {
     "warning": "var(--warn)",
     "healthy": "var(--ok)",
     "gray": "var(--text-3)",
+    "failing": "var(--crit)",
     "neutral": "var(--text-2)",
 }
 

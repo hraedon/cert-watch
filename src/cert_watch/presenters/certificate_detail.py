@@ -211,6 +211,13 @@ class CertificateDetailView:
     scan_guidance: ScanErrorGuidance | None = None
     scanned: bool = False
     added: bool = False
+    status: dict[str, Any] | None = None
+    condition: str | None = None
+    monitoring: str = "never_scanned"
+    renewal: str = "unknown"
+    delivery: str = "unrouted"
+    overall_label: str = "Unknown"
+    overall_tone: str = "t-muted"
 
     def template_context(self) -> dict[str, Any]:
         """Expose one stable boundary to Jinja or a future JSON serializer."""
@@ -485,6 +492,29 @@ def _latest_scan_fields(latest: LatestScanRecord | None) -> dict[str, Any]:
     }
 
 
+def _axis_display(
+    model: dict[str, Any] | None, *, endpoint: bool
+) -> tuple[str | None, str, str, str, str, str]:
+    model = model or {}
+    raw_condition = (model.get("condition") or {}).get("state")
+    condition = str(raw_condition) if raw_condition is not None else None
+    monitoring = str((model.get("monitoring") or {}).get("state") or "never_scanned")
+    renewal = str((model.get("renewal") or {}).get("state") or "unknown")
+    delivery = str((model.get("delivery") or {}).get("state") or "unrouted")
+    if endpoint and monitoring == "failing":
+        label, tone = "Scan failing", "t-crit"
+    elif endpoint and monitoring == "never_scanned":
+        label, tone = "Never scanned", "t-muted"
+    else:
+        label, tone = {
+            "expired": ("Expired", "t-expired"),
+            "le7": ("≤7 days", "t-crit"),
+            "8to30": ("8–30 days", "t-warn"),
+            "ok": ("OK", "t-ok"),
+        }.get(condition or "", ("Unknown", "t-muted"))
+    return condition, monitoring, renewal, delivery, label, tone
+
+
 def present_certificate_detail(
     data: CertificateDetailData,
     *,
@@ -505,6 +535,9 @@ def present_certificate_detail(
         pending_host_info = _host_info(host, settings_writable)
         renewal_label, renewal_indicator = _renewal_display(host.renewal_method or "")
         shown_tags = tuple(TagView(tag, False) for tag in parse_tags(host.tags))
+        condition, monitoring, renewal, delivery, overall_label, overall_tone = _axis_display(
+            data.status, endpoint=True
+        )
         return CertificateDetailView(
             cert=None,
             cert_id=data.cert_id,
@@ -560,6 +593,13 @@ def present_certificate_detail(
             **_latest_scan_fields(latest),
             scanned=scanned,
             added=added,
+            status=data.status,
+            condition=condition,
+            monitoring=monitoring,
+            renewal=renewal,
+            delivery=delivery,
+            overall_label=overall_label,
+            overall_tone=overall_tone,
         )
 
     technical = present_certificate_technical_details(
@@ -584,6 +624,9 @@ def present_certificate_detail(
     else:
         source_label, source_icon, source_meta = "Public CT", "globe", ""
     cert_tag_set = set(data.cert_tags)
+    condition, monitoring, renewal, delivery, overall_label, overall_tone = _axis_display(
+        data.status, endpoint=data.host is not None
+    )
     return CertificateDetailView(
         cert=CertificateView(
             issuer=data.cert.issuer,
@@ -666,4 +709,11 @@ def present_certificate_detail(
         **_latest_scan_fields(data.latest_scan),
         scanned=scanned,
         added=added,
+        status=data.status,
+        condition=condition,
+        monitoring=monitoring,
+        renewal=renewal,
+        delivery=delivery,
+        overall_label=overall_label,
+        overall_tone=overall_tone,
     )

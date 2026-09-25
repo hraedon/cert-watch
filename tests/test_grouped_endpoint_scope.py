@@ -52,6 +52,28 @@ def test_shared_fingerprint_scopes_children_counts_and_urgency(tmp_path, chain_t
     assert hidden_id not in str(rows)
 
 
+def test_group_member_query_keeps_scope_bounded(tmp_path, chain_triplet, monkeypatch):
+    import cert_watch.database.dashboard_grouped as dashboard_grouped
+
+    db, _, _ = _shared_endpoints(tmp_path, chain_triplet)
+    real_candidates = dashboard_grouped.inventory_candidates_sql
+    seen_scopes = []
+
+    def instrumented_candidates(*args, **kwargs):
+        seen_scopes.append(kwargs.get("scope_tags"))
+        return real_candidates(*args, **kwargs)
+
+    monkeypatch.setattr(
+        dashboard_grouped, "inventory_candidates_sql", instrumented_candidates
+    )
+    rows, total = list_dashboard_grouped_page(db, scope_tags=["team"], per_page=0)
+
+    assert total == 1
+    assert rows
+    assert seen_scopes
+    assert all(scope == ["team"] for scope in seen_scopes)
+
+
 @pytest.mark.parametrize("urgency, expected_count", [("critical", 1), ("expired", 0)])
 def test_scope_is_applied_before_group_status_filter(
     tmp_path, chain_triplet, urgency, expected_count,

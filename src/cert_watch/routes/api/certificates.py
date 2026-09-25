@@ -17,6 +17,7 @@ from cert_watch.auth.guards import (
 from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.database import (
     SqliteCertificateRepository,
+    get_dashboard_entry,
     list_cert_history,
     list_dashboard_page,
 )
@@ -27,6 +28,10 @@ from cert_watch.routes.api._shared import (
     JsonBodyError,
     _normalize_pagination,
     _pagination_links,
+    delivery_details_allowed,
+    status_api_row,
+    status_filter_error,
+    status_for_api,
     tags_from_json_body,
 )
 from cert_watch.security.ratelimit import rate_limit
@@ -47,6 +52,7 @@ from cert_watch.services.resource_metadata import (
     ResourceMetadataValidationError,
     update_certificate_tags,
 )
+from cert_watch.status_model import AxisSettings
 from cert_watch.tags import parse_tags
 
 logger = logging.getLogger("cert_watch.routes.api.certificates")
@@ -123,8 +129,23 @@ async def api_delete_trust_anchor(
 
 @router.get("/api/certificates")
 def api_list_certificates(
-    request: Request, _auth: str = Depends(require_auth), page: int = 1, limit: int = 50
+    request: Request,
+    _auth: str = Depends(require_auth),
+    page: int = 1,
+    limit: int = 50,
+    condition: str | None = None,
+    monitoring: str | None = None,
+    renewal: str | None = None,
+    delivery: str | None = None,
 ) -> JSONResponse:
+    filter_error = status_filter_error(
+        condition=condition,
+        monitoring=monitoring,
+        renewal=renewal,
+        delivery=delivery,
+    )
+    if filter_error is not None:
+        return filter_error
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
     # Clamp limit to [1,200] BEFORE querying so the SQL LIMIT is bounded — a
@@ -136,12 +157,23 @@ def api_list_certificates(
         db,
         page=page, per_page=limit,
         scope_tags=scope_tags,
+        axis_settings=AxisSettings.from_settings(_get_settings(request)),
+        condition=condition,
+        monitoring=monitoring,
+        renewal=renewal,
+        delivery=delivery,
     )
     page, limit, pages, _offset = _normalize_pagination(page, limit, total)
     # Re-normalize against the scoped total that came back from the query.
     return JSONResponse(
         content={
-            "certificates": rows,
+            "certificates": [
+                status_api_row(
+                    row,
+                    reveal_delivery_details=delivery_details_allowed(request),
+                )
+                for row in rows
+            ],
             "pagination": {
                 "page": page,
                 "limit": limit,
@@ -165,6 +197,17 @@ def api_get_certificate(
     cert = repo.get_by_id(cert_id)
     if cert is None:
         return JSONResponse(content={"error": "not found"}, status_code=404)
+    row = get_dashboard_entry(
+        db,
+        cert_id,
+        scope_tags=scope_tags_from_auth(getattr(request.state, "auth_context", None)),
+        axis_settings=AxisSettings.from_settings(_get_settings(request)),
+    )
+    status = row.get("status") if row else None
+    if isinstance(status, dict):
+        status = status_for_api(
+            status, reveal_delivery_details=delivery_details_allowed(request)
+        )
     return JSONResponse(
         content={
             "id": cert_id,
@@ -178,6 +221,7 @@ def api_get_certificate(
             "days_until_expiry": cert.days_until_expiry(),
             "tags": parse_tags(repo.get_tags(cert_id)),
             "effective_tags": repo.effective_tags(cert_id),
+            "status": status,
         }
     )
 

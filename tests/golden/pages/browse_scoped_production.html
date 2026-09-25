@@ -86,7 +86,7 @@
 <div class="cw-page-head">
   <div>
     <h1 data-testid="dashboard-heading">Certificates</h1>
-    <div class="cw-page-head-sub">Status covers expiry and chain trust. Grades describe the last TLS scan.</div>
+    <div class="cw-page-head-sub">Condition, monitoring, renewal, and delivery are four status axes. Grades describe the last TLS scan.</div>
   </div>
   <div class="cw-page-actions">
     <div class="cw-menuwrap">
@@ -127,7 +127,7 @@ Hosts — owners · renewal · tags (CSV)</a>
   <div class="cw-stats">
 
 
-<a href="/browse?sort_by=days&amp;sort_order=asc&amp;grouped=1" class="cw-stat active">
+<a href="/browse?sort_by=days&amp;sort_order=asc&amp;grouped=0" class="cw-stat active">
   <span class="cw-stat-label">
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>
@@ -139,7 +139,7 @@ Tracked</span>
 
 
 
-<a href="/browse?urgency=expired&amp;sort_by=days&amp;sort_order=asc&amp;grouped=1" class="cw-stat">
+<a href="/browse?condition=expired&amp;sort_by=days&amp;sort_order=asc&amp;grouped=0" class="cw-stat">
   <span class="cw-stat-label">
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
@@ -151,38 +151,38 @@ Expired</span>
 
 
 
-<a href="/browse?urgency=critical&amp;sort_by=days&amp;sort_order=asc&amp;grouped=1" class="cw-stat">
+<a href="/browse?condition=le7&amp;sort_by=days&amp;sort_order=asc&amp;grouped=0" class="cw-stat">
   <span class="cw-stat-label">
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
 
-Critical</span>
+≤7 days</span>
   <div class="cw-stat-val">0</div>
-  <div class="cw-stat-sub">none</div>
+  <div class="cw-stat-sub">expiry condition</div>
 </a>
 
 
 
-<a href="/browse?urgency=warning&amp;sort_by=days&amp;sort_order=asc&amp;grouped=1" class="cw-stat">
+<a href="/browse?condition=8to30&amp;sort_by=days&amp;sort_order=asc&amp;grouped=0" class="cw-stat">
   <span class="cw-stat-label">
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v5l3 2"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
 
-Warning</span>
-  <div class="cw-stat-val t-warn">1</div>
-  <div class="cw-stat-sub">expiry or trust issue</div>
+8–30 days</span>
+  <div class="cw-stat-val">0</div>
+  <div class="cw-stat-sub">expiry condition</div>
 </a>
 
 
 
-<a href="/browse?urgency=healthy&amp;sort_by=days&amp;sort_order=asc&amp;grouped=1" class="cw-stat">
+<a href="/browse?condition=ok&amp;sort_by=days&amp;sort_order=asc&amp;grouped=0" class="cw-stat">
   <span class="cw-stat-label">
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
 
-Healthy</span>
-  <div class="cw-stat-val">0</div>
-  <div class="cw-stat-sub">30+ days · trusted chain</div>
+OK</span>
+  <div class="cw-stat-val t-ok">1</div>
+  <div class="cw-stat-sub">more than 30 days</div>
 </a>
 
   </div>
@@ -193,6 +193,10 @@ Healthy</span>
     <form method="get" action="/browse" class="cw-chiprow">
     <input type="hidden" name="urgency" value="">
     <input type="hidden" name="source" value="">
+
+
+
+
     <input type="hidden" name="sort_by" value="days">
     <input type="hidden" name="sort_order" value="asc">
     <input type="hidden" name="grouped" value="1">
@@ -263,7 +267,7 @@ Calendar · all</a>
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
 
 </span>
-                <span class="cw-id">mail.demo.test</span>
+                <span class="cw-id">O=Demo Estate,CN=mail.demo.test</span>
                 <span class="cw-chip t-accent">1 host</span>
               </div>
               <div class="cw-chiprow cw-metarow">
@@ -311,6 +315,12 @@ Scanned</span>
 
 
 
+    <span class="cw-chip t-warn">
+
+    <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+
+chain not verified</span>
+
 
   </div>
 </td>
@@ -326,9 +336,11 @@ Scanned</span>
 
   </div>
 </td>
-            <td data-label="Status"><span class="cw-status t-warn">
+            <td data-label="Status">
+  <span class="cw-status t-warn">
   <span class="dot" aria-hidden="true"></span>Warning
 </span>
+
 
 
 
@@ -358,9 +370,11 @@ Scanned</span>
               <div class="row">
                 <a href="/certificates/{{CERT_4_ID}}" class="cw-id">mail.demo.test:443</a>
 
-                <span class="cw-status t-warn">
+
+  <span class="cw-status t-warn">
   <span class="dot" aria-hidden="true"></span>Warning
 </span>
+
 
 
 

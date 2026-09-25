@@ -58,12 +58,15 @@ def _add_file(db, name, days, *, tags=""):
 
 
 def _stats(html):
-    return {
-        link["text"].split()[0]: (int(link["text"].split()[1]), link["href"])
-        for link in _Navigation(html).links
-        if "cw-stat" in link.get("class", "").split()
-        and not link["text"].startswith("Expiring")
-    }
+    labels = ("Tracked", "Expired", "≤7 days", "8–30 days", "OK")
+    result = {}
+    for link in _Navigation(html).links:
+        if "cw-stat" not in link.get("class", "").split():
+            continue
+        label = next((value for value in labels if link["text"].startswith(value)), None)
+        if label is not None:
+            result[label] = (int(link["text"][len(label):].split()[0]), link["href"])
+    return result
 
 
 def _params(link):
@@ -81,10 +84,10 @@ def test_home_cards_follow_to_the_same_flat_population(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         home = client.get("/")
         stats = _stats(home.text)
-        assert set(stats) == {"Tracked", "Expired", "Critical", "Warning", "Healthy"}
+        assert set(stats) == {"Tracked", "Expired", "≤7 days", "8–30 days", "OK"}
         assert stats["Tracked"][0] == 4  # Includes the pending host with no certificate.
-        assert stats["Healthy"][0] == 0  # Long lifetime does not establish chain trust.
-        assert stats["Warning"][0] == 1
+        assert stats["OK"][0] == 1  # Trust is independent from expiry condition.
+        assert stats["8–30 days"][0] == 0
         for label, (count, href) in stats.items():
             assert parse_qs(urlsplit(href).query)["grouped"] == ["0"]
             browse = client.get(href)

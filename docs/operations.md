@@ -103,18 +103,50 @@ Every page counts the estate with the same definitions.
 - **Effective days** — whole days until the soonest expiry among the leaf
   and the chain certificates stored with it, negative once one has expired.
   An expired intermediate makes a leaf with 99 days left −3.
-- **Status** — Expired (effective days below 0), Critical (under 7),
-  Warning (under 30) or Healthy. A Healthy certificate whose chain can't be
-  verified (self-signed, incomplete, invalid or unknown) is shown as Warning;
-  adding or removing a trust anchor changes this everywhere at once. Until
-  a certificate's chain has been verified against the current trust anchors
-  (for a moment after a change), its counts treat it as unverified, never
-  as Healthy. Pending
-  endpoints have no status yet. Home, Inventory (and its status filter and
-  certificate grouping), Home's *Needs attention* queue, the issuer, owner
-  and renewal-method views, a view's expanded group, the compliance report and
-  `cert_watch_certificates_by_urgency` all use this one rule, and the counts
-  are computed in the database with the same rule the rows show.
+- **Condition** — certificate expiry only: `expired` below zero effective
+  days, `le7` at 0–7 days, `8to30` at 8–30 days, and `ok` above 30 days.
+  Chain trust is a separate `chain_trust_problem` flag and `chain_status`; an
+  incomplete, invalid, unknown, self-signed or not-yet-verified chain never
+  changes the expiry bucket. Pending endpoints have no condition.
+- **Monitoring** — `current` means the existing scan-freshness rule has a
+  successful observation inside the endpoint's configured cadence and no
+  later incomplete attempt. `failing` covers a later failed/partial attempt,
+  overdue evidence or unreadable timing; `since` is the first consecutive
+  failed attempt (or the cadence deadline when evidence simply became
+  overdue). Its `cause` is the plain-language scan guidance and `raw_error`
+  preserves the scanner text. `never_scanned` means no attempt and no
+  successful observation are recorded. A failing or never-scanned endpoint
+  is never labelled Healthy or OK overall, even when its last certificate's
+  condition is `ok`. Uploaded files use `not_monitored`: they have no endpoint
+  scan lifecycle and are excluded from monitoring counts and filters.
+- **Renewal** — precedence is `in_progress` when an operator reported that
+  host state; then `stalled` when the current leaf is inside the configured
+  renewal window with no successor; then `automation_configured` for an ACME
+  or cert-manager method; then `manual` for a manual method. If the method is
+  unset, renewal analytics may supply `automation_configured` from
+  `likely-automated` or `manual` from its manual classification; otherwise the
+  state is `unknown`. The model records which source made the decision.
+- **Delivery** — per-certificate recipients and matched groups come from the
+  same `alerting.routing` resolver that snapshots a queued alert. SMTP lists
+  the global plus routed recipients and is deliverable only when its relay,
+  sender and at least one recipient exist. The global webhook is deliverable
+  when configured. Each channel includes its latest append-only delivery
+  outcome. `unrouted` means no route at all: no certificate-specific or group
+  route and no global recipient or webhook fallback. A route that exists only
+  globally is therefore `ok` when its channel can deliver; a later slice may
+  expose that distinction separately. `failing` means a route has no usable
+  channel or its latest configured-channel outcome was not fully accepted;
+  otherwise it is `ok`. Read-level API users see only delivery state, channel
+  types and anonymous counts; recipient identities and group names are admin-only.
+- **Filters** — Browse and the host/certificate JSON lists accept the same
+  combinable URL parameters: `condition=expired|le7|8to30|ok`,
+  `monitoring=current|failing|never_scanned`,
+  `renewal=automation_configured|manual|stalled|in_progress|unknown`, and
+  `delivery=ok|failing|unrouted`. They are applied in SQL after the caller's
+  effective tag scope. Grouped Browse paginates the matching fingerprint
+  groups in SQL before it builds display rows. A grouped filter or search
+  selects a group when any member matches, then shows every in-scope member of
+  that selected group; the group is the result unit.
 - **Days** — whole days until the leaf certificate expires, negative once it
   has expired ("expired 41 days ago"). A group view's *Earliest expiry* is the
   smallest effective days in the group, so it agrees with the group's status.
@@ -128,10 +160,12 @@ Every page counts the estate with the same definitions.
   and the compliance report's grade distribution cover the same certificates.
 - **Compliance report** — *Certificates* are the certificates in scope and
   *Endpoints* the scanned endpoints among them. Its expiry sections place each
-  certificate by its effective days, with the status thresholds (within 7 days
-  means under 7 days left), and list the expiry date and days that put it
+  certificate by its effective days, with the legacy display-status boundaries
+  (under 7 days, then under 30 days), and list
+  the expiry date and days that put it
   there: for a certificate whose intermediate expires first, the
-  intermediate's. So a certificate's section, days and Urgency always agree.
+  intermediate's. Each entry also carries monitoring, renewal and delivery;
+  condition remains a separate expiry fact.
 - **Posture trends** count each endpoint once per month, by its latest scan
   that month.
 - **Scan history** groups scans that ran within five minutes of each other.

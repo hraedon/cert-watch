@@ -475,12 +475,22 @@ def delete_certificate_cascade(
                 all_ids,
             ).fetchall()
         ]
-        if leaf_row is not None and fps:
+        if (
+            leaf_row is not None
+            and leaf_row["hostname"] is not None
+            and leaf_row["port"] is not None
+            and fps
+        ):
             fp_placeholders = ",".join("?" * len(fps))
             conn.execute(
                 f"DELETE FROM cert_history WHERE hostname = ? AND port = ? "
                 f"AND fingerprint_sha256 IN ({fp_placeholders})",
                 (leaf_row["hostname"], leaf_row["port"], *fps),
+            )
+            from cert_watch.renewal_analytics import refresh_endpoint_analytics
+
+            refresh_endpoint_analytics(
+                conn, str(leaf_row["hostname"]), int(leaf_row["port"])
             )
         conn.execute(
             f"DELETE FROM alert_group_certs WHERE cert_id IN ({placeholders})", all_ids

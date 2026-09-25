@@ -1,36 +1,39 @@
-"""SQL-grouped fingerprint dashboard query path (BC-073)."""
+"""SQL-paginated fingerprint-grouped Browse query (#120 / #126 S1)."""
 from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from cert_watch.database.chain_status_cache import (
-    StatusContext,
-    leaf_chain_statuses,
-    prepare_status,
-)
+from cert_watch.database.chain_status_cache import StatusContext, prepare_status
 from cert_watch.database.connection import _connect
-from cert_watch.database.dashboard_helpers import (
-    _SORT_COLUMNS_GROUPED,
-    _URGENCY_ORDER,
-    _add_grouped_effective_tag_filter,
-    _entry_matches_scope_tag,
-    _filter_unified,
-    _safe_col,
-    _safe_dir,
-    _sort_unified,
-    search_patterns,
+from cert_watch.database.dashboard_helpers import _safe_dir
+from cert_watch.database.dashboard_page import build_inventory_entries, inventory_candidates_sql
+
+# Compatibility seam for the existing row-construction scaling counter. The
+# implementation delegates through ``dashboard_unified``; the imported name
+# remains patchable so the guard can count both legacy and current paths.
+from cert_watch.database.dashboard_rows import (
+    _build_dashboard_rows as _build_dashboard_rows,
 )
-from cert_watch.database.dashboard_rows import _build_dashboard_rows
-from cert_watch.database.dashboard_unified import (
-    _build_pending_entries,
-    _build_unified_from_dash,
-)
+from cert_watch.database.fleet import group_entries_by_fingerprint
 from cert_watch.database.schema import init_schema
-from cert_watch.filters import subject_cn
-from cert_watch.status_rule import URGENCY_RANK, urgency_rank_sql, urgency_sql
-from cert_watch.tags import format_tags, merge_tags
+from cert_watch.status_model import (
+    AxisSettings,
+    StatusModelContext,
+    attach_status_models,
+    prepare_status_model_context,
+    register_status_model_functions,
+)
+
+
+def _group_key_sql(alias: str = "inv") -> str:
+    return (
+        f"CASE WHEN {alias}.etype = 'leaf' AND {alias}.host_id IS NOT NULL"
+        f" THEN 'scanned:' || COALESCE((SELECT c.fingerprint_sha256"
+        f" FROM certificates c WHERE c.id = {alias}.ekey), {alias}.ekey)"
+        f" ELSE {alias}.etype || ':' || {alias}.ekey END"
+    )
 
 
 def list_dashboard_grouped_page(
@@ -46,254 +49,131 @@ def list_dashboard_grouped_page(
     scope_tags: list[str] | tuple[str, ...] | None = None,
     now: datetime | None = None,
     status: StatusContext | None = None,
+    axes: StatusModelContext | None = None,
+    axis_settings: AxisSettings | None = None,
+    condition: str | None = None,
+    monitoring: str | None = None,
+    renewal: str | None = None,
+    delivery: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Return a SQL-grouped, filtered, sorted, paginated page of dashboard rows.
+    """Select/order one page of groups in SQL, then build only its members.
 
-    Grouped dashboard path (BC-073).  Scanned entries sharing a leaf
-    fingerprint collapse into a single row whose urgency is the worst urgency
-    across the group and whose host count is the number of hosts in the group.
-    Uploaded and pending entries pass through ungrouped.
-
-    Scanned-entry grouping uses SQL ``GROUP BY`` so only the visible page of
-    grouped rows is materialised with full cert/host/scan detail.  Ungrouped
-    entries (uploaded, pending) are loaded and merged in Python.  Returns
-    ``(rows, total)``.
-
-    ``scope_tags`` restricts results to certificates/hosts whose effective tags
-    (cert tags ∪ host tags) include at least one supplied tag (WI-051).
+    Filters select fingerprint groups in SQL. Once a group is selected, all
+    of its in-scope endpoints are shown (the established grouped-search
+    contract). Counts and LIMIT operate on group keys, so rows outside the
+    requested page are never handed to the Python row builder.
     """
     init_schema(db_path)
-
-    # The group's status is its most urgent host's, by the one status rule
-    # (the rule each built host row carries), so the HAVING filter below
-    # selects exactly the groups the rows call ``urgency``, judged at one
-    # instant for the SQL and the rows.
     status = status or prepare_status(db_path, now)
+    axes = axes or prepare_status_model_context(
+        db_path, certificate_status=status, settings=axis_settings
+    )
+    filter_axes = frozenset(
+        axis
+        for axis, value in (
+            ("urgency", urgency),
+            ("condition", condition),
+            ("monitoring", monitoring),
+            ("renewal", renewal),
+            ("delivery", delivery),
+        )
+        if value
+    )
+    candidates = inventory_candidates_sql(
+        source=source, q=q, scope_tags=scope_tags, status=status, axes=axes,
+        sql_delivery=bool(delivery), axis_columns=filter_axes,
+    )
+    if candidates is None:
+        return [], 0
+    base_sql, params = candidates
+    member_candidates = inventory_candidates_sql(
+        source=source, q=None, scope_tags=scope_tags, status=status, axes=axes,
+        axis_columns=frozenset(),
+    )
+    assert member_candidates is not None
+    member_base_sql, member_params = member_candidates
 
-    _SORT_COLS = {
-        "name": "LOWER(COALESCE(c.subject, c.hostname || ':' || c.port))",
-        "issue_date": "c.not_before",
-        "last_scan": "COALESCE(last_scan_at, '0000-01-01T00:00:00')",
-        "expiry": "c.not_after",
-        "days": "c.not_after",
-    }
-    sort_col = _safe_col(_SORT_COLS.get(sort_by, _SORT_COLS["days"]), _SORT_COLUMNS_GROUPED)
-    sql_dir = _safe_dir("DESC" if sort_order == "desc" else "ASC")
+    for column, value in (
+        ("urgency", urgency),
+        ("condition", condition),
+        ("monitoring", monitoring),
+        ("renewal", renewal),
+        ("delivery", delivery),
+    ):
+        if value:
+            base_sql = f"SELECT * FROM ({base_sql}) WHERE {column} = ?"
+            params = [*params, value]
 
-    like, host_like = search_patterns(q)
+    sort_column = {
+        "name": "sort_name",
+        "issue_date": "sort_issue",
+        "last_scan": "sort_scan",
+        "expiry": "sort_expiry",
+        "days": "sort_expiry",
+    }.get(sort_by, "sort_expiry")
+    direction = _safe_dir("DESC" if sort_order == "desc" else "ASC")
+    key = _group_key_sql()
+    groups_sql = (
+        f"SELECT {key} AS group_key, MIN({sort_column}) AS sort_val"
+        f" FROM ({base_sql}) inv GROUP BY group_key"
+    )
 
     with _connect(db_path) as conn:
-        # Step 1: SQL GROUP BY fingerprint for scanned entries.
-        grouped_sql = f"""
-            SELECT
-                c.fingerprint_sha256,
-                COUNT(DISTINCT c.hostname || ':' || c.port) AS host_count,
-                MIN(c.not_after) AS earliest_expiry,
-                MIN(julianday(c.not_after) - julianday(?)) AS min_days_remaining,
-                MIN({urgency_rank_sql(urgency_sql("c"))}) AS worst_urgency_rank,
-                {sort_col} AS sort_val
-            FROM certificates c
-            WHERE c.is_leaf = 1
-              AND c.source = 'scanned'
-              AND c.fingerprint_sha256 IS NOT NULL
-              AND c.fingerprint_sha256 != ''
-        """
-        # The SELECT list binds the instant (julianday), then the status
-        # rule's instant and trust digest.
-        params: list[Any] = [status.sql_now, status.sql_now, status.trust]
-
-        if like:
-            grouped_sql += (
-                " AND (LOWER(c.subject) LIKE ? ESCAPE '\\'"
-                " OR LOWER(c.issuer) LIKE ? ESCAPE '\\'"
-                " OR LOWER(c.hostname || ':' || c.port) LIKE ? ESCAPE '\\'"
-                " OR LOWER(c.hostname || ':' || c.port) LIKE ? ESCAPE '\\')"
-            )
-            params.extend([like, like, like, host_like])
-
-        grouped_sql, params = _add_grouped_effective_tag_filter(
-            grouped_sql, params, scope_tags or ()
+        register_status_model_functions(conn, axes)
+        total = conn.execute(f"SELECT COUNT(*) FROM ({groups_sql})", params).fetchone()[0]
+        last_page = max((total + per_page - 1) // per_page, 1) if per_page > 0 else 1
+        clamped = max(1, min(page, last_page))
+        page_groups_sql = f"{groups_sql} ORDER BY sort_val {direction}, group_key ASC"
+        page_params = list(params)
+        if per_page > 0:
+            page_groups_sql += " LIMIT ? OFFSET ?"
+            page_params += [per_page, (clamped - 1) * per_page]
+        group_rows = conn.execute(page_groups_sql, page_params).fetchall()
+        group_keys = [row["group_key"] for row in group_rows]
+        if not group_keys:
+            return [], int(total)
+        placeholders = ",".join("?" for _ in group_keys)
+        member_sql = (
+            f"SELECT inv.*, {_group_key_sql()} AS group_key FROM ({member_base_sql}) inv"
+            f" WHERE {_group_key_sql()} IN ({placeholders})"
         )
-
-        grouped_sql += " GROUP BY c.fingerprint_sha256"
-
-        if urgency:
-            rank = URGENCY_RANK.get(urgency)
-            if rank is not None:
-                grouped_sql += " HAVING worst_urgency_rank = ?"
-                params.append(rank)
-
-        grouped_sql += f" ORDER BY sort_val {sql_dir}"
-
-        rows = conn.execute(grouped_sql, params).fetchall()
-
-        fingerprints = [r["fingerprint_sha256"] for r in rows]
-
-        # Step 2: Load full details for grouped scanned entries.
-        cert_rows: list[Any] = []
-        chain_rows: list[Any] = []
-        if fingerprints:
-            ph = ",".join("?" * len(fingerprints))
-            leaves_sql, leaves_params = _add_grouped_effective_tag_filter(
-                f"SELECT * FROM certificates c"
-                f" WHERE c.fingerprint_sha256 IN ({ph}) AND c.is_leaf = 1"
-                " AND c.source = 'scanned'",
-                list(fingerprints), scope_tags or (),
+        members = conn.execute(member_sql, [*member_params, *group_keys]).fetchall()
+        by_group: dict[str, list[Any]] = {value: [] for value in group_keys}
+        for member in members:
+            by_group.setdefault(member["group_key"], []).append(member)
+        selected = [
+            member
+            for group_key in group_keys
+            for member in sorted(
+                by_group.get(group_key, []),
+                key=lambda row: (row[sort_column], row["ekey"]),
+                reverse=direction == "DESC",
             )
-            cert_rows = conn.execute(
-                leaves_sql + " ORDER BY c.hostname, c.port", leaves_params,
-            ).fetchall()
-            leaf_ids = [r["id"] for r in cert_rows]
-            if leaf_ids:
-                cph = ",".join("?" * len(leaf_ids))
-                chain_rows = conn.execute(
-                    f"SELECT * FROM certificates WHERE parent_cert_id IN ({cph})",
-                    leaf_ids,
-                ).fetchall()
-
-        host_rows = conn.execute("SELECT * FROM hosts ORDER BY added_at").fetchall()
-        scan_rows = conn.execute(
-            """
-            SELECT hostname, port, status, scanned_at, error_message
-            FROM scan_history sh1
-            WHERE scanned_at = (
-                SELECT MAX(scanned_at)
-                FROM scan_history sh2
-                WHERE sh2.hostname = sh1.hostname AND sh2.port = sh1.port
+        ]
+        keys = tuple((str(row["etype"]), str(row["ekey"])) for row in selected)
+        endpoints = tuple(
+            dict.fromkeys(
+                (str(row["hostname"]), int(row["port"]))
+                for row in selected
+                if row["hostname"] is not None and row["port"] is not None
             )
-            """
-        ).fetchall()
-        anchor_rows = conn.execute("SELECT * FROM trust_anchors").fetchall()
-
-    # Step 3: Build rich dashboard rows for scanned entries and group them.
-    all_rows = list(cert_rows) + list(chain_rows)
-    # Rows show the chain status the grouping's SQL used (see
-    # leaf_chain_statuses), never a second, live verification.
-    with _connect(db_path) as conn:
-        statuses = leaf_chain_statuses(conn, [r["id"] for r in cert_rows], status)
-    dash = _build_dashboard_rows(
-        all_rows, anchor_rows, now=status.now, chain_statuses=statuses
-    )
-    entries = _build_unified_from_dash(dash, host_rows, scan_rows, include_uploaded=False)
-
-    entries_by_fp: dict[str, list[dict[str, Any]]] = {}
-    for e in entries:
-        fp = e.get("fingerprint_sha256")
-        if fp:
-            entries_by_fp.setdefault(fp, []).append(e)
-
-    grouped_entries: list[dict[str, Any]] = []
-    group_idx = 0
-    for row in rows:
-        fp = row["fingerprint_sha256"]
-        group = entries_by_fp.get(fp, [])
-        if not group:
-            continue
-        group_idx += 1
-        first = group[0]
-        group_tags = format_tags(merge_tags(*[h.get("tags", "") for h in group]))
-
-        urgency_counts: dict[str, int] = {}
-        for h in group:
-            u = h["urgency"]
-            urgency_counts[u] = urgency_counts.get(u, 0) + 1
-
-        group_urgency = "healthy"
-        for u in _URGENCY_ORDER:
-            if urgency_counts.get(u, 0) > 0:
-                group_urgency = u
-                break
-
-        grouped_entries.append({
-            "id": first["id"],
-            "fingerprint_sha256": fp,
-            "group_id": group_idx,
-            "kind": "grouped",
-            "source": "scanned",
-            "subject": first["subject"],
-            "issuer": first["issuer"],
-            "not_before": first["not_before"],
-            "not_after": first["not_after"],
-            "days_remaining": first["days_remaining"],
-            "urgency": group_urgency,
-            "leaf_urgency": first["leaf_urgency"],
-            "chain": first["chain"],
-            "chain_valid": first["chain_valid"],
-            "chain_status": first["chain_status"],
-            "san_dns_names": first.get("san_dns_names", []),
-            "replaces_cert_id": first.get("replaces_cert_id"),
-            "notes": first.get("notes", ""),
-            "name": subject_cn(first["subject"] or "") or first["host"],
-            "host": first["host"],
-            "host_id": first.get("host_id"),
-            "host_count": len(group),
-            "healthy_count": sum(1 for h in group if h["urgency"] == "healthy"),
-            "urgency_summary": urgency_counts,
-            "hosts": group,
-            "last_scanned_at": first.get("last_scanned_at"),
-            "scan_status": first.get("scan_status"),
-            "scan_error": first.get("scan_error"),
-            "added_at": first.get("added_at"),
-            "owner_name": first.get("owner_name", ""),
-            "owner_email": first.get("owner_email", ""),
-            "owner_slack": first.get("owner_slack", ""),
-            "renewal_status": first.get("renewal_status", "pending"),
-            "renewal_method": first.get("renewal_method", ""),
-            "runbook_url": first.get("runbook_url", ""),
-            "tags": group_tags,
-        })
-
-    # Step 4: Load ungrouped entries (uploaded + pending) and merge.
-    # Only fetch uploaded leaf certs (scanned entries are already grouped above).
-    with _connect(db_path) as conn2:
-        uploaded_leaves = conn2.execute(
-            "SELECT * FROM certificates WHERE is_leaf = 1 AND source != 'scanned' "
-            "ORDER BY created_at"
-        ).fetchall()
-        uploaded_leaf_ids = [r["id"] for r in uploaded_leaves]
-        if uploaded_leaf_ids:
-            uph = ",".join("?" * len(uploaded_leaf_ids))
-            uploaded_chain = conn2.execute(
-                f"SELECT * FROM certificates WHERE parent_cert_id IN ({uph})",
-                uploaded_leaf_ids,
-            ).fetchall()
-        else:
-            uploaded_chain = []
-    with _connect(db_path) as conn2:
-        uploaded_statuses = leaf_chain_statuses(
-            conn2, [r["id"] for r in uploaded_leaves], status
         )
-    uploaded_dash = _build_dashboard_rows(
-        list(uploaded_leaves) + list(uploaded_chain), anchor_rows, now=status.now,
-        chain_statuses=uploaded_statuses,
-    )
-    # Mark uploaded entries directly
-    for u in uploaded_dash:
-        u["kind"] = "uploaded"
-        u["name"] = subject_cn(u.get("subject", ""))
-        u["last_scanned_at"] = None
-        u["scan_status"] = None
-        u["scan_error"] = None
-        u["added_at"] = None
-    ungrouped = list(uploaded_dash)
+        full_candidates = inventory_candidates_sql(
+            source=source,
+            q=None,
+            scope_tags=scope_tags,
+            status=status,
+            axes=axes,
+            entry_keys=keys,
+            history_endpoints=endpoints,
+        )
+        assert full_candidates is not None
+        full_sql, full_params = full_candidates
+        full_rows = conn.execute(full_sql, full_params).fetchall()
+        by_key = {(str(row["etype"]), str(row["ekey"])): row for row in full_rows}
+        ordered = [by_key[key] for key in keys if key in by_key]
+        built = build_inventory_entries(db_path, conn, ordered, status=status, axes=axes)
 
-    # Pending hosts: hosts with no scanned leaf cert at all
-    scanned_host_keys = {(r["hostname"], r["port"]) for r in cert_rows}
-    pending_hosts = [
-        h for h in host_rows
-        if (h["hostname"], h["port"]) not in scanned_host_keys
-    ]
-    ungrouped.extend(_build_pending_entries(pending_hosts, scan_rows))
-
-    if scope_tags:
-        ungrouped = [e for e in ungrouped if _entry_matches_scope_tag(e, scope_tags)]
-
-    all_entries = grouped_entries + ungrouped
-    all_entries = _filter_unified(all_entries, q=q, urgency=urgency, source=source)
-    all_entries = _sort_unified(all_entries, sort_by=sort_by, sort_order=sort_order)
-
-    total = len(all_entries)
-    if per_page > 0:
-        start = max(0, (page - 1) * per_page)
-        all_entries = all_entries[start : start + per_page]
-    return all_entries, total
+    grouped = group_entries_by_fingerprint(built, force=True)
+    attach_status_models(db_path, grouped, axes)
+    return grouped, int(total)

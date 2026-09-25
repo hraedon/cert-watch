@@ -10,9 +10,91 @@ from typing import Any, cast
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from cert_watch.status_model import invalid_status_filters, overall_state
 from cert_watch.tags import format_tags, parse_tags
 
 logger = logging.getLogger("cert_watch.routes.api")
+
+
+def status_filter_error(
+    *,
+    condition: str | None,
+    monitoring: str | None,
+    renewal: str | None,
+    delivery: str | None,
+) -> JSONResponse | None:
+    """Return the list API's 400 response for an unknown axis token."""
+    invalid = invalid_status_filters(
+        condition=condition,
+        monitoring=monitoring,
+        renewal=renewal,
+        delivery=delivery,
+    )
+    if not invalid:
+        return None
+    name, value = next(iter(invalid.items()))
+    return JSONResponse(
+        status_code=400,
+        content={"error": f"invalid {name} filter: {value}"},
+    )
+
+
+def delivery_details_allowed(request: Request) -> bool:
+    """Only administrators may read routing identities from status blocks."""
+    auth = getattr(request.state, "auth_context", None)
+    return auth is None or bool(getattr(auth, "is_admin", False))
+
+
+def delivery_for_api(raw: dict[str, Any], *, reveal_details: bool) -> dict[str, Any]:
+    """Return full routing detail for admins and anonymous counts otherwise."""
+    if reveal_details:
+        return dict(raw)
+    raw_channels = raw.get("channels")
+    channels: list[Any] = raw_channels if isinstance(raw_channels, list) else []
+    return {
+        "state": raw.get("state", "unrouted"),
+        "recipient_count": len(raw.get("recipients") or []),
+        "matching_group_count": len(raw.get("matching_groups") or []),
+        "channels": [
+            {
+                "channel": channel.get("channel"),
+                "route_count": len(channel.get("recipients") or []),
+            }
+            for channel in channels
+            if isinstance(channel, dict)
+        ],
+    }
+
+
+def status_for_api(model: dict[str, Any], *, reveal_delivery_details: bool) -> dict[str, Any]:
+    """Copy a status model, reducing delivery to anonymous counts when needed."""
+    result = dict(model)
+    raw = model.get("delivery")
+    if not isinstance(raw, dict):
+        return result
+    result["delivery"] = delivery_for_api(
+        raw, reveal_details=reveal_delivery_details
+    )
+    return result
+
+
+def status_api_row(
+    row: dict[str, Any], *, reveal_delivery_details: bool = False
+) -> dict[str, Any]:
+    """Copy a dashboard row with an honest compatibility status token."""
+    result = dict(row)
+    result["urgency"] = overall_state(row)
+    result["overall_state"] = result["urgency"]
+    if isinstance(row.get("status"), dict):
+        result["status"] = status_for_api(
+            row["status"], reveal_delivery_details=reveal_delivery_details
+        )
+    if row.get("hosts"):
+        result["hosts"] = [
+            status_api_row(child, reveal_delivery_details=reveal_delivery_details)
+            for child in row["hosts"]
+        ]
+    return result
 
 
 def _normalize_pagination(page: int, limit: int, total: int) -> tuple[int, int, int, int]:
@@ -146,9 +228,20 @@ def _pagination_links(
     """Build HATEOAS pagination links for a JSON API response."""
     pages = (total + limit - 1) // limit if limit else 0
     base = str(request.base_url).rstrip("/") + path
-    links: dict[str, str | None] = {"self": f"{base}?page={page}&limit={limit}"}
-    links["next"] = f"{base}?page={page + 1}&limit={limit}" if page < pages else None
-    links["prev"] = f"{base}?page={page - 1}&limit={limit}" if page > 1 else None
+    from urllib.parse import urlencode
+
+    retained = [
+        (key, value)
+        for key, value in request.query_params.multi_items()
+        if key not in {"page", "limit"}
+    ]
+
+    def link(target: int) -> str:
+        return f"{base}?{urlencode([*retained, ('page', target), ('limit', limit)])}"
+
+    links: dict[str, str | None] = {"self": link(page)}
+    links["next"] = link(page + 1) if page < pages else None
+    links["prev"] = link(page - 1) if page > 1 else None
     return links
 
 

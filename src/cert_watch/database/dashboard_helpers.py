@@ -10,7 +10,7 @@ _SORT_COLUMNS_BARE = frozenset({
 })
 
 _SORT_COLUMNS_ALIAS = frozenset({
-    "sort_name", "sort_issue", "sort_scan", "sort_expiry",
+    "sort_name", "sort_issue", "sort_scan", "sort_expiry", "sort_added",
 })
 
 _SORT_COLUMNS_GROUPED = frozenset({

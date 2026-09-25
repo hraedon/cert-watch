@@ -62,6 +62,8 @@ def _python_urgency(days: int) -> str:
 
 
 def _seed(db: Path, ref: datetime) -> None:
+    from cert_watch.scheduler import ScanHistory, record_scan_history
+
     init_schema(db)
     for name, delta in OFFSETS.items():
         SqliteHostRepository(db).add(name, 443)
@@ -73,6 +75,9 @@ def _seed(db: Path, ref: datetime) -> None:
             fingerprint_sha256=name,
         )
         replace_scanned(db, name, 443, cert, [], True)
+        record_scan_history(
+            db, ScanHistory(name, 443, "success", scanned_at=ref - timedelta(hours=1))
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -108,7 +113,8 @@ def test_sql_urgency_matches_python_days_remaining(
                 group = groups[f"CA for {name}"]
                 days = _python_days(delta)
                 assert group["earliest_expiry"] == days, name
-                assert group["worst_urgency"] == _python_urgency(days), name
+                expected = _python_urgency(days)
+                assert group["worst_urgency"] == expected, name
 
         # Home expiry cards: SQL CASE buckets.
         assert dashboard_expiry_stats(db, **kwargs) == _expected_buckets()

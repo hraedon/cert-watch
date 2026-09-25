@@ -26,6 +26,9 @@ def _insert_host_with_cert(
         fingerprint_sha256=hostname,
     )
     replace_scanned(db, hostname, port, cert, [], True)
+    from cert_watch.scheduler import ScanHistory, record_scan_history
+
+    record_scan_history(db, ScanHistory(hostname, port, "success", scanned_at=now))
     if owner_name:
         hosts.update_owner(host_id, owner_name=owner_name)
     if renewal_method:

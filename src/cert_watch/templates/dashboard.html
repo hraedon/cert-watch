@@ -30,7 +30,7 @@
     <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.7) }}chain incomplete</span>
   {% elif e.chain_status == 'invalid' %}
     <span class="cw-chip t-crit">{{ icons.svg_icon('alert', 11, 1.7) }}chain invalid</span>
-  {% elif e.chain_status == 'unverified' %}
+  {% elif e.chain_status in ('unknown', 'unverified') %}
     <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.7) }}chain not verified</span>
   {% elif e.chain_status == 'self-signed' %}
     <span class="cw-chip t-muted">{{ icons.svg_icon('key', 11, 1.7) }}self-signed</span>
@@ -50,7 +50,7 @@
     {% else %}
       <span class="cw-chip">{{ icons.svg_icon('globe', 12, 1.6) }}Public CT</span>
     {% endif %}
-    {% if grouped or e.source == 'scanned' %}{{ chain_chip(e) }}{% endif %}
+    {% if e.kind != 'pending' %}{{ chain_chip(e) }}{% endif %}
   </div>
 {% endmacro %}
 
@@ -98,9 +98,13 @@
   {% endif %}
 {% endmacro %}
 
+{% macro overall_status(e) %}
+  {{ ui.status(label=e.overall_label, tone=e.overall_tone) }}
+{% endmacro %}
+
 {% block content %}
 <div class="cw-wrap">
-  {% call ui.page_head('Certificates', 'Status covers expiry and chain trust. Grades describe the last TLS scan.', testid='dashboard-heading') %}
+  {% call ui.page_head('Certificates', 'Condition, monitoring, renewal, and delivery are four status axes. Grades describe the last TLS scan.', testid='dashboard-heading') %}
     <div class="cw-menuwrap">
       <button type="button" class="cw-btn" data-menu="export-menu" aria-haspopup="true" aria-expanded="false" id="reports-btn">{{ icons.svg_icon('download', 14) }}Export{{ icons.svg_icon('chevron-down', 13) }}</button>
       <div class="cw-menu cw-hidden" id="export-menu" role="menu" aria-label="Export data">
@@ -115,18 +119,18 @@
     {% endif %}
   {% endcall %}
 
-  {# ---- Stat strip: the cells ARE the urgency filter ---- #}
+  {# ---- Stat strip: condition is expiry-only; trust and monitoring stay separate. ---- #}
   <div class="cw-stats">
     {{ ui.stat('Tracked', tracked_total, 'endpoints / files', icon='shield',
-                href=browse_url(urgency=none) if not pivot_view else none, active=not filter_urgency and not pivot_view) }}
-    {{ ui.stat('Expired', pivot_stats.expired, 'needs attention' if pivot_stats.expired else 'none', tone='t-expired', icon='alert',
-                href=browse_url(urgency='expired') if not pivot_view else none, active=filter_urgency == 'expired') }}
-    {{ ui.stat('Critical', pivot_stats.critical, '< 7 days' if pivot_stats.critical else 'none', tone='t-crit', icon='alert',
-                href=browse_url(urgency='critical') if not pivot_view else none, active=filter_urgency == 'critical') }}
-    {{ ui.stat('Warning', pivot_stats.warning, 'expiry or trust issue' if pivot_stats.warning else 'none', tone='t-warn', icon='clock',
-                href=browse_url(urgency='warning') if not pivot_view else none, active=filter_urgency == 'warning') }}
-    {{ ui.stat('Healthy', pivot_stats.healthy, '30+ days · trusted chain', tone='t-ok', icon='check-circle',
-                href=browse_url(urgency='healthy') if not pivot_view else none, active=filter_urgency == 'healthy') }}
+                href=browse_url(condition=none, grouped=0) if not pivot_view else none, active=not filter_condition and not pivot_view) }}
+    {{ ui.stat('Expired', axis_stats.condition.expired, 'needs attention' if axis_stats.condition.expired else 'none', tone='t-expired', icon='alert',
+                href=browse_url(condition='expired', grouped=0) if not pivot_view else none, active=filter_condition == 'expired') }}
+    {{ ui.stat('≤7 days', axis_stats.condition.le7, 'expiry condition', tone='t-crit', icon='alert',
+                href=browse_url(condition='le7', grouped=0) if not pivot_view else none, active=filter_condition == 'le7') }}
+    {{ ui.stat('8–30 days', axis_stats.condition['8to30'], 'expiry condition', tone='t-warn', icon='clock',
+                href=browse_url(condition='8to30', grouped=0) if not pivot_view else none, active=filter_condition == '8to30') }}
+    {{ ui.stat('OK', axis_stats.condition.ok, 'more than 30 days', tone='t-ok', icon='check-circle',
+                href=browse_url(condition='ok', grouped=0) if not pivot_view else none, active=filter_condition == 'ok') }}
   </div>
 
   {# ---- Filter bar ---- #}
@@ -135,6 +139,10 @@
     <form method="get" action="/browse" class="cw-chiprow">
     <input type="hidden" name="urgency" value="{{ filter_urgency }}">
     <input type="hidden" name="source" value="{{ filter_source }}">
+    {% if filter_condition %}<input type="hidden" name="condition" value="{{ filter_condition }}">{% endif %}
+    {% if filter_monitoring %}<input type="hidden" name="monitoring" value="{{ filter_monitoring }}">{% endif %}
+    {% if filter_renewal %}<input type="hidden" name="renewal" value="{{ filter_renewal }}">{% endif %}
+    {% if filter_delivery %}<input type="hidden" name="delivery" value="{{ filter_delivery }}">{% endif %}
     <input type="hidden" name="sort_by" value="{{ sort_by }}">
     <input type="hidden" name="sort_order" value="{{ sort_order }}">
     <input type="hidden" name="grouped" value="{{ grouped }}">
@@ -158,13 +166,17 @@
   </div>
   {% if pivot_view %}
     <p class="cw-hint">{% if pivot_view == 'calendar' %}Calendar covers scanned and uploaded certificates in your scope.{% else %}Group views cover every endpoint and uploaded file in your scope, the same rows as Inventory.{% endif %} Inventory filters do not apply.</p>
-  {% elif filter_q or filter_urgency or filter_source %}
+  {% elif filter_q or filter_urgency or filter_source or filter_condition or filter_monitoring or filter_renewal or filter_delivery %}
     <div class="cw-chiprow" data-testid="active-inventory-filters">
       <span class="cw-hint">Filters:</span>
       {% if filter_q %}<span class="cw-chip">Search: {{ filter_q }}</span>{% endif %}
       {% if filter_urgency %}<span class="cw-chip">Status: {{ filter_urgency | urgency_label }}</span>{% endif %}
       {% if filter_source %}<span class="cw-chip">Source: {{ filter_source }}</span>{% endif %}
-      <a class="cw-link" href="{{ browse_url(q=none, urgency=none, source=none) }}">Clear filters</a>
+      {% if filter_condition %}<span class="cw-chip">Condition: {{ filter_condition }}</span>{% endif %}
+      {% if filter_monitoring %}<span class="cw-chip">Monitoring: {{ filter_monitoring }}</span>{% endif %}
+      {% if filter_renewal %}<span class="cw-chip">Renewal: {{ filter_renewal }}</span>{% endif %}
+      {% if filter_delivery %}<span class="cw-chip">Delivery: {{ filter_delivery }}</span>{% endif %}
+      <a class="cw-link" href="{{ browse_url(q=none, urgency=none, source=none, condition=none, monitoring=none, renewal=none, delivery=none) }}">Clear filters</a>
     </div>
   {% endif %}
 
@@ -255,7 +267,7 @@
             <td data-label="Tags">{{ tags_cell(e) }}</td>
             <td data-label="Source">{{ source_cell(e, grouped=true) }}</td>
             <td data-label="Expires">{{ expires_cell(e, urg) }}</td>
-            <td data-label="Status">{{ ui.status(urg) }}{{ freshness_cell(e) }}</td>
+            <td data-label="Status">{{ overall_status(e) }}{{ freshness_cell(e) }}</td>
             <td data-label="Grade">{{ grade_cell(e) }}</td>
             <td data-label="Action">
               <div class="cw-rowact">
@@ -269,7 +281,7 @@
               <div class="row">
                 <a href="/certificates/{{ h.id }}" class="cw-id">{{ h.host }}</a>
                 {% set h_urg = h.urgency %}
-                {{ ui.status(h_urg) }}
+                {{ overall_status(h) }}
                 {{ freshness_cell(h) }}
                 {% if h.scan_status == 'failure' %}
                   <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.7) }}{{ h.scan_error or 'scan failed' }}</span>
@@ -312,7 +324,7 @@
             <td data-label="Tags">{{ tags_cell(e) }}</td>
             <td data-label="Source">{{ source_cell(e) }}</td>
             <td data-label="Expires">{{ expires_cell(e, urg) }}</td>
-            <td data-label="Status">{{ ui.status(urg) }}{{ freshness_cell(e) }}</td>
+            <td data-label="Status">{{ overall_status(e) }}{{ freshness_cell(e) }}</td>
             <td data-label="Grade">{{ grade_cell(e) }}</td>
             <td data-label="Action">
               <div class="cw-rowact">
@@ -336,7 +348,7 @@
     {% if pivot_groups is not none and not pivot_groups %}
       {{ ui.empty('Nothing to group yet', 'Add a host or upload a certificate file to use group views.', testid='empty-pivot') }}
     {% elif not entries and pivot_groups is none %}
-      {% if filter_q or filter_urgency or filter_source %}
+      {% if filter_q or filter_urgency or filter_source or filter_condition or filter_monitoring or filter_renewal or filter_delivery %}
         {{ ui.empty('No matching certificates', 'Try a different search or filter.') }}
       {% else %}
         {% call ui.empty('No certificates yet', 'Scan a host, upload a certificate file, or import a list of hosts to start watching your estate.', icon='plus', tone='t-accent', testid='empty-onboarding') %}

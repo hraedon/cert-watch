@@ -329,6 +329,9 @@ def record_cert_history(
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 params,
             )
+            from cert_watch.renewal_analytics import refresh_endpoint_analytics
+
+            refresh_endpoint_analytics(conn, hostname, port)
             conn.commit()
     else:
         conn.execute(
@@ -339,6 +342,9 @@ def record_cert_history(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             params,
         )
+        from cert_watch.renewal_analytics import refresh_endpoint_analytics
+
+        refresh_endpoint_analytics(conn, hostname, port)
     return row_id
 
 
@@ -353,8 +359,18 @@ def purge_old_history(db_path: str | Path, retention_days: int) -> int:
     try:
         init_schema(db_path)
         with _connect(db_path) as conn:
+            endpoints = conn.execute(
+                """SELECT DISTINCT hostname, port FROM cert_history
+                   WHERE scanned_at < ? AND hostname IS NOT NULL AND port IS NOT NULL""",
+                (cutoff,),
+            ).fetchall()
             cur = conn.execute("DELETE FROM cert_history WHERE scanned_at < ?", (cutoff,))
             deleted = cur.rowcount
+            if deleted:
+                from cert_watch.renewal_analytics import refresh_endpoint_analytics
+
+                for hostname, port in endpoints:
+                    refresh_endpoint_analytics(conn, str(hostname), int(port))
             conn.commit()
         if deleted:
             import logging

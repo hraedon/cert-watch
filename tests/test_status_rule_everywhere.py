@@ -19,6 +19,7 @@ for at most the rows shown, never for the estate.
 from __future__ import annotations
 
 import datetime as dt
+import uuid
 from collections import Counter
 from pathlib import Path
 from urllib.parse import quote
@@ -101,6 +102,7 @@ def _seed(db: Path, *, with_anchor: bool = True) -> Certificate:
         replace_scanned,
     )
     from cert_watch.database.connection import _connect
+    from cert_watch.scheduler import ScanHistory, record_scan_history
     from cert_watch.upload import UploadedEntry, store_uploaded
 
     init_schema(db)
@@ -130,6 +132,15 @@ def _seed(db: Path, *, with_anchor: bool = True) -> Certificate:
         leaf, _ = _issue(host, days, issuer, ca=False)
         chain = [inters[inter][0]] if inter else []
         replace_scanned(db, host, int(port), leaf, chain, bool(inter))
+        record_scan_history(
+            db,
+            ScanHistory(
+                host,
+                int(port),
+                "success",
+                scanned_at=NOW - dt.timedelta(minutes=10),
+            ),
+        )
     for key, _owner, _method, days, inter, _status, _eff in ROWS:
         if ":" in key:
             continue
@@ -156,6 +167,39 @@ def test_browse_rows_carry_the_expected_status(estate):
         assert r.get("effective_days") == EFFECTIVE[_row_key(r)], _row_key(r)
 
 
+def test_uploaded_chain_warning_agrees_between_browse_and_api(
+    estate, reload_app, monkeypatch
+):
+    import re
+
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", lambda self: None)
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.stop", lambda self: None)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        api_rows = client.get("/api/certificates?limit=50").json()["certificates"]
+        html = client.get("/browse?grouped=0").text
+    uploaded = next(
+        row for row in api_rows if "upload-untrusted.example.test" in row["subject"]
+    )
+    assert uploaded["overall_state"] == "warning"
+    row = next(
+        (
+            value
+            for value in re.findall(
+                r'<tr[^>]*data-testid="cert-row"[^>]*>.*?</tr>', html, flags=re.DOTALL
+            )
+            if "upload-untrusted.example.test" in value
+        ),
+        None,
+    )
+    assert row is not None
+    assert "Warning" in row
+    assert "chain not verified" in row
+    assert ">OK<" not in row
+
+
 def test_status_filter_selects_the_rows_with_that_status(estate):
     from cert_watch.database import list_dashboard_page
 
@@ -176,7 +220,7 @@ def test_home_cards_and_group_view_cards_count_the_rows(estate):
             estate, q=None, urgency=None, source=None, sort_by="days", sort_order="asc",
             page=1, grouped=0, view=view, scope_tags=(), sched_hour=6, sched_min=0,
         )
-        assert data.pivot_stats == STATUS_COUNTS, view
+        assert data.pivot_stats == {**STATUS_COUNTS, "failing": 0, "gray": 0}, view
         assert data.tracked_total == len(ROWS), view
 
 
@@ -283,7 +327,118 @@ def test_posture_and_metrics_count_the_same_certificates(estate, tmp_path, reloa
         if line.startswith("cert_watch_certificates_by_urgency{"):
             label = line.split('urgency="', 1)[1].split('"', 1)[0]
             got[label] = int(float(line.rsplit(" ", 1)[1]))
-    assert got == STATUS_COUNTS
+    assert got == {**STATUS_COUNTS, "failing": 0, "gray": 0}
+
+
+def test_request_routing_and_analytics_work_is_bounded_to_returned_rows(
+    tmp_path, reload_app, monkeypatch
+):
+    from fastapi.testclient import TestClient
+
+    from cert_watch.database import SqliteHostRepository, init_schema, replace_scanned
+    from cert_watch.database.connection import _connect
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    hosts = SqliteHostRepository(db)
+    cert_id = ""
+    for index in range(80):
+        hostname = f"scale-{index:03d}.example.test"
+        hosts.add(hostname, 443)
+        cert, _ = _issue(hostname, 90, None, ca=False)
+        cert_id, _, _ = replace_scanned(db, hostname, 443, cert, [], True)
+
+    # Exercise real history-derived renewal evidence in the scaling guard.
+    # Each endpoint has two observed renewals; alternating long-lived/manual
+    # and regular ACME-like short-lived histories prevent an empty-history
+    # shortcut from satisfying the work bound.
+    history_rows = []
+    for index in range(80):
+        hostname = f"scale-{index:03d}.example.test"
+        lifetime = 90 if index % 2 == 0 else 365
+        issuer = "CN=Let's Encrypt Test CA" if index % 2 == 0 else "CN=Example Test CA"
+        offsets = (180, 120, 60) if index % 2 == 0 else (240, 160, 80)
+        for period, days_ago in enumerate(offsets):
+            scanned_at = NOW - dt.timedelta(days=days_ago)
+            not_before = scanned_at - dt.timedelta(days=1)
+            history_rows.append(
+                (
+                    str(uuid.uuid4()),
+                    hostname,
+                    443,
+                    f"history-{index}-{period}",
+                    issuer,
+                    (not_before + dt.timedelta(days=lifetime)).isoformat(),
+                    scanned_at.isoformat(),
+                    not_before.isoformat(),
+                )
+            )
+    with _connect(db) as conn:
+        conn.executemany(
+            """INSERT INTO cert_history
+               (id, hostname, port, fingerprint_sha256, issuer, not_after,
+                scanned_at, not_before) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            history_rows,
+        )
+        conn.commit()
+
+    import cert_watch.alerting.routing as routing
+    import cert_watch.database.dashboard_axes as dashboard_axes
+    import cert_watch.renewal_analytics as analytics
+    import cert_watch.routes.dashboard as dashboard_routes
+    import cert_watch.services.browse_page as browse_service
+    import cert_watch.status_model as status_model
+
+    real_routing = routing.resolve_routing
+    real_analytics = analytics.compute_endpoint_analytics
+    real_monitoring = status_model.monitoring_state
+    real_axis_stats = dashboard_axes.dashboard_axis_stats
+    work = {"routing": 0, "analytics": 0, "monitoring": 0, "aggregates": 0}
+
+    def count_routing(path, cert_ids):
+        work["routing"] += len(cert_ids)
+        return real_routing(path, cert_ids)
+
+    def count_analytics(path, endpoints):
+        work["analytics"] += len(endpoints)
+        return real_analytics(path, endpoints)
+
+    def count_monitoring(*args, **kwargs):
+        work["monitoring"] += 1
+        return real_monitoring(*args, **kwargs)
+
+    def count_axis_stats(*args, **kwargs):
+        work["aggregates"] += 1
+        return real_axis_stats(*args, **kwargs)
+
+    monkeypatch.setattr(routing, "resolve_routing", count_routing)
+    monkeypatch.setattr(analytics, "compute_endpoint_analytics", count_analytics)
+    monkeypatch.setattr(status_model, "monitoring_state", count_monitoring)
+    monkeypatch.setattr(dashboard_axes, "dashboard_axis_stats", count_axis_stats)
+    monkeypatch.setattr(dashboard_routes, "dashboard_axis_stats", count_axis_stats)
+    monkeypatch.setattr(browse_service, "dashboard_axis_stats", count_axis_stats)
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", lambda self: None)
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.stop", lambda self: None)
+    app_mod = reload_app()
+
+    limits = {
+        "/": (50, 1),
+        "/browse?grouped=0": (25, 1),
+        "/api/hosts?limit=10": (10, 0),
+        f"/api/certificates/{cert_id}": (1, 0),
+    }
+    with TestClient(app_mod.app) as client:
+        for path, (maximum, aggregate_passes) in limits.items():
+            work.update(routing=0, analytics=0, monitoring=0, aggregates=0)
+            response = client.get(path)
+            assert response.status_code == 200, path
+            assert work["routing"] <= maximum, (path, work)
+            assert work["analytics"] <= maximum, (path, work)
+            assert work["aggregates"] == aggregate_passes, (path, work)
+            # Each estate aggregate may classify every monitored endpoint
+            # once. Outside that explicit pass, list/detail work is bounded by
+            # the number of rows the response can return.
+            assert work["monitoring"] <= 80 * aggregate_passes + maximum, (path, work)
 
 
 def test_grouped_browse_filter_uses_the_same_status(estate):
@@ -399,6 +554,7 @@ def test_group_views_and_cards_do_not_build_the_estate(big_estate):
     from cert_watch.database import (
         dashboard_urgency_stats,
         get_pivot_group_entries,
+        list_dashboard_grouped_page,
         list_dashboard_page,
     )
     from cert_watch.services.browse_page import load_browse_page
@@ -423,6 +579,7 @@ def test_group_views_and_cards_do_not_build_the_estate(big_estate):
     assert built(lambda: get_pivot_group_entries(db, "owner", "Small")) == 2
     assert built(lambda: list_dashboard_page(db, per_page=25)) <= 25
     assert built(lambda: list_dashboard_page(db, urgency="warning", per_page=25)) <= 25
+    assert built(lambda: list_dashboard_grouped_page(db, per_page=25)) <= 25
 
 
 def test_steady_state_recomputes_no_chain_status(big_estate):
@@ -614,8 +771,15 @@ def test_an_injected_instant_reaches_the_rows_too(boundary, monkeypatch):
     from freezegun import freeze_time
 
     from cert_watch.database import get_pivot_group_entries, list_dashboard_page, list_fleet_pivot
+    from cert_watch.scheduler import ScanHistory, record_scan_history
 
     monkeypatch.setattr("cert_watch.cert_chain.chain_status", lambda *a: "public")
+    record_scan_history(
+        boundary,
+        ScanHistory(
+            "boundary.example.test", 443, "success", scanned_at=REFERENCE - dt.timedelta(hours=1)
+        ),
+    )
     with freeze_time(REFERENCE + dt.timedelta(seconds=1)):
         rows, total = list_dashboard_page(boundary, urgency="warning", per_page=25, now=REFERENCE)
         assert total == 1

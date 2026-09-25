@@ -17,10 +17,10 @@ from cert_watch.auth.guards import get_auth_context, write_form_guard
 from cert_watch.auth.scope import ScopeDeniedError, writable_scope_tags
 from cert_watch.database import (
     AlertStore,
-    dashboard_urgency_stats,
+    dashboard_axis_stats,
+    dashboard_inventory_count,
     get_write_lock,
     list_calendar,
-    list_dashboard_page,
 )
 from cert_watch.database.chain_status_cache import prepare_status
 from cert_watch.database.connection import _connect
@@ -39,6 +39,11 @@ from cert_watch.security.csrf import get_csrf_context
 from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
 from cert_watch.services.alert_state import mark_all_alerts_read as mark_all_alerts_read_service
 from cert_watch.services.browse_page import load_browse_page
+from cert_watch.status_model import (
+    AxisSettings,
+    invalid_status_filters,
+    prepare_status_model_context,
+)
 
 logger = logging.getLogger("cert_watch.routes.dashboard")
 
@@ -49,7 +54,10 @@ templates = get_templates()
 
 # Query params that belong to the inventory table (now at /browse). A request
 # for / carrying any of them is a legacy bookmark — redirect to /browse.
-_BROWSE_PARAMS = {"q", "urgency", "source", "sort_by", "sort_order", "page", "grouped", "view"}
+_BROWSE_PARAMS = {
+    "q", "urgency", "source", "condition", "monitoring", "renewal", "delivery",
+    "sort_by", "sort_order", "page", "grouped", "view",
+}
 
 
 @router.get("/", response_model=None)
@@ -73,19 +81,34 @@ def home(
     # One status context for the page: the queue, the cards and the total
     # are judged at one instant with one chain status per certificate.
     status = prepare_status(db)
+    axis_settings = AxisSettings.from_settings(settings)
+    axes = prepare_status_model_context(
+        db, certificate_status=status, settings=axis_settings
+    )
     items, queue_total = attention_queue_page(
         db, scope_tags=scope_tags, window_days=settings.renewal_window_days,
         scan_evidence=scan_evidence, status=status,
     )
-    stats = dashboard_urgency_stats(db, scope_tags=scope_tags, status=status)
-    _, tracked_total = list_dashboard_page(
-        db, per_page=1, scope_tags=scope_tags, status=status
+    axis_stats = dashboard_axis_stats(
+        db,
+        scope_tags=scope_tags,
+        status=status,
+        axes=axes,
+        axis_columns=frozenset({"condition", "monitoring"}),
     )
+    stats = {
+        "expired": axis_stats["condition"]["expired"],
+        "critical": axis_stats["condition"]["le7"],
+        "warning": axis_stats["condition"]["8to30"],
+        "healthy": axis_stats["condition"]["ok"],
+    }
+    tracked_total = dashboard_inventory_count(db, scope_tags=scope_tags)
 
     view = present_home(
         queue=items,
         queue_total=queue_total,
         stats=stats,
+        axis_stats=axis_stats,
         tracked_total=tracked_total,
         scan_coverage=summarize_scan_evidence(scan_evidence),
         calendar=list_calendar(db, bucket="week", scope_tags=scope_tags),
@@ -119,12 +142,33 @@ def dashboard(
     q: str | None = None,
     urgency: str | None = None,
     source: str | None = None,
+    condition: str | None = None,
+    monitoring: str | None = None,
+    renewal: str | None = None,
+    delivery: str | None = None,
     sort_by: str = "days",
     sort_order: str = "asc",
     page: int = 1,
     grouped: int = 1,
     view: str = "",
 ) -> HTMLResponse:
+    invalid_filters = invalid_status_filters(
+        condition=condition,
+        monitoring=monitoring,
+        renewal=renewal,
+        delivery=delivery,
+    )
+    if invalid_filters:
+        ignored = ", ".join(f"{name}={value}" for name, value in invalid_filters.items())
+        notice = notice or f"Ignored unknown filter: {ignored}"
+        if "condition" in invalid_filters:
+            condition = None
+        if "monitoring" in invalid_filters:
+            monitoring = None
+        if "renewal" in invalid_filters:
+            renewal = None
+        if "delivery" in invalid_filters:
+            delivery = None
     db = _db_path(request)
     auth_ctx = getattr(request.state, "auth_context", None)
     scope_tags = scope_tags_from_auth(auth_ctx)
@@ -134,6 +178,10 @@ def dashboard(
         q=q,
         urgency=urgency,
         source=source,
+        condition=condition,
+        monitoring=monitoring,
+        renewal=renewal,
+        delivery=delivery,
         sort_by=sort_by,
         sort_order=sort_order,
         page=page,
@@ -142,6 +190,7 @@ def dashboard(
         scope_tags=scope_tags,
         sched_hour=settings.sched_hour,
         sched_min=settings.sched_min,
+        axis_settings=AxisSettings.from_settings(settings),
     )
     presented = present_browse(data, now=datetime.now(UTC))
 

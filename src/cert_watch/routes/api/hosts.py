@@ -18,14 +18,17 @@ from cert_watch.auth.guards import (
     write_guard,
 )
 from cert_watch.auth.scope import ScopeDeniedError
-from cert_watch.database import SqliteHostRepository
+from cert_watch.database import SqliteHostRepository, list_dashboard_page
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth
 from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth
 from cert_watch.routes.api._shared import (
     JsonBodyError,
     _normalize_pagination,
     _pagination_links,
+    delivery_details_allowed,
     json_body,
+    status_filter_error,
+    status_for_api,
     tags_from_json_body,
 )
 from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit, rate_limit
@@ -59,6 +62,7 @@ from cert_watch.services.resource_metadata import (
     update_host_notes,
     update_host_tags,
 )
+from cert_watch.status_model import AxisSettings
 
 logger = logging.getLogger("cert_watch.routes.api.hosts")
 
@@ -212,35 +216,42 @@ async def api_scan_all_hosts(
 
 @router.get("/api/hosts")
 def api_list_hosts(
-    request: Request, _auth: str = Depends(require_auth), page: int = 1, limit: int = 50
+    request: Request,
+    _auth: str = Depends(require_auth),
+    page: int = 1,
+    limit: int = 50,
+    condition: str | None = None,
+    monitoring: str | None = None,
+    renewal: str | None = None,
+    delivery: str | None = None,
 ) -> JSONResponse:
+    filter_error = status_filter_error(
+        condition=condition,
+        monitoring=monitoring,
+        renewal=renewal,
+        delivery=delivery,
+    )
+    if filter_error is not None:
+        return filter_error
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
-
-    if scope_tags:
-        from cert_watch.database.connection import _connect
-        from cert_watch.database.dashboard import _add_effective_tag_filter
-
-        count_sql = "SELECT COUNT(*) FROM hosts h WHERE 1=1"
-        count_sql, count_params = _add_effective_tag_filter(
-            count_sql, [], scope_tags, col_cert=None, col_host="h.tags"
-        )
-        page_sql = "SELECT h.* FROM hosts h WHERE 1=1"
-        page_sql, page_params = _add_effective_tag_filter(
-            page_sql, [], scope_tags, col_cert=None, col_host="h.tags"
-        )
-        page_sql += " ORDER BY h.added_at LIMIT ? OFFSET ?"
-        with _connect(db) as conn:
-            total = conn.execute(count_sql, count_params).fetchone()[0]
-        page, limit, pages, offset = _normalize_pagination(page, limit, total)
-        with _connect(db) as conn:
-            host_rows = conn.execute(page_sql, [*page_params, limit, offset]).fetchall()
-        page_hosts = [SqliteHostRepository(db)._row_to_host(r) for r in host_rows]
-    else:
-        repo = SqliteHostRepository(db)
-        total = repo.count_all()
-        page, limit, pages, offset = _normalize_pagination(page, limit, total)
-        page_hosts = repo.list_page(offset=offset, limit=limit)
+    limit = min(max(limit, 1), 200)
+    rows, total = list_dashboard_page(
+        db,
+        source="scanned",
+        sort_by="added_at",
+        page=max(page, 1),
+        per_page=limit,
+        scope_tags=scope_tags,
+        axis_settings=AxisSettings.from_settings(_get_settings(request)),
+        condition=condition,
+        monitoring=monitoring,
+        renewal=renewal,
+        delivery=delivery,
+    )
+    page, limit, pages, _offset = _normalize_pagination(page, limit, total)
+    repo = SqliteHostRepository(db)
+    page_hosts = [(repo.get(str(row["host_id"])), row["status"]) for row in rows]
 
     return JSONResponse(
         content={
@@ -258,8 +269,13 @@ def api_list_hosts(
                     "notes": h.notes,
                     "expected_issuers": h.expected_issuers,
                     "added_at": h.added_at.isoformat(),
+                    "status": status_for_api(
+                        status,
+                        reveal_delivery_details=delivery_details_allowed(request),
+                    ),
                 }
-                for h in page_hosts
+                for h, status in page_hosts
+                if h is not None
             ],
             "pagination": {
                 "page": page,

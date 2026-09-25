@@ -65,6 +65,7 @@ from cert_watch.services.resource_metadata import (
 from cert_watch.services.resource_metadata import (
     update_certificate_tags as persist_certificate_tags,
 )
+from cert_watch.status_model import AxisSettings
 
 logger = logging.getLogger("cert_watch.routes.certificates")
 
@@ -111,6 +112,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
         scope_tags=scope_tags,
         sched_hour=settings.sched_hour,
         sched_min=settings.sched_min,
+        axis_settings=AxisSettings.from_settings(settings),
     )
     if data is None or isinstance(data, PendingHostDetailData):
         moved = _redirect_to_current_certificate(request, db, cert_id)

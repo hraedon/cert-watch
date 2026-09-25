@@ -971,6 +971,10 @@ class SqliteHostRepository:
                 "DELETE FROM cert_history WHERE hostname = ? AND port = ?",
                 (hostname, port),
             )
+            conn.execute(
+                "DELETE FROM endpoint_renewal_analytics WHERE hostname = ? AND port = ?",
+                (hostname, port),
+            )
             # event_log has no host column; match the JSON payload's endpoint.
             # Hostname AND port: one name can be monitored on two ports by two
             # teams, and deleting one must not erase the other's history.
