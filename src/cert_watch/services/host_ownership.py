@@ -17,6 +17,7 @@ from cert_watch.audit import export_audit, record_audit
 from cert_watch.auth.scope import (
     ScopeDeniedError,
     ensure_write_scope,
+    ensure_write_scope_on,
     require_auth_context,
     write_scope_error,
 )
@@ -238,6 +239,10 @@ def update_host_ownership(
                 ensure_not_superseded(
                     conn, named_cert, auth=auth, hidden=_unknown_answer(auth, db_path)
                 )
+            # Authoritative scope check, as the target stands in this
+            # transaction: a host moved to another team since the check
+            # above is refused (#115 review round 10).
+            ensure_write_scope_on(conn, auth, **target.scope_target())
             updated = persist_host_ownership(conn, host_id, **detail)
             if updated is None:
                 raise HostNotFoundError("host not found")

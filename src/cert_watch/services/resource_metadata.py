@@ -23,6 +23,7 @@ from cert_watch.audit import export_audit, record_audit
 from cert_watch.auth.scope import (
     ensure_new_tags_in_scope,
     ensure_write_scope,
+    ensure_write_scope_on,
     require_auth_context,
     unknown_target_scope_error,
 )
@@ -128,6 +129,7 @@ def update_host_notes(
         event = _transact(
             db_path,
             persist=lambda conn: persist_host_notes(conn, host_id, value),
+            guard=lambda conn: ensure_write_scope_on(conn, auth, host_id=host_id),
             action="host.update_notes",
             target_type="host",
             target_id=host_id,
@@ -165,6 +167,7 @@ def update_host_tags(
         event = _transact(
             db_path,
             persist=lambda conn: persist_host_tags(conn, host_id, normalized),
+            guard=lambda conn: ensure_write_scope_on(conn, auth, host_id=host_id),
             action="host.update_tags",
             target_type="host",
             target_id=host_id,
@@ -190,6 +193,12 @@ def update_certificate_tags(
         def hidden() -> Exception:
             return unknown_target_scope_error(auth, db_path)
 
+        def guard(conn: sqlite3.Connection) -> None:
+            # Inside the write transaction, immediately before the write:
+            # lineage, then the authoritative scope check (#115 rounds 3, 10).
+            ensure_not_superseded(conn, cert_id, auth=auth, hidden=hidden)
+            ensure_write_scope_on(conn, auth, cert_id=cert_id)
+
         refuse_if_superseded(db_path, cert_id, auth=auth, hidden=hidden)
         ensure_write_scope(auth, db_path, cert_id=cert_id)
         normalized = normalize_tags(_value(tags))
@@ -197,7 +206,7 @@ def update_certificate_tags(
         event = _transact(
             db_path,
             persist=lambda conn: persist_certificate_tags(conn, cert_id, normalized),
-            guard=lambda conn: ensure_not_superseded(conn, cert_id, auth=auth, hidden=hidden),
+            guard=guard,
             action="cert.update_tags",
             target_type="certificate",
             target_id=cert_id,

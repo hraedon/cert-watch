@@ -66,7 +66,11 @@ All notable changes to cert-watch are documented in this file.
   doesn't reveal that the id was real. Only a renewal counts: an id whose
   certificate was deleted is an ordinary "not found". The check and the
   change happen in one database transaction, so a scan in another process
-  can't renew the certificate in between. Assigning a certificate to an
+  can't renew the certificate in between. The caller's tag scope is checked
+  again in that transaction, just before the change, for certificate
+  deletes, certificate tags, ownership and host notes and tags: a host
+  moved to another team while the request was in flight is refused, not
+  changed on the new team's behalf. Assigning a certificate to an
   alert group also checks, in that transaction, that the group and the
   certificate still exist. Removing a certificate from an alert group it
   isn't assigned to now answers 404 instead of "unassigned" (#113).

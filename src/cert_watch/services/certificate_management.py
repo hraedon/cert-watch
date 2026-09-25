@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,7 @@ from cert_watch.audit import record_audit
 from cert_watch.auth.scope import (
     ensure_new_tags_in_scope,
     ensure_write_scope,
+    ensure_write_scope_on,
     require_auth_context,
     unknown_target_scope_error,
 )
@@ -122,12 +124,18 @@ def delete_certificate(
         def hidden() -> Exception:
             return unknown_target_scope_error(auth, db_path)
 
+        def guard(conn: sqlite3.Connection) -> None:
+            # Inside the write transaction, immediately before the write:
+            # lineage, then the authoritative scope check (#115 rounds 3, 10).
+            ensure_not_superseded(conn, cert_id, auth=auth, hidden=hidden)
+            ensure_write_scope_on(conn, auth, cert_id=cert_id)
+
         refuse_if_superseded(db_path, cert_id, auth=auth, hidden=hidden)
         ensure_write_scope(auth, db_path, cert_id=cert_id)
         deleted = delete_certificate_cascade(
             db_path,
             cert_id,
-            guard=lambda conn: ensure_not_superseded(conn, cert_id, auth=auth, hidden=hidden),
+            guard=guard,
         )
     if deleted:
         # A delete that removed nothing is not an event worth auditing.
