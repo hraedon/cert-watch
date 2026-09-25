@@ -23,6 +23,20 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
+## Upgrading from 1.0.3 (unreleased)
+
+The manual `renewed` host status has been removed. Operators can still mark a
+renewal `in_progress`, which suppresses renewal-stalled notices only; expiry
+warnings and expired alerts always remain active until a scan observes a
+successor certificate.
+
+Migration **0041** changes every stored `renewed` status to `pending` and
+writes one audit-log row for each host changed. Scripts that send
+`renewal_status: "renewed"` to either host write API must be updated: the
+request now receives a `400` or `422` validation error instead of being
+accepted. Use `in_progress` only while work is underway, or omit the field/use
+`pending` when it is not.
+
 ## Upgrading from 1.0.2 to 1.0.3
 
 One schema migration, **0038**, rewrites every stored host name to one

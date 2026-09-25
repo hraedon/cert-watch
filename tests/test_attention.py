@@ -203,7 +203,7 @@ class TestQueueAssembly:
         assert items[0]["severity"] == "stalled"
         assert repo.list_for_cert(cert_id) == before  # Home only reads current state.
 
-    @pytest.mark.parametrize("resolution", ["in_progress", "renewed", "successor"])
+    @pytest.mark.parametrize("resolution", ["in_progress", "successor"])
     def test_handled_condition_clears_despite_pending_notification(self, db: Path, resolution):
         from cert_watch.attention import build_attention_queue
 

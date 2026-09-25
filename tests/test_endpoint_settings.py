@@ -132,6 +132,40 @@ def test_invalid_settings_do_not_partially_save(reload_app, endpoint, changes):
     assert _audit(db) == []
 
 
+def test_renewed_status_is_rejected_by_form_and_json_apis(reload_app, endpoint):
+    db, repo, host_id = endpoint
+    before = repo.get(host_id)
+    app = reload_app().app
+    with TestClient(app) as client:
+        form = client.post(
+            f"/hosts/{host_id}/settings",
+            data=_form(renewal_status="renewed"),
+            follow_redirects=False,
+        )
+        settings_api = client.patch(
+            f"/api/hosts/{host_id}/settings",
+            json={
+                "scan_interval_hours": 6,
+                "threshold_days": 21,
+                "renewal_status": "renewed",
+            },
+        )
+        owner_api = client.patch(
+            f"/api/hosts/{host_id}/owner",
+            json={"renewal_status": "renewed"},
+        )
+
+    assert form.status_code == 303
+    form_error = parse_qs(urlsplit(form.headers["location"]).query)["endpoint_error"][0]
+    assert "valid operator-reported renewal status" in form_error
+    assert settings_api.status_code == 422
+    assert "renewal_status" in settings_api.json()["error"]
+    assert owner_api.status_code == 400
+    assert "renewal_status" in owner_api.json()["error"]
+    assert repo.get(host_id) == before
+    assert _audit(db) == []
+
+
 @pytest.mark.parametrize("legacy", [0, -1, 9999])
 def test_legacy_scan_interval_survives_unchanged_edit(reload_app, endpoint, legacy):
     db, repo, host_id = endpoint
@@ -171,7 +205,8 @@ def test_endpoint_editor_shows_state_without_claiming_verified_renewal(
         assert 'name="threshold_days"' in page.text
         assert 'name="renewal_status"' in page.text
         assert "not proof of renewal" in page.text
-        assert "suppresses new expiry alerts until the next successful scan" in page.text
+        assert "Complete — operator reported" not in page.text
+        assert "suppresses new expiry alerts" not in page.text
         assert "Legacy CA" in page.text
         assert "not monitored" in page.text
         assert 'name="expected_issuers"' not in page.text

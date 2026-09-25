@@ -20,7 +20,7 @@ def renewal_window_candidates(
 
     Home and notification generation share this predicate: a leaf is inside
     the configured window, has no successor, and its host is not marked as
-    renewed or in progress. Delivery success/failure does not resolve it.
+    in progress. Delivery success/failure does not resolve it.
     Each result contains the certificate fields, days_remaining, and owner.
     """
     if window_days <= 0:
@@ -54,7 +54,7 @@ def renewal_window_candidates(
         if days < 0 or days > window_days:
             continue  # expired (expiry_warning owns it) or outside the window
         owner = host_owners.get((leaf["hostname"], leaf["port"]), {})
-        if owner.get("renewal_status") in ("renewed", "in_progress"):
+        if owner.get("renewal_status") == "in_progress":
             continue  # operator has flagged renewal as handled
         candidates.append({**dict(leaf), "days_remaining": days, "owner": owner})
     return candidates

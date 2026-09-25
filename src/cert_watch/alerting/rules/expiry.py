@@ -78,10 +78,6 @@ def evaluate_thresholds(
         thresholds = urgent_thresholds or ((min(thresholds),) if thresholds else ())
     cid = cert_id or cert.fingerprint_sha256
 
-    # Suppress alerts when renewal is complete.
-    if owner_info and owner_info.get("renewal_status") == "renewed":
-        return []
-
     # Collect existing alerts scoped to the current alert_type so that
     # renewal_stalled / policy_violation rows don't interfere with expiry
     # thresholds. Lifecycle failures stay terminal. Migration-marked legacy

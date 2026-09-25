@@ -2,6 +2,26 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- An operator-reported renewal can no longer suppress expiry warnings or
+  expired alerts. This includes failed-scan scenarios where the replacement
+  certificate cannot be observed (#117).
+- Legacy failed expiry alerts are eligible for revival based on certificate
+  state alone; a stale host renewal report no longer keeps them failed.
+
+### Changed
+
+- Removed the manual `renewed` host status from the detail page, form service,
+  and JSON APIs. `pending` and `in_progress` remain; `in_progress` suppresses
+  renewal-stalled notices only. Requests that send `renewed` now return a
+  validation error.
+- Migration **0041** resets stored `renewed` statuses to `pending` and records
+  one audit entry per changed host. Migration ids 0039 and 0040 are reserved by
+  the work in pull request #114.
+
 ## [1.0.3] - 2026-09-24
 
 A security release for installations with tag-scoped roles. Scoped users could

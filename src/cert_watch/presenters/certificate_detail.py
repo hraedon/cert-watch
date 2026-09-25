@@ -322,7 +322,6 @@ def _host_info(host: Any, settings_writable: bool) -> HostInfoView:
         renewal_status_label={
             "pending": "No completion reported",
             "in_progress": "In progress — operator reported",
-            "renewed": "Complete — operator reported",
         }.get(status, status),
         scan_cadence_label=(
             f"Every {interval} hours" if interval and interval > 0 else "Daily schedule"

@@ -179,7 +179,9 @@ def test_routing_matrix_delivers_exact_recipient_unions(db, tmp_path, monkeypatc
 
     repo = SqliteAlertRepository(db)
     created = evaluate_all_certs(db, repo)
-    assert Counter(alert.cert_id for alert in created) == Counter(cert_ids.values())
+    assert Counter(alert.cert_id for alert in created) == Counter(
+        [*cert_ids.values(), renewed_id]
+    )
     assert all(alert.threshold_days == 7 for alert in created)
     # Re-evaluation while delivery is pending must not multiply a multi-match alert.
     assert evaluate_all_certs(db, repo) == []
@@ -191,7 +193,7 @@ def test_routing_matrix_delivers_exact_recipient_unions(db, tmp_path, monkeypatc
     ):
         fallback = WebhookConfig(url=http.url("/global"), allow_private=True)
         assert process_pending(repo, _smtp_config(smtp), fallback) == {
-            "sent": len(cases), "failed": 0, "deferred": 0,
+            "sent": len(cases) + 1, "failed": 0, "deferred": 0,
         }
         _assert_receipts(smtp, {host: recipients for host, (_, recipients) in cases.items()})
         assert http.requests == []  # SMTP success does not also fan out to a webhook.

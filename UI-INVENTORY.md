@@ -118,9 +118,9 @@ automatic thresholds. Existing owner/contact/method/runbook editing stays in
 its existing form. The two forms do not overwrite each other's fields.
 
 Renewal status is explicitly an operator report: in-progress suppresses new
-stalled notices; complete also suppresses new expiry notices until the next
-successful scan resets it. Existing queued notifications are unaffected. This
-control is not proof of certificate replacement.
+stalled notices and the Home stalled status. It never suppresses expiry or
+expired alerts. Completion is observed only when a scan sees a successor
+certificate; operators cannot report a completed renewal manually.
 
 Home's **Scan coverage** panel counts the visible registered endpoints, excluding
 uploads. Browse shows per-endpoint scan evidence, including grouped deployments.
@@ -138,7 +138,7 @@ group chips were removed because they did not establish historical delivery.
 | Column | Write path(s) | UI surface |
 |---|---|---|
 | `hosts.expected_issuers` | Existing admin form/API write paths retained for compatibility | Read-only legacy value on details for admins, explicitly not monitored after CT removal. No new policy editor. |
-| `hosts.renewal_status` | `POST /hosts/{id}/settings`; existing `PATCH /api/hosts/{id}/owner` | Endpoint settings; explicitly operator-reported with suppression/reset help. |
+| `hosts.renewal_status` | `POST /hosts/{id}/settings`; existing `PATCH /api/hosts/{id}/owner` | Endpoint settings; `pending` or operator-reported `in_progress`, which suppresses only renewal-stalled notices. |
 | `hosts.scan_interval_hours` | `POST /hosts`, CSV, and `POST /hosts/{id}/settings` | Endpoint settings editor; no creation drawer field. |
 | `hosts.threshold_days` | `POST /hosts`, CSV, and `POST /hosts/{id}/settings` | Creation drawer and endpoint settings editor. |
 

@@ -497,7 +497,7 @@ def update_host_settings(
             raise HostValidationError(
                 "Alert threshold must be a positive whole number within the stored range."
             )
-        if update.renewal_status not in {"pending", "in_progress", "renewed"}:
+        if update.renewal_status not in {"pending", "in_progress"}:
             raise HostValidationError("Choose a valid operator-reported renewal status.")
         if not repo.update_settings(
             host_id,

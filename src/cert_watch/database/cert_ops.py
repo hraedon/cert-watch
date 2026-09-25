@@ -202,15 +202,8 @@ def _do_replace(
                 now,
             ),
         )
-    # Reset renewal_status on every successful scan (not just fingerprint
-    # change) so same-fingerprint re-issuances don't leave stale
-    # renewal_status='renewed' suppressing alerts (C1/M2).
-    conn.execute(
-        "UPDATE hosts SET renewal_status = 'pending' "
-        "WHERE hostname = ? AND port = ? AND renewal_status = 'renewed'",
-        (hostname, port),
-    )
-
+    # Successful scans leave the operator's pending/in-progress report alone.
+    # Renewal completion comes from the observed successor certificate.
     if (
         old_leaf_row is not None
         and leaf.fingerprint_sha256 != old_leaf_row["fingerprint_sha256"]

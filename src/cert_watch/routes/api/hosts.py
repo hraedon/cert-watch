@@ -88,7 +88,7 @@ class HostSettingsBody(BaseModel):
 
     scan_interval_hours: StrictInt | None = Field(ge=1, le=8760)
     threshold_days: StrictInt | None = Field(ge=1, le=2**63 - 1)
-    renewal_status: Literal["pending", "in_progress", "renewed"]
+    renewal_status: Literal["pending", "in_progress"]
 
 
 def _validation_error(exc: PydanticValidationError) -> JSONResponse:
