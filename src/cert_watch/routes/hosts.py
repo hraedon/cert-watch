@@ -576,6 +576,8 @@ async def scan_all_hosts(
     logger.info(
         "scan_all: %d scanned, %d failures, %d refused", scanned, failures, refused
     )
+    if refused == 0:
+        return RedirectResponse(url="/scan-history", status_code=303)
     summary = f"Scan complete: {scanned} succeeded, {failures} failed, {refused} refused."
     return RedirectResponse(
         url=(
