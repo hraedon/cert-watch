@@ -85,8 +85,16 @@ def ensure_not_superseded(
     *,
     auth: Any,
     hidden: Callable[[], Exception] | None = None,
+    answer_missing: bool = True,
 ) -> None:
     """Refuse a write addressed to a renewed-away (or invalid-lineage) id.
+
+    For a missing id nothing is decided here: with *answer_missing* (the
+    default) the refusal names the certificate that replaced it, which only
+    shapes the answer of a write that would change nothing anyway. A route
+    whose write still does something for a missing id (unassign removing a
+    dangling assignment) passes ``answer_missing=False`` and annotates its
+    own response with :func:`replacement_hint` -- events never gate a write.
 
     *conn* must be the connection that performs the guarded write, inside a
     ``BEGIN IMMEDIATE`` transaction it has not yet committed. Only reads on
@@ -106,11 +114,23 @@ def ensure_not_superseded(
         if _may_read(conn, auth, cert_id) and _may_read(conn, auth, lineage.head):
             raise CertificateSupersededError(cert_id, lineage.head)
         raise unknown()
-    # Missing: no write can happen; only the answer may name the certificate
-    # that replaced it, when the hint resolves and the caller may see it.
+    # Missing: the write goes on to the route's ordinary handling; only the
+    # answer may name the certificate that replaced it.
+    if not answer_missing:
+        return
     head = navigation_hint(conn, cert_id)
     if head is not None and _may_read(conn, auth, head):
         raise CertificateSupersededError(cert_id, head)
+
+
+def replacement_hint(conn: sqlite3.Connection, cert_id: str, *, auth: Any) -> str | None:
+    """The current certificate a missing *cert_id* was renewed to, when the
+    navigation hint resolves and *auth* may see it -- for annotating a
+    response only."""
+    from cert_watch.database.cert_lineage import navigation_hint
+
+    head = navigation_hint(conn, cert_id)
+    return head if head is not None and _may_read(conn, auth, head) else None
 
 
 def refuse_if_superseded(

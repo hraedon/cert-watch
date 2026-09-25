@@ -1,7 +1,7 @@
 """#113 item 3: certificate detail links survive rescans and renewals.
 
 Every scan used to rewrite the leaf row under a fresh id, so a bookmarked,
-shared or alert-linked ``/certificates/<id>`` died on the next scan and
+shared or renewal-webhook-linked ``/certificates/<id>`` died on the next scan and
 landed on ``/?error=certificate not found``.
 
 - an unchanged rescan keeps the certificate's id;

@@ -25,6 +25,7 @@ from cert_watch.database import (
     get_write_lock,
     list_alerts_with_subject,
 )
+from cert_watch.database.connection import _connect as _db_connect
 from cert_watch.routes._deps import IdParam, _db_path, acting_auth
 from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth, superseded_json
 from cert_watch.routes.api._shared import (
@@ -47,6 +48,7 @@ from cert_watch.services.certificate_identity import (
     CertificateSupersededError,
     ensure_not_superseded,
     refuse_if_superseded,
+    replacement_hint,
 )
 
 logger = logging.getLogger("cert_watch.routes.api.alerts")
@@ -377,14 +379,19 @@ async def api_unassign_cert_from_group(
     with get_write_lock():
         if group_repo.get(group_id) is None:
             return JSONResponse(content={"error": "group not found"}, status_code=404)
-        # A renewal moves the assignment to the successor; removing it by the
-        # old id would delete nothing while the group keeps receiving alerts.
+        # Whether the delete happens is decided from rows alone. A renewal
+        # moves the assignment to the successor, so removing it by the old
+        # id deletes nothing: that is answered with the current certificate
+        # (the hint only shapes the answer). A dangling assignment on a
+        # missing id is still removed -- cleanup -- whatever the events say.
         auth = acting_auth(request)
         try:
             removed = group_repo.unassign_cert(
                 group_id,
                 cert_id,
-                guard=lambda conn: ensure_not_superseded(conn, cert_id, auth=auth),
+                guard=lambda conn: ensure_not_superseded(
+                    conn, cert_id, auth=auth, answer_missing=False
+                ),
             )
         except CertificateSupersededError as exc:
             return superseded_json(exc)
@@ -392,7 +399,10 @@ async def api_unassign_cert_from_group(
             return JSONResponse(content={"error": "certificate not found"}, status_code=404)
         if removed == "group_not_found":
             return JSONResponse(content={"error": "group not found"}, status_code=404)
+        current = replacement_hint(_db_connect(db), cert_id, auth=auth)
         if removed != "unassigned":
+            if current is not None:
+                return superseded_json(CertificateSupersededError(cert_id, current))
             return JSONResponse(
                 content={"error": "certificate is not assigned to this group"},
                 status_code=404,
@@ -406,7 +416,12 @@ async def api_unassign_cert_from_group(
         detail={"cert_id": cert_id},
         source_ip=resolve_source_ip(request),
     )
-    return JSONResponse(content={"status": "unassigned", "group_id": group_id, "cert_id": cert_id})
+    content = {"status": "unassigned", "group_id": group_id, "cert_id": cert_id}
+    if current is not None:
+        # A dangling assignment on a renewed-away id was removed; the current
+        # certificate's own assignments were not touched.
+        content["current_cert_id"] = current
+    return JSONResponse(content=content)
 
 
 @router.get("/api/certificates/{cert_id}/alert-routing")

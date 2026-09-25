@@ -913,13 +913,54 @@ def test_a_hint_hop_without_an_endpoint_resolves_nothing(tmp_path):
     assert _hint(db, _GONE) is None
 
 
-def test_an_unanchored_id_gets_no_hint(tmp_path):
-    """Without the id's own issuance event there is nothing to check the
-    renewal claim against."""
+def test_the_renewal_event_anchors_once_the_issuance_event_has_aged_out(tmp_path):
+    """Round 7 (Sol, Fable): the issuance event ages out of the default 30-day
+    retention long before a 90-day certificate is renewed; the fresh renewal
+    event naming the id as replaced anchors it on its own."""
     db = _fresh(tmp_path)
     target = _cert_at(db, _HOST, 443)
     _renewal_event(db, _GONE, target, _HOST, 443)
+    assert _hint(db, _GONE) == target
+
+
+def test_with_no_event_left_there_is_no_anchor(tmp_path):
+    """A successor row alone can't anchor the id: nothing independent says
+    where the id was."""
+    db = _fresh(tmp_path)
+    target = _cert_at(db, _HOST, 443, replaces=_GONE)
+    assert target
     assert _hint(db, _GONE) is None
+
+
+@pytest.mark.parametrize("successor_port", [443, 8443])
+def test_contradictory_issuance_anchors_give_no_hint_in_either_order(tmp_path, successor_port):
+    """Fable's probe_anchor_tie: two issuance events for the id disagree on
+    the port. Whichever port the successor is on, there is no hint."""
+    db = _fresh(tmp_path)
+    successor = _cert_at(db, _HOST, successor_port, replaces=_GONE)
+    assert successor
+    for port in (443, 8443):
+        _issued(db, _GONE, _HOST, port)
+    assert _hint(db, _GONE) is None
+
+
+@pytest.mark.parametrize("successor_port", [443, 8443])
+def test_issuance_and_renewal_anchors_that_disagree_give_no_hint(tmp_path, successor_port):
+    db = _fresh(tmp_path)
+    successor = _cert_at(db, _HOST, successor_port, replaces=_GONE)
+    _issued(db, _GONE, _HOST, 443)
+    _renewal_event(db, _GONE, successor, _HOST, 8443)
+    assert _hint(db, _GONE) is None
+
+
+def test_pre_canonical_host_spellings_in_events_still_anchor(tmp_path):
+    """Events written before 1.0.3's canonical host names spell the host
+    differently (case, trailing dot); they bind to the canonical rows."""
+    db = _fresh(tmp_path)
+    target = _cert_at(db, _HOST, 443)
+    _issued(db, _GONE, _HOST.upper() + ".", 443)
+    _renewal_event(db, _GONE, target, _HOST.upper() + ".", "443")
+    assert _hint(db, _GONE) == target
 
 
 def test_a_hint_cycle_resolves_nothing(tmp_path):
@@ -1057,3 +1098,73 @@ def test_unassign_refuses_a_group_deleted_by_another_process_after_the_precheck(
     with TestClient(app_mod.app) as client:
         r = client.delete(f"/api/alert-groups/{group_id}/certs/{cur}")
     assert (r.status_code, r.json()) == (404, {"error": "group not found"})
+
+
+# -- round 7: link after retention; unassign independent of events ------
+
+
+def test_a_renewal_webhook_link_resolves_right_after_renewal(tmp_path, reload_app):
+    """Sol's sequence: the certificate is 31 days old, so the default 30-day
+    purge has already removed its issuance event when the renewal webhook
+    emits its cert_watch_url. The certificate is then renewed; the link must
+    open the new certificate straight away."""
+    from cert_watch.database.connection import _connect
+    from cert_watch.events import purge_old_events
+
+    db = _fresh(tmp_path)
+    SqliteHostRepository(db).add(_HOST, 443)
+    old = seed_scanned(db, _HOST, 443, parse_certificate(_make_cert(_HOST).der))
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE event_log SET timestamp = datetime('now', '-31 days'), "
+            "created_at = datetime('now', '-31 days')"
+        )
+        conn.commit()
+    purge_old_events(db, 30)
+    new = _renew(db)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        page = client.get(f"/certificates/{old}", follow_redirects=False)
+        tags = client.put(f"/api/certificates/{old}/tags", json={"tags": "x"})
+    assert page.headers["location"] == f"/certificates/{new}?superseded=1"
+    _assert_conflict(tags, old, new)
+
+
+@pytest.mark.parametrize("events", ["retained", "purged"])
+def test_a_dangling_assignment_is_removed_whether_or_not_events_remain(
+    tmp_path, reload_app, events
+):
+    """Round 7 (Sol): with renewal events retained the unassign of a dangling
+    assignment on a missing id was refused (409, nothing removed); once the
+    events were purged the same request removed it. Rows decide: it is
+    removed both times, and the answer may only mention the renewal."""
+    from cert_watch.database.connection import _connect
+
+    db = _fresh(tmp_path)
+    SqliteHostRepository(db).add(_HOST, 443)
+    current = _cert_at(db, _HOST, 443, replaces=_GONE)
+    groups = SqliteAlertGroupRepository(db)
+    group_id = groups.create(name="G", recipients=["g@example.test"], match_tags=[])
+    groups.assign_cert(group_id, _GONE)  # dangling: no row has this id
+    if events == "retained":
+        _renewal_event(db, _GONE, current, _HOST, 443)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.delete(f"/api/alert-groups/{group_id}/certs/{_GONE}")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "unassigned"
+    assert r.json().get("current_cert_id") == (current if events == "retained" else None)
+    with _connect(db) as conn:
+        assert conn.execute("SELECT * FROM alert_group_certs").fetchall() == []
+
+
+def test_a_later_hop_recorded_at_another_endpoint_breaks_the_chain(tmp_path):
+    """The head is on the anchored endpoint, but the step that reached it was
+    recorded elsewhere: the chain is not trusted."""
+    db = _fresh(tmp_path)
+    middle = "7" * 8 + "-0000-4000-8000-000000000009"
+    head = _cert_at(db, _HOST, 443)
+    _issued(db, _GONE, _HOST, 443)
+    _renewal_event(db, _GONE, middle, _HOST, 443)
+    _renewal_event(db, middle, head, _OTHER, 443)
+    assert _hint(db, _GONE) is None

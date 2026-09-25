@@ -6,8 +6,9 @@ Two questions, answered separately on purpose:
   stored certificate rows only (``replaces_cert_id`` among existing rows).
   Events never authorize or refuse a write.
 * :func:`navigation_hint` -- *where should a person holding this missing id
-  be sent?* It may read lifecycle events, but only when they are anchored to
-  the id's own issuance event, and it never changes whether a write happens.
+  be sent?* It may read lifecycle events, but only when every event naming
+  the id agrees on its endpoint, and it never changes whether a write
+  happens.
   Both the stale-link page redirect and the mutation routes' "renewed,
   nothing was changed" answer use it, so they cannot disagree.
 """
@@ -124,10 +125,15 @@ _RENEWALS_OF = (
 
 
 def _anchor(conn: sqlite3.Connection, cert_id: str) -> Endpoint | None:
-    """The endpoint *cert_id* was issued at, from its own ``cert_added`` /
-    ``cert_renewed`` (as the new id) events. They must all agree."""
-    events = conn.execute(_OWN_EVENTS, (cert_id,)).fetchall()
-    endpoints = {endpoint_of(e["hostname"], e["port"]) for e in events}
+    """The endpoint *cert_id* belonged to, from the lifecycle events that
+    name it: its own issuance (``cert_added``, or ``cert_renewed`` as the new
+    id) and the ``cert_renewed`` that replaced it. Either kind anchors on its
+    own -- the issuance event ages out of retention long before a 90-day
+    certificate is renewed, while the renewal event is fresh -- but every
+    event that names the id must agree on one endpoint, or there is none."""
+    own = conn.execute(_OWN_EVENTS, (cert_id,)).fetchall()
+    renewed = conn.execute(_RENEWALS_OF, (cert_id,)).fetchall()
+    endpoints = {endpoint_of(e["hostname"], e["port"]) for e in [*own, *renewed]}
     if len(endpoints) != 1:
         return None
     (endpoint,) = endpoints
@@ -138,7 +144,8 @@ def navigation_hint(conn: sqlite3.Connection, cert_id: str) -> str | None:
     """The current certificate a person holding the missing id *cert_id*
     should be shown, or ``None``. Never used to decide a write.
 
-    The id's own issuance event fixes its endpoint. Each hop -- a row naming
+    The lifecycle events naming the id fix its endpoint (see
+    :func:`_anchor`); with none left, there is no hint. Each hop -- a row naming
     the current id in ``replaces_cert_id`` or a ``cert_renewed`` event naming
     it as replaced -- must offer exactly one successor, on that endpoint
     (both the row's and the event's, where both exist), without looping. The
