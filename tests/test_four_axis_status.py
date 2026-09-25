@@ -720,9 +720,6 @@ def test_monitoring_failure_run_starts_after_latest_success_with_id_tiebreak(tmp
     # This failure precedes the success at the same instant and therefore is
     # not part of the current failure run.  The later failure is its start.
     record_scan_history(
-        db, ScanHistory("tie.example.test", 443, "failure", id="a", scanned_at=tied)
-    )
-    record_scan_history(
         db,
         ScanHistory(
             "tie.example.test",
@@ -732,6 +729,11 @@ def test_monitoring_failure_run_starts_after_latest_success_with_id_tiebreak(tmp
             error_message="stale error from the second-latest attempt",
             scanned_at=tied,
         ),
+    )
+    # Insert the lexically older failure second.  Correct ordering still picks
+    # id="b"; a timestamp-only rank would accidentally follow insertion order.
+    record_scan_history(
+        db, ScanHistory("tie.example.test", 443, "failure", id="a", scanned_at=tied)
     )
     rows, _ = list_dashboard_page(db, per_page=0, now=NOW)
     assert rows[0]["monitoring"] == "current"
@@ -750,6 +752,22 @@ def test_monitoring_failure_run_starts_after_latest_success_with_id_tiebreak(tmp
     assert rows[0]["monitoring"] == "failing"
     assert rows[0]["status"]["monitoring"]["since"] == later.isoformat()
     assert rows[0]["status"]["monitoring"]["raw_error"] == "latest connection failure"
+
+
+def test_monitoring_attempt_rank_has_an_explicit_id_tiebreak(tmp_path):
+    from cert_watch.database.dashboard_page import inventory_candidates_sql
+
+    db, settings = _seed(tmp_path)
+    status = prepare_status(db, NOW)
+    axes = StatusModelContext(status, settings, {}, {})
+    candidates = inventory_candidates_sql(
+        status=status,
+        axes=axes,
+        axis_columns=frozenset({"monitoring"}),
+    )
+    assert candidates is not None
+    sql, _params = candidates
+    assert "ORDER BY sh.scanned_at DESC, sh.id DESC" in sql
 
 
 def test_ungrouped_page_touches_scan_history_only_for_selected_endpoints(
