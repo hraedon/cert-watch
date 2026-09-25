@@ -27,6 +27,7 @@ from cert_watch.routes.api._shared import (
     _pagination_links,
     delivery_details_allowed,
     json_body,
+    status_filter_error,
     status_for_api,
     tags_from_json_body,
 )
@@ -224,6 +225,14 @@ def api_list_hosts(
     renewal: str | None = None,
     delivery: str | None = None,
 ) -> JSONResponse:
+    filter_error = status_filter_error(
+        condition=condition,
+        monitoring=monitoring,
+        renewal=renewal,
+        delivery=delivery,
+    )
+    if filter_error is not None:
+        return filter_error
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
     limit = min(max(limit, 1), 200)

@@ -593,6 +593,30 @@ def test_html_and_json_lists_accept_the_same_combinable_filters(
     assert "Monitoring: failing" in browse.text
 
 
+def test_unknown_axis_filters_are_rejected_by_json_and_ignored_with_notice(
+    tmp_path, reload_app, monkeypatch
+):
+    from fastapi.testclient import TestClient
+
+    _seed(tmp_path, "cert-watch.sqlite3")
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", lambda self: None)
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.stop", lambda self: None)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        for path in ("/api/certificates", "/api/hosts"):
+            for name in ("condition", "monitoring", "renewal", "delivery"):
+                response = client.get(f"{path}?{name}=bogus")
+                assert response.status_code == 400
+                assert response.json() == {"error": f"invalid {name} filter: bogus"}
+
+        browse = client.get("/browse?monitoring=bogus&grouped=0")
+
+    assert browse.status_code == 200
+    assert "Ignored unknown filter: monitoring=bogus" in browse.text
+    assert "failing.example.test" in browse.text
+    assert "Monitoring: bogus" not in browse.text
+
+
 def test_no_surface_calls_failing_or_never_scanned_endpoints_healthy(
     tmp_path, reload_app, monkeypatch
 ):

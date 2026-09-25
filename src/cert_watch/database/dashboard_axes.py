@@ -40,6 +40,9 @@ def dashboard_axis_stats(
             ("automation_configured", "manual", "stalled", "in_progress", "unknown"), 0
         ),
         "delivery": dict.fromkeys(("ok", "failing", "unrouted"), 0),
+        "overall": dict.fromkeys(
+            ("expired", "critical", "warning", "healthy", "failing", "gray"), 0
+        ),
     }
     if candidates is None:
         return result
@@ -50,7 +53,9 @@ def dashboard_axis_stats(
         for state in states
     }
     aggregates = ", ".join(
-        f"SUM(CASE WHEN {axis} = '{state}' THEN 1 ELSE 0 END) AS {alias}"
+        f"SUM(CASE WHEN {'etype = \'leaf\' AND ' if axis == 'overall' else ''}"
+        f"{'overall_state' if axis == 'overall' else axis} = '{state}' "
+        f"THEN 1 ELSE 0 END) AS {alias}"
         for alias, (axis, state) in columns.items()
     )
     with _connect(db_path) as conn:

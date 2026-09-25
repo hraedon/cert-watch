@@ -68,15 +68,27 @@ def list_dashboard_grouped_page(
     axes = axes or prepare_status_model_context(
         db_path, certificate_status=status, settings=axis_settings
     )
+    filter_axes = frozenset(
+        axis
+        for axis, value in (
+            ("urgency", urgency),
+            ("condition", condition),
+            ("monitoring", monitoring),
+            ("renewal", renewal),
+            ("delivery", delivery),
+        )
+        if value
+    )
     candidates = inventory_candidates_sql(
         source=source, q=q, scope_tags=scope_tags, status=status, axes=axes,
-        sql_delivery=bool(delivery),
+        sql_delivery=bool(delivery), axis_columns=filter_axes,
     )
     if candidates is None:
         return [], 0
     base_sql, params = candidates
     member_candidates = inventory_candidates_sql(
-        source=source, q=None, scope_tags=scope_tags, status=status, axes=axes
+        source=source, q=None, scope_tags=scope_tags, status=status, axes=axes,
+        axis_columns=frozenset(),
     )
     assert member_candidates is not None
     member_base_sql, member_params = member_candidates
@@ -129,7 +141,7 @@ def list_dashboard_grouped_page(
         by_group: dict[str, list[Any]] = {value: [] for value in group_keys}
         for member in members:
             by_group.setdefault(member["group_key"], []).append(member)
-        ordered = [
+        selected = [
             member
             for group_key in group_keys
             for member in sorted(
@@ -138,6 +150,28 @@ def list_dashboard_grouped_page(
                 reverse=direction == "DESC",
             )
         ]
+        keys = tuple((str(row["etype"]), str(row["ekey"])) for row in selected)
+        endpoints = tuple(
+            dict.fromkeys(
+                (str(row["hostname"]), int(row["port"]))
+                for row in selected
+                if row["hostname"] is not None and row["port"] is not None
+            )
+        )
+        full_candidates = inventory_candidates_sql(
+            source=source,
+            q=None,
+            scope_tags=scope_tags,
+            status=status,
+            axes=axes,
+            entry_keys=keys,
+            history_endpoints=endpoints,
+        )
+        assert full_candidates is not None
+        full_sql, full_params = full_candidates
+        full_rows = conn.execute(full_sql, full_params).fetchall()
+        by_key = {(str(row["etype"]), str(row["ekey"])): row for row in full_rows}
+        ordered = [by_key[key] for key in keys if key in by_key]
         built = build_inventory_entries(db_path, conn, ordered, status=status, axes=axes)
 
     grouped = group_entries_by_fingerprint(built, force=True)

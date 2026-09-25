@@ -9,14 +9,12 @@ from typing import Any
 from cert_watch.database import (
     dashboard_axis_stats,
     dashboard_inventory_count,
-    dashboard_overall_stats,
     distinct_tags,
     get_posture_grades_for_certs,
     list_calendar,
     list_dashboard_grouped_page,
     list_dashboard_page,
     list_fleet_pivot,
-    pivot_urgency_stats,
 )
 from cert_watch.database.chain_status_cache import prepare_status
 from cert_watch.scan_freshness import ScanEvidence
@@ -99,19 +97,12 @@ def load_browse_page(
 
     per_page = 25
     entries: list[dict[str, Any]] = []
-    pivot_stats: dict[str, int] | None = None
     if calendar_data is not None:
         total = sum(int(bucket.get("count", 0)) for bucket in calendar_data)
         total_pages = 1
-        pivot_stats = dashboard_overall_stats(
-            db_path, scope_tags=scope_tags, status=status, axes=axes
-        )
     elif pivot_groups is not None:
         total = sum(int(group["count"]) for group in pivot_groups)
         total_pages = 1
-        pivot_stats = pivot_urgency_stats(
-            db_path, scope_tags=scope_tags, status=status, axes=axes
-        )
     elif grouped:
         entries, total = list_dashboard_grouped_page(
             db_path,
@@ -153,19 +144,10 @@ def load_browse_page(
         total_pages = max((total + per_page - 1) // per_page, 1)
         page = max(1, min(page, total_pages))
 
-    if pivot_stats is None:
-        pivot_stats = dashboard_overall_stats(
-            db_path,
-            q=q,
-            source=source,
-            scope_tags=scope_tags,
-            status=status,
-            axes=axes,
-        )
-
     axis_stats = dashboard_axis_stats(
         db_path, q=q, source=source, scope_tags=scope_tags, status=status, axes=axes
     )
+    pivot_stats = dict(axis_stats["overall"])
 
     if pivot_groups is not None:
         tracked_total = total

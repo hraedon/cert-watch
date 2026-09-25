@@ -21,6 +21,10 @@ All notable changes to cert-watch are documented in this file.
 - Default certificate-grouped Browse now selects, orders and paginates group
   keys in SQL before building display rows, so one page no longer materialises
   the whole estate (#120, #126 S1).
+- Home and Browse now compute all four-axis and overall counts in one estate
+  pass, while Browse and the host/certificate list APIs derive full status only
+  for the returned page. Unknown four-axis values return HTTP 400 from the JSON
+  APIs and are ignored with a notice in Browse (#126 S1).
 
 ## [1.0.4] - 2026-09-25
 

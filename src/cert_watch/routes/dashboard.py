@@ -39,7 +39,11 @@ from cert_watch.security.csrf import get_csrf_context
 from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
 from cert_watch.services.alert_state import mark_all_alerts_read as mark_all_alerts_read_service
 from cert_watch.services.browse_page import load_browse_page
-from cert_watch.status_model import AxisSettings, prepare_status_model_context
+from cert_watch.status_model import (
+    AxisSettings,
+    invalid_status_filters,
+    prepare_status_model_context,
+)
 
 logger = logging.getLogger("cert_watch.routes.dashboard")
 
@@ -144,6 +148,23 @@ def dashboard(
     grouped: int = 1,
     view: str = "",
 ) -> HTMLResponse:
+    invalid_filters = invalid_status_filters(
+        condition=condition,
+        monitoring=monitoring,
+        renewal=renewal,
+        delivery=delivery,
+    )
+    if invalid_filters:
+        ignored = ", ".join(f"{name}={value}" for name, value in invalid_filters.items())
+        notice = notice or f"Ignored unknown filter: {ignored}"
+        if "condition" in invalid_filters:
+            condition = None
+        if "monitoring" in invalid_filters:
+            monitoring = None
+        if "renewal" in invalid_filters:
+            renewal = None
+        if "delivery" in invalid_filters:
+            delivery = None
     db = _db_path(request)
     auth_ctx = getattr(request.state, "auth_context", None)
     scope_tags = scope_tags_from_auth(auth_ctx)

@@ -27,8 +27,36 @@ MONITORING_STATES = ("current", "failing", "never_scanned", "not_monitored")
 RENEWAL_STATES = ("automation_configured", "manual", "stalled", "in_progress", "unknown")
 DELIVERY_STATES = ("ok", "failing", "unrouted")
 
+STATUS_FILTER_VALUES = {
+    "condition": frozenset(CONDITIONS),
+    "monitoring": frozenset(MONITORING_STATES),
+    "renewal": frozenset(RENEWAL_STATES),
+    "delivery": frozenset(DELIVERY_STATES),
+}
+
 _AUTO_METHODS = frozenset({"acme", "cert-manager"})
 _TRUST_PROBLEMS = frozenset({"incomplete", "invalid", "unknown", "self-signed", "unverified"})
+
+
+def invalid_status_filters(
+    *,
+    condition: str | None = None,
+    monitoring: str | None = None,
+    renewal: str | None = None,
+    delivery: str | None = None,
+) -> dict[str, str]:
+    """Return supplied four-axis filters that are outside the public vocabulary."""
+    supplied = {
+        "condition": condition,
+        "monitoring": monitoring,
+        "renewal": renewal,
+        "delivery": delivery,
+    }
+    return {
+        name: value
+        for name, value in supplied.items()
+        if value is not None and value not in STATUS_FILTER_VALUES[name]
+    }
 
 
 @dataclass(frozen=True)
@@ -257,6 +285,9 @@ def register_status_model_functions(
 ) -> None:
     """Register request-bound SQL functions used by filtering and agreement tests."""
     cfg = context.settings
+    # Converting the request clock to its SQL representation is request work,
+    # not per-row UDF work. Capture it once for the monitoring closure.
+    sql_now = context.sql_now
     conn.create_function("cw_condition", 1, condition_state)
     conn.create_function(
         "cw_monitoring_state",
@@ -268,7 +299,7 @@ def register_status_model_functions(
             interval,
             cfg.sched_hour,
             cfg.sched_min,
-            context.sql_now,
+            sql_now,
         ),
     )
     conn.create_function(

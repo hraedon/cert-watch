@@ -347,11 +347,17 @@ def test_request_routing_and_analytics_work_is_bounded_to_returned_rows(
         cert_id, _, _ = replace_scanned(db, hostname, 443, cert, [], True)
 
     import cert_watch.alerting.routing as routing
+    import cert_watch.database.dashboard_axes as dashboard_axes
     import cert_watch.renewal_analytics as analytics
+    import cert_watch.routes.dashboard as dashboard_routes
+    import cert_watch.services.browse_page as browse_service
+    import cert_watch.status_model as status_model
 
     real_routing = routing.resolve_routing
     real_analytics = analytics.compute_endpoint_analytics
-    work = {"routing": 0, "analytics": 0}
+    real_monitoring = status_model.monitoring_state
+    real_axis_stats = dashboard_axes.dashboard_axis_stats
+    work = {"routing": 0, "analytics": 0, "monitoring": 0, "aggregates": 0}
 
     def count_routing(path, cert_ids):
         work["routing"] += len(cert_ids)
@@ -361,25 +367,42 @@ def test_request_routing_and_analytics_work_is_bounded_to_returned_rows(
         work["analytics"] += len(endpoints)
         return real_analytics(path, endpoints)
 
+    def count_monitoring(*args, **kwargs):
+        work["monitoring"] += 1
+        return real_monitoring(*args, **kwargs)
+
+    def count_axis_stats(*args, **kwargs):
+        work["aggregates"] += 1
+        return real_axis_stats(*args, **kwargs)
+
     monkeypatch.setattr(routing, "resolve_routing", count_routing)
     monkeypatch.setattr(analytics, "compute_endpoint_analytics", count_analytics)
+    monkeypatch.setattr(status_model, "monitoring_state", count_monitoring)
+    monkeypatch.setattr(dashboard_axes, "dashboard_axis_stats", count_axis_stats)
+    monkeypatch.setattr(dashboard_routes, "dashboard_axis_stats", count_axis_stats)
+    monkeypatch.setattr(browse_service, "dashboard_axis_stats", count_axis_stats)
     monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", lambda self: None)
     monkeypatch.setattr("cert_watch.scheduler.Scheduler.stop", lambda self: None)
     app_mod = reload_app()
 
     limits = {
-        "/": 50,
-        "/browse?grouped=0": 25,
-        "/api/hosts?limit=10": 10,
-        f"/api/certificates/{cert_id}": 1,
+        "/": (50, 1),
+        "/browse?grouped=0": (25, 1),
+        "/api/hosts?limit=10": (10, 0),
+        f"/api/certificates/{cert_id}": (1, 0),
     }
     with TestClient(app_mod.app) as client:
-        for path, maximum in limits.items():
-            work.update(routing=0, analytics=0)
+        for path, (maximum, aggregate_passes) in limits.items():
+            work.update(routing=0, analytics=0, monitoring=0, aggregates=0)
             response = client.get(path)
             assert response.status_code == 200, path
             assert work["routing"] <= maximum, (path, work)
             assert work["analytics"] <= maximum, (path, work)
+            assert work["aggregates"] == aggregate_passes, (path, work)
+            # Each estate aggregate may classify every monitored endpoint
+            # once. Outside that explicit pass, list/detail work is bounded by
+            # the number of rows the response can return.
+            assert work["monitoring"] <= 80 * aggregate_passes + maximum, (path, work)
 
 
 def test_grouped_browse_filter_uses_the_same_status(estate):

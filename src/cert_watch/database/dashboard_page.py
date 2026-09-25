@@ -48,6 +48,9 @@ def inventory_candidates_sql(
     axes: StatusModelContext | None = None,
     entry_id: str | None = None,
     sql_delivery: bool = False,
+    axis_columns: frozenset[str] | None = None,
+    entry_keys: tuple[tuple[str, str], ...] | None = None,
+    history_endpoints: tuple[tuple[str, int], ...] | None = None,
 ) -> tuple[str, list[Any]] | None:
     """SQL selecting one row per Browse inventory row, and its parameters.
 
@@ -59,13 +62,11 @@ def inventory_candidates_sql(
     ``grp_owner`` and ``grp_method``, and ``host_id``/``hostname``/``port``/
     ``subject``.
 
-    With a ``status`` context (:func:`prepare_status`: one instant and one
-    trust digest for the request) each row also carries ``eff_days``,
-    ``chain_status`` (the cached status while current, else ``unverified``)
-    and ``urgency``, computed in SQL by the one status rule
-    (:mod:`cert_watch.status_rule`), so callers can count, group and filter by
-    status without materialising rows. Returns ``None`` when ``source``
-    excludes everything.
+    ``axis_columns`` controls which derived facts SQL evaluates. ``None``
+    preserves the full projection used by aggregate/group callers; an empty
+    set is the lean key/sort projection used by list counts and pagination.
+    ``entry_keys`` bounds the full projection to rows already selected by that
+    lean pass. Returns ``None`` when ``source`` excludes everything.
     """
     include_scanned = True
     include_uploaded = True
@@ -78,66 +79,111 @@ def inventory_candidates_sql(
     # q is pushed to SQL for leaf/host candidates; grouped cross-host search
     # never applies to the ungrouped path, so per-field LIKE is faithful.
     like, host_like = search_patterns(q)
-    status_cols = (
-        f"{effective_days_sql('c')} AS eff_days,"
-        f" {verified_chain_status_sql('c')} AS chain_status"
-        if status is not None
-        else "NULL AS eff_days, NULL AS chain_status"
+    requested = (
+        frozenset({"condition", "monitoring", "renewal", "delivery", "urgency", "overall"})
+        if axis_columns is None and axes is not None
+        else frozenset({"urgency"})
+        if axis_columns is None and status is not None
+        else axis_columns or frozenset()
     )
-    condition_col = (
-        f"cw_condition({effective_days_sql('c')})"
-        if status is not None and axes is not None
-        else "NULL"
+    if "overall" in requested:
+        requested = requested | {"monitoring", "urgency"}
+    need_effective_days = bool(requested & {"condition", "urgency"})
+    need_chain_status = "urgency" in requested
+    need_monitoring = "monitoring" in requested and axes is not None
+    need_renewal = "renewal" in requested and axes is not None
+    need_delivery = "delivery" in requested and axes is not None
+    delivery_settings = axes.settings if axes is not None else AxisSettings()
+
+    status_cols = (
+        f"{effective_days_sql('c')} AS eff_days"
+        if status is not None and need_effective_days
+        else "NULL AS eff_days"
     )
     status_params: list[Any] = (
-        [status.sql_now, status.trust, status.sql_now]
-        if status is not None and axes is not None
-        else [status.sql_now, status.trust]
-        if status is not None
-        else []
+        [status.sql_now] if status is not None and need_effective_days else []
     )
+    if status is not None and need_chain_status:
+        status_cols += f", {verified_chain_status_sql('c')} AS chain_status"
+        status_params.append(status.trust)
+    else:
+        status_cols += ", NULL AS chain_status"
 
-    latest_success = (
-        "(SELECT MAX(sh.scanned_at) FROM scan_history sh"
-        " WHERE sh.hostname = h.hostname AND sh.port = h.port AND sh.status = 'success')"
+    history_prefix = ""
+    history_params: list[Any] = []
+    if need_monitoring:
+        history_where = ""
+        if history_endpoints is not None:
+            if history_endpoints:
+                history_where = " WHERE " + " OR ".join(
+                    "(sh.hostname = ? AND sh.port = ?)" for _ in history_endpoints
+                )
+                history_params = [
+                    value for endpoint in history_endpoints for value in endpoint
+                ]
+            else:
+                history_where = " WHERE 0"
+        # One ordered history pass supplies every monitoring fact.  The
+        # success key preserves the timestamp+id tie-break without six
+        # correlated probes per endpoint.
+        history_prefix = f"""
+            history_ranked AS MATERIALIZED (
+                SELECT sh.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY sh.hostname, sh.port
+                           ORDER BY sh.scanned_at DESC, sh.id DESC
+                       ) AS attempt_rank,
+                       MAX(CASE WHEN sh.status = 'success'
+                           THEN sh.scanned_at || char(31) || sh.id END) OVER (
+                           PARTITION BY sh.hostname, sh.port
+                       ) AS success_key
+                FROM scan_history sh{history_where}
+            ),
+            history_summary AS MATERIALIZED (
+                SELECT hostname, port,
+                       CASE WHEN MAX(success_key) IS NULL THEN NULL ELSE
+                           substr(MAX(success_key), 1,
+                               instr(MAX(success_key), char(31)) - 1) END AS last_success,
+                       MAX(CASE WHEN attempt_rank = 1 THEN scanned_at END)
+                           AS latest_attempt,
+                       MAX(CASE WHEN attempt_rank = 1 THEN status END)
+                           AS latest_status,
+                       MAX(CASE WHEN attempt_rank = 1 THEN error_message END)
+                           AS latest_error,
+                       MIN(CASE WHEN status != 'success' AND (
+                           success_key IS NULL
+                           OR scanned_at > substr(success_key, 1,
+                               instr(success_key, char(31)) - 1)
+                           OR (scanned_at = substr(success_key, 1,
+                               instr(success_key, char(31)) - 1)
+                               AND id > substr(success_key,
+                                   instr(success_key, char(31)) + 1))
+                       ) THEN scanned_at END) AS first_failed
+                FROM history_ranked GROUP BY hostname, port
+            ),
+        """
+
+    history_join = (
+        " LEFT JOIN history_summary hs"
+        " ON hs.hostname = h.hostname AND hs.port = h.port"
+        if need_monitoring
+        else ""
     )
     latest_attempt = (
-        "(SELECT sh.scanned_at FROM scan_history sh"
-        " WHERE sh.hostname = h.hostname AND sh.port = h.port"
-        " ORDER BY sh.scanned_at DESC, sh.id DESC LIMIT 1)"
-    )
-    latest_scan_status = (
-        "(SELECT sh.status FROM scan_history sh"
-        " WHERE sh.hostname = h.hostname AND sh.port = h.port"
-        " ORDER BY sh.scanned_at DESC, sh.id DESC LIMIT 1)"
-    )
-    latest_error = (
-        "(SELECT sh.error_message FROM scan_history sh"
-        " WHERE sh.hostname = h.hostname AND sh.port = h.port"
-        " ORDER BY sh.scanned_at DESC, sh.id DESC LIMIT 1)"
-    )
-    first_failed = (
-        "(SELECT MIN(sf.scanned_at) FROM scan_history sf"
-        " WHERE sf.hostname = h.hostname AND sf.port = h.port AND sf.status != 'success'"
-        " AND (NOT EXISTS(SELECT 1 FROM scan_history ss"
-        " WHERE ss.hostname = h.hostname AND ss.port = h.port AND ss.status = 'success')"
-        " OR sf.scanned_at > (SELECT MAX(ss.scanned_at) FROM scan_history ss"
-        " WHERE ss.hostname = h.hostname AND ss.port = h.port AND ss.status = 'success')"
-        " OR (sf.scanned_at = (SELECT MAX(ss.scanned_at) FROM scan_history ss"
-        " WHERE ss.hostname = h.hostname AND ss.port = h.port AND ss.status = 'success')"
-        " AND sf.id > (SELECT MAX(ss.id) FROM scan_history ss"
-        " WHERE ss.hostname = h.hostname AND ss.port = h.port AND ss.status = 'success'"
-        " AND ss.scanned_at = sf.scanned_at))))"
+        "hs.latest_attempt"
+        if need_monitoring
+        else "(SELECT MAX(sh.scanned_at) FROM scan_history sh"
+        " WHERE sh.hostname = h.hostname AND sh.port = h.port)"
     )
     monitoring_cols = (
-        f"cw_monitoring_state({latest_success}, {latest_attempt}, {latest_scan_status},"
+        "cw_monitoring_state(hs.last_success, hs.latest_attempt, hs.latest_status,"
         " h.scan_interval_hours) AS monitoring,"
-        f" {latest_success} AS monitoring_last_success,"
-        f" {latest_attempt} AS monitoring_last_attempt,"
-        f" {latest_scan_status} AS monitoring_attempt_status,"
-        f" {latest_error} AS monitoring_error,"
-        f" {first_failed} AS monitoring_first_failed"
-        if axes is not None
+        " hs.last_success AS monitoring_last_success,"
+        " hs.latest_attempt AS monitoring_last_attempt,"
+        " hs.latest_status AS monitoring_attempt_status,"
+        " hs.latest_error AS monitoring_error,"
+        " hs.first_failed AS monitoring_first_failed"
+        if need_monitoring
         else "NULL AS monitoring, NULL AS monitoring_last_success,"
         " NULL AS monitoring_last_attempt, NULL AS monitoring_attempt_status,"
         " NULL AS monitoring_error, NULL AS monitoring_first_failed"
@@ -146,26 +192,26 @@ def inventory_candidates_sql(
         "cw_renewal_state(h.hostname, h.port, h.renewal_method, h.renewal_status,"
         " c.not_after, EXISTS(SELECT 1 FROM certificates succ"
         " WHERE succ.replaces_cert_id = c.id AND succ.id != c.id)) AS renewal"
-        if axes is not None
+        if need_renewal
         else "NULL AS renewal"
     )
     pending_renewal_col = (
         "cw_renewal_state(h.hostname, h.port, h.renewal_method, h.renewal_status,"
         " NULL, 0) AS renewal"
-        if axes is not None
+        if need_renewal
         else "NULL AS renewal"
     )
     delivery_col = (
-        delivery_state_sql("c", "h", axes.settings)
-        if axes is not None and sql_delivery
+        delivery_state_sql("c", "h", delivery_settings)
+        if need_delivery and sql_delivery
         else "'unrouted'"
     )
     # Pending hosts have no certificate alert identity yet, so the canonical
     # display model leaves them unrouted even when global fallbacks exist.
     pending_delivery_col = "'unrouted'"
     uploaded_delivery_col = (
-        delivery_state_sql("c", None, axes.settings)
-        if axes is not None and sql_delivery
+        delivery_state_sql("c", None, delivery_settings)
+        if need_delivery and sql_delivery
         else "'unrouted'"
     )
 
@@ -178,14 +224,10 @@ def inventory_candidates_sql(
             SELECT 'leaf' AS etype, c.id AS ekey,
                    LOWER(c.subject) AS sort_name,
                    c.not_before AS sort_issue,
-                   COALESCE((
-                       SELECT MAX(sh.scanned_at) FROM scan_history sh
-                       WHERE sh.hostname = c.hostname AND sh.port = c.port
-                   ), '0000-01-01T00:00:00') AS sort_scan,
+                   COALESCE({latest_attempt}, '0000-01-01T00:00:00') AS sort_scan,
                    c.not_after AS sort_expiry,
                    h.added_at AS sort_added,
                    {status_cols},
-                   {condition_col} AS condition,
                    {monitoring_cols},
                    {renewal_col},
                    EXISTS(SELECT 1 FROM certificates succ
@@ -199,12 +241,20 @@ def inventory_candidates_sql(
                    c.subject AS subject
             FROM certificates c
             JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
+            {history_join}
             WHERE c.is_leaf = 1 AND c.source = 'scanned'
         """
         scanned_params: list[Any] = list(status_params)
         if entry_id:
             scanned_sql += " AND c.id = ?"
             scanned_params.append(entry_id)
+        if entry_keys:
+            leaf_keys = [key for kind, key in entry_keys if kind == "leaf"]
+            if not leaf_keys:
+                scanned_sql += " AND 0"
+            else:
+                scanned_sql += f" AND c.id IN ({','.join('?' for _ in leaf_keys)})"
+                scanned_params += leaf_keys
         if like:
             scanned_sql += (
                 " AND (LOWER(c.subject) LIKE ? ESCAPE '\\'"
@@ -226,14 +276,10 @@ def inventory_candidates_sql(
             SELECT 'pending' AS etype, h.id AS ekey,
                    LOWER(h.hostname || ':' || h.port) AS sort_name,
                    '9999-12-31T23:59:59' AS sort_issue,
-                   COALESCE((
-                       SELECT MAX(sh.scanned_at) FROM scan_history sh
-                       WHERE sh.hostname = h.hostname AND sh.port = h.port
-                   ), '0000-01-01T00:00:00') AS sort_scan,
+                   COALESCE({latest_attempt}, '0000-01-01T00:00:00') AS sort_scan,
                    '9999-12-31T23:59:59' AS sort_expiry,
                    h.added_at AS sort_added,
                    NULL AS eff_days, NULL AS chain_status,
-                   NULL AS condition,
                    {monitoring_cols},
                    {pending_renewal_col},
                    0 AS has_successor,
@@ -244,6 +290,7 @@ def inventory_candidates_sql(
                    h.id AS host_id, h.hostname AS hostname, h.port AS port,
                    NULL AS subject
             FROM hosts h
+            {history_join}
             WHERE NOT EXISTS (
                 SELECT 1 FROM certificates c
                 WHERE c.hostname = h.hostname AND c.port = h.port
@@ -254,6 +301,13 @@ def inventory_candidates_sql(
         if entry_id:
             pending_sql += " AND h.id = ?"
             pending_params.append(entry_id)
+        if entry_keys:
+            pending_keys = [key for kind, key in entry_keys if kind == "pending"]
+            if not pending_keys:
+                pending_sql += " AND 0"
+            else:
+                pending_sql += f" AND h.id IN ({','.join('?' for _ in pending_keys)})"
+                pending_params += pending_keys
         if like:
             pending_sql += (
                 " AND (LOWER(h.hostname || ':' || h.port) LIKE ? ESCAPE '\\'"
@@ -276,7 +330,6 @@ def inventory_candidates_sql(
                    c.not_after AS sort_expiry,
                    c.created_at AS sort_added,
                    {status_cols},
-                   {condition_col} AS condition,
                    'not_monitored' AS monitoring,
                    NULL AS monitoring_last_success,
                    NULL AS monitoring_last_attempt,
@@ -298,6 +351,13 @@ def inventory_candidates_sql(
         if entry_id:
             uploaded_sql += " AND c.id = ?"
             uploaded_params.append(entry_id)
+        if entry_keys:
+            leaf_keys = [key for kind, key in entry_keys if kind == "leaf"]
+            if not leaf_keys:
+                uploaded_sql += " AND 0"
+            else:
+                uploaded_sql += f" AND c.id IN ({','.join('?' for _ in leaf_keys)})"
+                uploaded_params += leaf_keys
         if like:
             uploaded_sql += (
                 " AND (LOWER(c.subject) LIKE ? ESCAPE '\\'"
@@ -315,16 +375,33 @@ def inventory_candidates_sql(
         return None
 
     union_sql = " UNION ALL ".join(f"SELECT * FROM ({p})" for p in select_parts)
-    urgency_col = "cw_urgency(eff_days, chain_status)" if status is not None else "NULL"
+    condition_col = "cw_condition(eff_days)" if "condition" in requested else "NULL"
+    urgency_col = "cw_urgency(eff_days, chain_status)" if "urgency" in requested else "NULL"
     overall_col = (
         "CASE WHEN host_id IS NOT NULL AND monitoring = 'failing' THEN 'failing' "
         "WHEN host_id IS NOT NULL AND monitoring = 'never_scanned' THEN 'gray' "
         f"ELSE {urgency_col} END"
+        if "overall" in requested
+        else "NULL"
     )
+    # Materialization is intentional when deriving axes: it guarantees each
+    # Python UDF runs once per candidate instead of once per downstream CASE.
+    if requested:
+        sql = (
+            f"WITH {history_prefix} inventory_raw AS MATERIALIZED ({union_sql}),"
+            " inventory_states AS MATERIALIZED ("
+            f"SELECT *, {condition_col} AS condition, {urgency_col} AS urgency "
+            "FROM inventory_raw) "
+            f"SELECT *, {overall_col} AS overall_state FROM inventory_states"
+        )
+    else:
+        sql = (
+            f"SELECT *, NULL AS condition, NULL AS urgency, NULL AS overall_state "
+            f"FROM ({union_sql})"
+        )
     return (
-        f"SELECT *, {urgency_col} AS urgency, {overall_col} AS overall_state "
-        f"FROM ({union_sql})",
-        params,
+        sql,
+        [*history_params, *params],
     )
 
 
@@ -507,10 +584,23 @@ def list_dashboard_page(
     axes = axes or prepare_status_model_context(
         db_path, certificate_status=status, settings=axis_settings
     )
+    filter_axes = frozenset(
+        axis
+        for axis, value in (
+            ("urgency", urgency),
+            ("condition", condition),
+            ("monitoring", monitoring),
+            ("renewal", renewal),
+            ("delivery", delivery),
+        )
+        if value
+    )
+    # COUNT and key selection use only the axes required by active filters.
+    # The full four-axis projection is applied after LIMIT to the returned
+    # keys, so an unfiltered 20k estate evaluates at most 25/50 display rows.
     candidates = inventory_candidates_sql(
         source=source, q=q, scope_tags=scope_tags, status=status, axes=axes,
-        entry_id=entry_id,
-        sql_delivery=bool(delivery),
+        entry_id=entry_id, sql_delivery=bool(delivery), axis_columns=filter_axes,
     )
     if candidates is None:
         return [], 0
@@ -534,13 +624,7 @@ def list_dashboard_page(
         total_row = conn.execute(f"SELECT COUNT(*) FROM ({base_sql})", params).fetchone()
         total = total_row[0] if total_row else 0
 
-        # The status filter's chain status comes along, so the rows show it.
-        cols = (
-            "etype, ekey, hostname, port, chain_status, eff_days, condition, monitoring,"
-            " monitoring_last_success, monitoring_last_attempt,"
-            " monitoring_attempt_status, monitoring_error, monitoring_first_failed,"
-            " renewal, has_successor, delivery, overall_state"
-        )
+        cols = "etype, ekey, hostname, port"
         page_sql = f"SELECT {cols} FROM ({base_sql}) ORDER BY {sort_col} {sql_dir}"
         page_params = list(params)
         if per_page > 0:
@@ -548,7 +632,32 @@ def list_dashboard_page(
             offset = (clamped - 1) * per_page
             page_sql += " LIMIT ? OFFSET ?"
             page_params += [per_page, offset]
-        ordered = conn.execute(page_sql, page_params).fetchall()
+        selected = conn.execute(page_sql, page_params).fetchall()
+        if not selected:
+            return [], int(total)
+        keys = tuple((str(row["etype"]), str(row["ekey"])) for row in selected)
+        endpoints = tuple(
+            dict.fromkeys(
+                (str(row["hostname"]), int(row["port"]))
+                for row in selected
+                if row["hostname"] is not None and row["port"] is not None
+            )
+        )
+        full_candidates = inventory_candidates_sql(
+            source=source,
+            q=q,
+            scope_tags=scope_tags,
+            status=status,
+            axes=axes,
+            entry_id=entry_id,
+            entry_keys=keys,
+            history_endpoints=endpoints,
+        )
+        assert full_candidates is not None
+        full_sql, full_params = full_candidates
+        full_rows = conn.execute(full_sql, full_params).fetchall()
+        by_key = {(str(row["etype"]), str(row["ekey"])): row for row in full_rows}
+        ordered = [by_key[key] for key in keys if key in by_key]
         built = build_inventory_entries(db_path, conn, ordered, status=status, axes=axes)
     attach_status_models(db_path, built, axes)
     return built, total

@@ -10,10 +10,33 @@ from typing import Any, cast
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from cert_watch.status_model import overall_state
+from cert_watch.status_model import invalid_status_filters, overall_state
 from cert_watch.tags import format_tags, parse_tags
 
 logger = logging.getLogger("cert_watch.routes.api")
+
+
+def status_filter_error(
+    *,
+    condition: str | None,
+    monitoring: str | None,
+    renewal: str | None,
+    delivery: str | None,
+) -> JSONResponse | None:
+    """Return the list API's 400 response for an unknown axis token."""
+    invalid = invalid_status_filters(
+        condition=condition,
+        monitoring=monitoring,
+        renewal=renewal,
+        delivery=delivery,
+    )
+    if not invalid:
+        return None
+    name, value = next(iter(invalid.items()))
+    return JSONResponse(
+        status_code=400,
+        content={"error": f"invalid {name} filter: {value}"},
+    )
 
 
 def delivery_details_allowed(request: Request) -> bool:
