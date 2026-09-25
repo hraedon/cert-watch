@@ -10,9 +10,8 @@ from fastapi.responses import PlainTextResponse
 from prometheus_client import CollectorRegistry, Gauge, generate_latest
 
 from cert_watch.auth.guards import metrics_guard
-from cert_watch.database import get_posture_grades_for_certs
+from cert_watch.database import dashboard_urgency_stats, get_posture_grades_for_certs
 from cert_watch.database.connection import _connect, _parse_iso
-from cert_watch.filters import compute_urgency
 from cert_watch.routes._deps import _db_path
 from cert_watch.security.ratelimit import rate_limit
 
@@ -101,6 +100,9 @@ def metrics(
     )
 
     now = datetime.now(UTC)
+    # The dashboard's own counts (chain-aware, one rule), as documented; an
+    # expiry-only recount here disagreed with Home and Browse (#113).
+    urgency_counts = dashboard_urgency_stats(db)
     with _connect(db) as conn:
         cert_rows = conn.execute(
             "SELECT c.id, c.hostname, c.port, c.subject, c.not_after, "
@@ -111,7 +113,6 @@ def metrics(
         cert_ids = [r["id"] for r in cert_rows]
         posture_map: dict[str, str] = get_posture_grades_for_certs(db, cert_ids) if cert_ids else {}
 
-        urgency_counts = {"healthy": 0, "warning": 0, "critical": 0, "expired": 0}
         grade_counts: dict[str, int] = {
             "a_plus": 0, "a": 0, "b": 0, "c": 0, "f": 0, "unknown": 0,
         }
@@ -124,7 +125,6 @@ def metrics(
             cert_expiry_gauge.labels(
                 host=host_label, subject=r["subject"], fingerprint=fp_short,
             ).set(days)
-            urgency_counts[compute_urgency(days)] += 1
             if days < 0:
                 expired += 1
             grade = posture_map.get(r["id"], "unknown")
@@ -157,8 +157,9 @@ def metrics(
             alert_status_counts[row["status"]] = row["cnt"]
 
         failed_recent_row = conn.execute(
+            # When it became failed: it can give up without an attempt.
             "SELECT COUNT(*) FROM alerts WHERE status = 'failed' "
-            "AND last_attempt_at > ?",
+            "AND failed_at > ?",
             ((now - timedelta(hours=24)).isoformat(),),
         ).fetchone()
         failed_recent = failed_recent_row[0] if failed_recent_row else 0

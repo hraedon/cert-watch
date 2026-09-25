@@ -73,17 +73,12 @@ def compute_urgency(days_remaining: int | None) -> str:
 
     Thresholds per wi_fr01_dashboard AC-02:
       Red    (< 7 days), Yellow (< 30 days), Green (>= 30 days).
-    An explicit "expired" tier is added for already-expired certs.
+    An explicit "expired" tier is added for already-expired certs. The
+    thresholds live in :mod:`cert_watch.status_rule`, the one status rule.
     """
-    if days_remaining is None:
-        return "gray"
-    if days_remaining < 0:
-        return "expired"
-    if days_remaining < 7:
-        return "critical"
-    if days_remaining < 30:
-        return "warning"
-    return "healthy"
+    from cert_watch.status_rule import expiry_urgency
+
+    return expiry_urgency(days_remaining)
 
 
 def urgency_label(urgency: str) -> str:
@@ -104,27 +99,6 @@ def urgency_tone(urgency: str) -> str:
     team_dashboard.html.
     """
     return _URGENCY_TONES.get(urgency, "var(--text-3)")
-
-
-def compute_urgency_with_chain(
-    leaf_days: int,
-    min_chain_days: int | None = None,
-    chain_status_val: str | None = None,
-) -> str:
-    """Compute urgency considering chain child expiry.
-
-    Takes the minimum of leaf_days and min_chain_days (if present)
-    to surface the earliest expiry in the chain. Chain *status*
-    (incomplete/invalid) is NOT downgraded to "warning" here —
-    the chain chip and posture grade already carry that story,
-    and conflating it with time-based urgency makes "Warning"
-    mean two unrelated things (Issue 10).
-    """
-    all_days = [leaf_days]
-    if min_chain_days is not None:
-        all_days.append(int(min_chain_days))
-    min_days = min(all_days)
-    return compute_urgency(min_days)
 
 
 def relative_short(days: int) -> str:

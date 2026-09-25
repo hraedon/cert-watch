@@ -416,17 +416,34 @@ def list_cert_history(
     return [dict(r) for r in rows]
 
 
+# Trend bucket -> SQL expression over cert_history.scanned_at. Fixed strings
+# only; the caller's value selects one, it is never interpolated.
+_TREND_BUCKETS = {
+    "day": "DATE(scanned_at)",
+    "month": "strftime('%Y-%m', scanned_at)",
+}
+
+
 def list_tls_version_trends(
     db_path: str | Path,
     days: int = 30,
     scope_tags: list[str] | tuple[str, ...] | None = None,
+    *,
+    bucket: str = "day",
 ) -> list[dict[str, Any]]:
     """Fleet TLS version distribution over time.
 
     Returns [{date, protocol_version, count}] for the last *days* days.
 
     ``scope_tags`` restricts results to hosts whose tags match (WI-128).
+
+    ``count`` is the number of *endpoints* in the bucket, each counted once
+    with its latest observation in that bucket (``bucket`` is ``"day"`` or
+    ``"month"``; month rows carry ``date`` as ``YYYY-MM``). It used to count
+    scan rows, so every rescan -- and every day of a month -- counted an
+    endpoint again (#113).
     """
+    period = _TREND_BUCKETS[bucket]
     init_schema(db_path)
     cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     where = "scanned_at >= ? AND protocol_version IS NOT NULL AND protocol_version != ''"
@@ -445,10 +462,18 @@ def list_tls_version_trends(
         params = params + host_params
     with _connect(db_path) as conn:
         rows = conn.execute(
-            f"""SELECT DATE(scanned_at) as date, protocol_version, COUNT(*) as count
-                FROM cert_history
-                WHERE {where}
-                GROUP BY DATE(scanned_at), protocol_version
+            f"""WITH obs AS (
+                    SELECT {period} AS date, protocol_version, hostname, port,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY {period}, hostname, port
+                               ORDER BY scanned_at DESC, id DESC
+                           ) AS n
+                    FROM cert_history
+                    WHERE {where}
+                )
+                SELECT date, protocol_version, COUNT(*) as count
+                FROM obs WHERE n = 1
+                GROUP BY date, protocol_version
                 ORDER BY date DESC""",
             params,
         ).fetchall()
@@ -459,13 +484,22 @@ def list_grade_trends(
     db_path: str | Path,
     days: int = 30,
     scope_tags: list[str] | tuple[str, ...] | None = None,
+    *,
+    bucket: str = "day",
 ) -> list[dict[str, Any]]:
     """Fleet posture grade distribution over time.
 
     Returns [{date, posture_grade, count}] for the last *days* days.
 
     ``scope_tags`` restricts results to hosts whose tags match (WI-128).
+
+    ``count`` is the number of *endpoints* in the bucket, each counted once
+    with its latest observation in that bucket (``bucket`` is ``"day"`` or
+    ``"month"``; month rows carry ``date`` as ``YYYY-MM``). It used to count
+    scan rows, so every rescan -- and every day of a month -- counted an
+    endpoint again (#113).
     """
+    period = _TREND_BUCKETS[bucket]
     init_schema(db_path)
     cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     where = "scanned_at >= ? AND posture_grade IS NOT NULL AND posture_grade != ''"
@@ -484,10 +518,18 @@ def list_grade_trends(
         params = params + host_params
     with _connect(db_path) as conn:
         rows = conn.execute(
-            f"""SELECT DATE(scanned_at) as date, posture_grade, COUNT(*) as count
-                FROM cert_history
-                WHERE {where}
-                GROUP BY DATE(scanned_at), posture_grade
+            f"""WITH obs AS (
+                    SELECT {period} AS date, posture_grade, hostname, port,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY {period}, hostname, port
+                               ORDER BY scanned_at DESC, id DESC
+                           ) AS n
+                    FROM cert_history
+                    WHERE {where}
+                )
+                SELECT date, posture_grade, COUNT(*) as count
+                FROM obs WHERE n = 1
+                GROUP BY date, posture_grade
                 ORDER BY date DESC""",
             params,
         ).fetchall()

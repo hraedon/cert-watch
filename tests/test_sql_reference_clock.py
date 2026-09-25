@@ -98,16 +98,17 @@ def test_sql_urgency_matches_python_days_remaining(
     kwargs = {"now": ref} if mode == "injected" else {}
 
     def run_queries() -> None:
-        # Fleet pivot: per-group day count and worst urgency come from SQL.
-        groups = {
-            g["key"]: g for g in list_fleet_pivot(db, "issuer", **kwargs)
-        }
-        for name, delta in OFFSETS.items():
-            group = groups[f"CA for {name}"]
-            days = _python_days(delta)
-            expected_days = -1 if delta < timedelta(0) else days
-            assert group["earliest_expiry"] == expected_days, name
-            assert group["worst_urgency"] == _python_urgency(days), name
+        # Fleet pivot: groups the Browse rows, whose status is computed in
+        # Python from the process clock (#113), so like grouped Browse below
+        # it takes no injected instant; frozen time only. The day count is the
+        # real one, negative once expired (it used to be clamped to -1).
+        if mode == "frozen":
+            groups = {g["key"]: g for g in list_fleet_pivot(db, "issuer")}
+            for name, delta in OFFSETS.items():
+                group = groups[f"CA for {name}"]
+                days = _python_days(delta)
+                assert group["earliest_expiry"] == days, name
+                assert group["worst_urgency"] == _python_urgency(days), name
 
         # Home expiry cards: SQL CASE buckets.
         assert dashboard_expiry_stats(db, **kwargs) == _expected_buckets()

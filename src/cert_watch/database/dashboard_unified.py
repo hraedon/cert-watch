@@ -9,6 +9,7 @@ host/scan context), ``_build_pending_entries`` (hosts with no leaf cert),
 """
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,9 @@ from cert_watch.database.dashboard_rows import _build_dashboard_rows
 from cert_watch.database.schema import init_schema
 from cert_watch.filters import subject_cn
 from cert_watch.tags import format_tags, merge_tags
+
+# Bound on bound parameters per ``IN (...)``: well under SQLite's limit.
+_IN_CHUNK = 400
 
 
 def _build_unified_from_dash(
@@ -89,6 +93,7 @@ def _build_unified_from_dash(
                     "not_before": None,
                     "not_after": None,
                     "days_remaining": None,
+                    "effective_days": None,
                     "urgency": "gray",
                     "leaf_urgency": "gray",
                     "chain": [],
@@ -152,6 +157,7 @@ def _build_pending_entries(host_rows: list[Any], scan_rows: list[Any]) -> list[d
             "not_before": None,
             "not_after": None,
             "days_remaining": None,
+            "effective_days": None,
             "urgency": "gray",
             "leaf_urgency": "gray",
             "chain": [],
@@ -177,6 +183,8 @@ def _build_unified_for_leaf_ids(
     host_rows: list[Any],
     scan_rows: list[Any],
     anchor_rows: list[Any],
+    now: datetime | None = None,
+    chain_statuses: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Build scanned/uploaded unified entries for a specific set of leaf ids.
 
@@ -187,14 +195,20 @@ def _build_unified_for_leaf_ids(
     """
     if not leaf_ids:
         return []
-    ph = ",".join("?" * len(leaf_ids))
-    leaf_rows = conn.execute(
-        f"SELECT * FROM certificates WHERE id IN ({ph})", leaf_ids
-    ).fetchall()
-    chain_rows = conn.execute(
-        f"SELECT * FROM certificates WHERE parent_cert_id IN ({ph})", leaf_ids
-    ).fetchall()
-    dash = _build_dashboard_rows(list(leaf_rows) + list(chain_rows), anchor_rows)
+    leaf_rows: list[Any] = []
+    chain_rows: list[Any] = []
+    for start in range(0, len(leaf_ids), _IN_CHUNK):
+        chunk = leaf_ids[start : start + _IN_CHUNK]
+        ph = ",".join("?" * len(chunk))
+        leaf_rows += conn.execute(
+            f"SELECT * FROM certificates WHERE id IN ({ph})", chunk
+        ).fetchall()
+        chain_rows += conn.execute(
+            f"SELECT * FROM certificates WHERE parent_cert_id IN ({ph}) ORDER BY rowid", chunk
+        ).fetchall()
+    dash = _build_dashboard_rows(
+        leaf_rows + chain_rows, anchor_rows, now=now, chain_statuses=chain_statuses
+    )
     return _build_unified_from_dash(dash, host_rows, scan_rows)
 
 

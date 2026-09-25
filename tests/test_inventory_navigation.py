@@ -172,10 +172,13 @@ def test_global_views_drop_stale_inventory_filters(reload_app, tmp_path, view):
         assert "scanned and uploaded certificates" in response.text
         assert response.context["total_entries"] == 1
     else:
-        assert "scanned endpoints and pending hosts" in response.text
-        assert response.context["pivot_groups"] == []
+        # Group views partition the same rows as Inventory, so the uploaded
+        # file is one grouped row, not an empty view (#113).
+        assert "every endpoint and uploaded file" in response.text
+        assert sum(g.count for g in response.context["pivot_groups"]) == 1
+        assert response.context["tracked_total"] == 1
         assert response.context["entries"] == []
-        assert 'data-testid="empty-pivot"' in response.text
+        assert 'data-testid="empty-pivot"' not in response.text
         assert 'data-testid="cert-row"' not in response.text
 
 

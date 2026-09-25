@@ -329,6 +329,7 @@ class SqliteAlertRepository(AlertRepository):
             alert.dedupe_key,
             _iso(alert.closed_at) if alert.closed_at else None,
             json.dumps(alert.routing, separators=(",", ":"), sort_keys=True),
+            _iso(alert.created_at) if alert.status == "failed" else None,
         )
         if conn is None:
             with _connect(self.db_path) as conn:
@@ -337,8 +338,9 @@ class SqliteAlertRepository(AlertRepository):
                     INSERT INTO alerts
                     (id, cert_id, alert_type, status, message, threshold_days,
                      extra_recipients, created_at, sent_at, error_message,
-                     hostname, subject, trigger_cert_id, dedupe_key, closed_at, routing)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     hostname, subject, trigger_cert_id, dedupe_key, closed_at, routing,
+                     failed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     params,
                 )
@@ -349,8 +351,9 @@ class SqliteAlertRepository(AlertRepository):
                 INSERT INTO alerts
                 (id, cert_id, alert_type, status, message, threshold_days,
                  extra_recipients, created_at, sent_at, error_message,
-                 hostname, subject, trigger_cert_id, dedupe_key, closed_at, routing)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 hostname, subject, trigger_cert_id, dedupe_key, closed_at, routing,
+                 failed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 params,
             )
