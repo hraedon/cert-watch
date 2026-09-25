@@ -178,6 +178,7 @@ from cert_watch.database.encryption import (
 # Fleet
 from cert_watch.database.fleet import (
     get_pivot_group_entries,
+    get_pivot_group_page,
     group_entries_by_fingerprint,
     list_fleet_pivot,
 )
@@ -348,6 +349,7 @@ __all__ = [  # noqa: RUF022 — exports are grouped by database subsystem
     # fleet
     "list_fleet_pivot",
     "get_pivot_group_entries",
+    "get_pivot_group_page",
     "group_entries_by_fingerprint",
     # calendar
     "list_calendar",

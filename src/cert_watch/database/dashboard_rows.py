@@ -1,13 +1,13 @@
 """Dashboard row building — rich dict construction from raw certificate rows."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from cert_watch.database.connection import (
     _connect,
-    _parse_iso,
     _row_to_cert,
     parse_san_dns_names,
 )
@@ -18,9 +18,28 @@ from cert_watch.database.schema import init_schema
 def _build_dashboard_rows(
     cert_rows: list[Any],
     anchor_rows: list[Any],
+    *,
+    now: datetime | None = None,
+    chain_statuses: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build rich dashboard rows from raw certificate and anchor rows."""
-    from cert_watch.cert_chain import chain_status, display_urgency
+    """Build rich dashboard rows from raw certificate and anchor rows.
+
+    ``urgency`` is the one status rule (:mod:`cert_watch.status_rule`): the
+    expiry status of the soonest expiry in the stored chain, with the chain
+    floor. SQL counts use the same rule, so these rows and every count of them
+    agree. ``days_remaining`` is the leaf's own day count. Pass the ``now``
+    the request's SQL used, so a selection and the rows it selected are judged
+    at one instant.
+
+    ``chain_statuses`` (leaf id -> status) is the chain status the request's
+    SQL used (:func:`~cert_watch.database.chain_status_cache.leaf_chain_statuses`):
+    when given, the rows use exactly that -- a leaf missing from it is
+    ``unverified`` -- so a row never shows a status its own count and filter
+    did not use. Without it (single-certificate views) the chain is verified
+    live, and a verification error reads as ``unverified``.
+    """
+    from cert_watch.cert_chain import chain_status
+    from cert_watch.status_rule import days_until, effective_urgency, expiry_urgency
 
     # anchor_rows come from trust_anchors, which lacks the certificate-only
     # columns (is_leaf, source) that _row_to_cert reads — default them.
@@ -35,25 +54,15 @@ def _build_dashboard_rows(
         else:
             children_by_leaf.setdefault(d["parent_cert_id"] or "", []).append(d)
 
-    def _days(iso_str: str) -> int:
-        return (_parse_iso(iso_str) - datetime.now(UTC)).days
-
-    def _urgency(days: int) -> str:
-        if days < 0:
-            return "expired"
-        if days < 7:
-            return "critical"
-        if days < 30:
-            return "warning"
-        return "healthy"
+    now = now or datetime.now(UTC)
 
     dash: list[dict[str, Any]] = []
     for leaf in leaf_rows:
         chain = children_by_leaf.get(leaf["id"], [])
-        leaf_days = _days(leaf["not_after"])
+        leaf_days = days_until(leaf["not_after"], now)
         chain_view = []
         for c in chain:
-            days = _days(c["not_after"])
+            days = days_until(c["not_after"], now)
             chain_view.append({
                 "id": c["id"],
                 "subject": c["subject"],
@@ -61,10 +70,9 @@ def _build_dashboard_rows(
                 "not_before": c["not_before"],
                 "not_after": c["not_after"],
                 "days_remaining": days,
-                "urgency": _urgency(days),
+                "urgency": expiry_urgency(days),
             })
-        all_days = [leaf_days, *[c["days_remaining"] for c in chain_view]]
-        min_days = min(all_days)
+        min_days = min([leaf_days, *[c["days_remaining"] for c in chain_view]])
         host = (
             f"{leaf['hostname']}:{leaf['port']}"
             if leaf["hostname"]
@@ -72,8 +80,14 @@ def _build_dashboard_rows(
         )
         leaf_cert = _row_to_cert(leaf)
         chain_certs = [_row_to_cert(c) for c in chain]
-        _chain_status = chain_status(leaf_cert, chain_certs, anchors)
-        row_urgency = display_urgency(_urgency(min_days), _chain_status)
+        if chain_statuses is not None:
+            _chain_status = chain_statuses.get(leaf["id"], "unverified")
+        else:
+            try:
+                _chain_status = chain_status(leaf_cert, chain_certs, anchors)
+            except Exception:  # noqa: BLE001 -- fail closed: an unreadable chain is unverified
+                _chain_status = "unverified"
+        row_urgency = effective_urgency(min_days, _chain_status)
         dash.append(
             {
                 "id": leaf["id"],
@@ -85,7 +99,8 @@ def _build_dashboard_rows(
                 "not_after": leaf["not_after"],
                 "days_remaining": leaf_days,
                 "urgency": row_urgency,
-                "leaf_urgency": _urgency(leaf_days),
+                "leaf_urgency": expiry_urgency(leaf_days),
+                "effective_days": min_days,
                 "chain": chain_view,
                 "chain_valid": (
                     None if leaf["chain_valid"] is None else bool(leaf["chain_valid"])

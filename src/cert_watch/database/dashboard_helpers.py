@@ -75,17 +75,12 @@ def _add_effective_tag_filter(
         if not tag or tag.casefold() in seen:
             continue
         seen.add(tag.casefold())
-        like = f"%,{_escape_like(tag)},%"
+        # Both sides parsed and casefolded as Python does (``cw_tag_set``).
+        like = f"%,{_escape_like(tag.casefold())},%"
         if col_cert:
-            conditions.append(
-                f"cw_casefold(',' || COALESCE({col_cert}, '') || ',')"
-                " LIKE cw_casefold(?) ESCAPE '\\'"
-            )
+            conditions.append(f"cw_tag_set({col_cert}) LIKE ? ESCAPE '\\'")
             new_params.append(like)
-        conditions.append(
-            f"cw_casefold(',' || COALESCE({col_host}, '') || ',')"
-            " LIKE cw_casefold(?) ESCAPE '\\'"
-        )
+        conditions.append(f"cw_tag_set({col_host}) LIKE ? ESCAPE '\\'")
         new_params.append(like)
     if not conditions:
         return sql, params

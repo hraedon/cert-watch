@@ -35,7 +35,7 @@
   {# ---- Headline counts ---- #}
   <div class="cw-stats">
     {{ ui.stat('Certificates', report.total_certs, 'in report scope', icon='shield') }}
-    {{ ui.stat('Hosts', report.total_hosts, 'monitored endpoints', icon='server') }}
+    {{ ui.stat('Endpoints', report.total_hosts, 'scanned, with a certificate', icon='server') }}
     {% if report.fleet_grade %}
     {{ ui.stat('Fleet grade', report.fleet_grade, 'worst-weighted', tone=grade_tone(report.fleet_grade) | trim, icon='shield') }}
     {% else %}
@@ -48,7 +48,7 @@
   <div class="cw-panel">
     <div class="cw-panel-head">
       <h2>Posture grade distribution</h2>
-      <span class="cw-hint">latest scan per certificate</span>
+      <span class="cw-hint">latest grade per certificate · uploaded files graded from the file</span>
     </div>
     <div class="cw-panel-body">
       <div class="cw-chiprow">
@@ -121,7 +121,8 @@
         <tbody>
           {% for e in bucket.entries %}
           <tr>
-            <td class="mono">{{ e.host }}{% if e.port != 443 %}:{{ e.port }}{% endif %}</td>
+            {# host is already the endpoint (name:port), or "(uploaded)" for a file #}
+            <td class="mono">{{ e.host }}</td>
             <td>{{ e.subject }}</td>
             <td class="num">{{ e.days_remaining }}</td>
             <td>{{ ui.status(e.urgency) }}</td>

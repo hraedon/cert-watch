@@ -58,7 +58,7 @@
   <div class="cw-panel" data-testid="attention-panel">
     <div class="cw-panel-head">
       <h2>{{ icons.svg_icon('alert', 15) }} Needs attention</h2>
-      {% if queue %}<span class="cw-hint">{{ queue | length }} item{{ 's' if queue | length != 1 }}</span>{% endif %}
+      {% if queue %}<span class="cw-hint">{% if queue_total > queue | length %}{{ queue | length }} most urgent of {{ queue_total }} items{% else %}{{ queue | length }} item{{ 's' if queue | length != 1 }}{% endif %}</span>{% endif %}
     </div>
     <div class="cw-panel-body">
       {% for it in queue %}

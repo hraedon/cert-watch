@@ -127,6 +127,22 @@ from cert_watch.migrations.m0038_canonical_hostnames import (
 from cert_watch.migrations.m0038_canonical_hostnames import (
     upgrade as canonical_hostnames_upgrade,
 )
+from cert_watch.migrations.m0039_cert_chain_status_cache import (
+    DESCRIPTION as cert_chain_status_cache_description,
+)
+from cert_watch.migrations.m0039_cert_chain_status_cache import (
+    MIGRATION_ID as cert_chain_status_cache_id,
+)
+from cert_watch.migrations.m0039_cert_chain_status_cache import (
+    upgrade as cert_chain_status_cache_upgrade,
+)
+from cert_watch.migrations.m0040_alert_failed_at import (
+    DESCRIPTION as alert_failed_at_description,
+)
+from cert_watch.migrations.m0040_alert_failed_at import (
+    MIGRATION_ID as alert_failed_at_id,
+)
+from cert_watch.migrations.m0040_alert_failed_at import upgrade as alert_failed_at_upgrade
 from cert_watch.migrations.m0041_retire_renewed_status import (
     DESCRIPTION as retire_renewed_status_description,
 )
@@ -263,6 +279,12 @@ runner.register(
     canonical_hostnames_description,
     canonical_hostnames_upgrade,
 )
+runner.register(
+    cert_chain_status_cache_id,
+    cert_chain_status_cache_description,
+    cert_chain_status_cache_upgrade,
+)
+runner.register(alert_failed_at_id, alert_failed_at_description, alert_failed_at_upgrade)
 runner.register(
     retire_renewed_status_id,
     retire_renewed_status_description,

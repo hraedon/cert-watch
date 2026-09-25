@@ -12,6 +12,79 @@ All notable changes to cert-watch are documented in this file.
 - Legacy failed expiry alerts are eligible for revival based on certificate
   state alone; a stale host renewal report no longer keeps them failed.
 
+- Every page now counts the estate the same way; the definitions are in
+  [docs/operations.md](docs/operations.md#what-the-numbers-mean) (#113):
+  - Browse's issuer, owner and renewal-method views include uploaded files and
+    use the row status rule, so their Tracked and Warning cards match
+    Inventory and Home. Expanding a group lists exactly the rows its count
+    promised.
+  - Their Earliest expiry column shows the real value ("expired 401 days
+    ago") instead of "-1 days" for every expired group.
+  - The Posture fleet grade counts each current certificate once, the same
+    certificates the compliance report grades, instead of every posture row
+    ever stored. Uploaded files are graded from the file, as the report
+    already did.
+  - Posture trends count each endpoint once per month, and the grade and TLS
+    trend API counts each endpoint once per day, instead of once per scan.
+  - Scan history counts endpoints, not scan attempts (a batch read "70/78
+    hosts" for 38 hosts), and shows attempts in their own column. It no
+    longer labels every batch "Scheduled": the trigger isn't recorded, so it
+    isn't shown.
+  - `cert_watch_certificates_by_urgency` uses the dashboard's status rule, as
+    documented.
+  - One status rule everywhere: status comes from the soonest expiry among a
+    certificate and its stored chain, with the unverified-chain floor, and
+    the database counts with the same rule the rows show. An expanded group
+    no longer shows a certificate with an expired intermediate as Healthy
+    inside a group counted as Expired, Inventory's status filter and the
+    certificate grouping filter agree with the rows, and a group's Earliest
+    expiry is the soonest expiry in its chains.
+  - Home's and Browse's status cards, the group views and expanding a group
+    no longer build every row of the estate to count it; a group view reads
+    one row per group and status. Expanding a group loads it 100 rows at a
+    time ("Show more"), and every read is keyed by the rows shown.
+  - Home's "Needs attention" queue is ranked in the database with the same
+    status rule and shows the 50 most urgent items ("50 most urgent of N
+    items"); it used to rebuild every certificate on each visit. It now
+    lists a certificate whose intermediate expired first as Expired, with the
+    intermediate named, where it used to go by the leaf alone.
+  - A selection and the rows it returns are judged at one instant, so a
+    Warning filter can't return a row that turned Critical in between.
+  - Tag scopes match tags as written, spaces included: a host tagged
+    `staging, edge` is in scope `edge` on Home's cards, Browse and the
+    group views, as it already was in Browse's certificate grouping. The
+    alert-group match preview matches tags the same way.
+  - Every row, expanded group and attention item shows the chain status its
+    request counted with. A chain that isn't verified yet (for example
+    while the status cache can't be written) is "chain not verified" and
+    Warning everywhere, instead of Warning in the counts and Healthy in the
+    rows, and Home no longer says "Nothing needs attention" while counting
+    it. A certificate's own page shows "Chain not verified" (Warning) if
+    verifying its chain fails, instead of an error page.
+- The compliance report no longer doubles non-443 ports (`host:636:636`) or
+  shows uploaded files as `(uploaded):0`. Its Urgency column uses the same
+  status rule as Browse, so a certificate with an unverifiable chain is
+  Warning in both, and its expiry sections use the status thresholds (7 days
+  left is no longer "within 7 days") on the same effective days as the
+  status: a certificate whose intermediate has expired is listed under
+  Expired with the intermediate's date, not left out of every section.
+  Reports exported before this change
+  still verify. `cert-watch verify-report` prints what passed instead of
+  `PASS — PASS` (#113).
+- `/api/health` `failed_alerts_24h` counts alerts whose delivery failed and
+  that are still retrying, not only those that gave up, so a webhook returning
+  HTTP 500 on every attempt shows on the health strip. A new
+  `endpoints_without_successful_scan` count turns the strip amber instead of
+  "Monitoring pipeline healthy" while endpoints have never been scanned, and
+  the strip's time is UTC like the rest of the UI (#113).
+- An alert that gave up without a delivery attempt (the bounded evidence
+  deferral) counts in `failed_alerts_24h` and `cert_watch_alerts_failed_recent`;
+  both used the last attempt's time, which such an alert doesn't have, and
+  stayed green (#113).
+- Scan history no longer counts a partial scan as a success: a batch whose
+  only endpoint scanned partially read "1/1, success". Partial scans show as
+  incomplete (#113).
+
 ### Changed
 
 - Removed the manual `renewed` host status from the detail page, form service,
@@ -19,8 +92,19 @@ All notable changes to cert-watch are documented in this file.
   renewal-stalled notices only. Requests that send `renewed` now return a
   validation error.
 - Migration **0041** resets stored `renewed` statuses to `pending` and records
-  one audit entry per changed host. Migration ids 0039 and 0040 are reserved by
-  the work in pull request #114.
+  one audit entry per changed host. It runs after migrations 0039 and 0040.
+
+### Upgrade notes
+
+See [UPGRADING.md](UPGRADING.md#upgrading-from-103-unreleased).
+
+- Two schema migrations, applied on startup: 0039 caches each certificate's
+  chain status (filled on the first page load after the upgrade, one
+  signature check per certificate), and 0040 records when an alert gave up.
+  Existing failed alerts are dated by their last attempt; one that failed
+  without any attempt is dated to the upgrade, so it shows in
+  `failed_alerts_24h` for the next 24 hours rather than possibly going
+  unseen.
 
 ## [1.0.3] - 2026-09-24
 

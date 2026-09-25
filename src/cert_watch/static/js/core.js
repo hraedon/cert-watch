@@ -260,13 +260,18 @@
         if (data.last_scan_at) {
           var d = new Date(data.last_scan_at);
           if (!isNaN(d.getTime())) {
-            when = ' at ' + d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+            // UTC, 24-hour, like every other timestamp in the UI.
+            when = ' at ' + d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
           }
         }
         parts.push('Last scan ' + (data.last_scan_status === 'partial' ? 'partially failed' : 'failed') + when);
       }
       if (data.failed_alerts_24h > 0) {
         parts.push(data.failed_alerts_24h + ' failed alert' + (data.failed_alerts_24h > 1 ? 's' : '') + ' in last 24h');
+      }
+      if (data.endpoints_without_successful_scan > 0) {
+        var n = data.endpoints_without_successful_scan;
+        parts.push(n + ' endpoint' + (n > 1 ? 's' : '') + ' without a successful scan');
       }
       if (data.undelivered_alerts > 0) {
         parts.push(data.undelivered_alerts + ' alert' + (data.undelivered_alerts > 1 ? 's' : '') + ' still undelivered');

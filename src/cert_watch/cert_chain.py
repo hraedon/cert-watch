@@ -14,7 +14,11 @@ from cert_watch.certificate_model import Certificate, parse_certificate
 
 logger = logging.getLogger("cert_watch.cert_chain")
 
-ACTIONABLE_CHAIN_STATUSES = frozenset({"unknown", "self-signed", "incomplete", "invalid"})
+# "unverified" is not a chain_status() result: it is what the SQL status rule
+# reads when a leaf's cached status is missing or stale (fail closed, #113).
+ACTIONABLE_CHAIN_STATUSES = frozenset(
+    {"unknown", "self-signed", "incomplete", "invalid", "unverified"}
+)
 
 
 def display_urgency(expiry_urgency: str, chain_status: str | None) -> str:

@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from cert_watch.status_rule import CRITICAL_DAYS, WARNING_DAYS
+
 logger = logging.getLogger("cert_watch.compliance")
 
 
@@ -226,20 +228,29 @@ def _load_compliance_rows(
     """Fetch minimal leaf-certificate rows for compliance reporting.
 
     Replaces ``list_dashboard_rows`` for the compliance path so the report
-    builder does not materialise full chain children, anchor rows, and
-    dashboard metadata (BC-122).  SQL-level tag filtering keeps the candidate
-    set tight when ``scope_tag`` is set.
+    builder does not materialise host, scan and dashboard metadata (BC-122).
+    Status comes from the SQL form of the one status rule
+    (:mod:`cert_watch.status_rule`), the rule Browse and Home use: each row's
+    ``days_remaining`` is its *effective* days (the soonest expiry among the
+    leaf and its stored chain) and ``not_after`` the matching date, so a row's
+    remediation bucket, its days and its urgency always agree (#113 review:
+    an expired intermediate on a 99-day leaf was labelled Expired but listed
+    in no bucket). SQL-level tag filtering keeps the candidate set tight when
+    ``scope_tag`` is set.
 
     ``scope_tags`` is the acting user's visibility scope (#112): rows must
     also match one of those tags. ``scope_tag`` narrows the report; it never
     widens what a scoped user can see.
     """
     from cert_watch.database import init_schema
+    from cert_watch.database.chain_status_cache import prepare_status, verified_chain_status_sql
     from cert_watch.database.connection import _connect, _parse_iso
+    from cert_watch.status_rule import effective_days_sql, effective_urgency
 
     init_schema(db_path)
+    status = prepare_status(db_path)
     with _connect(db_path) as conn:
-        sql = """
+        sql = f"""
             SELECT
                 c.id,
                 c.subject,
@@ -250,12 +261,17 @@ def _load_compliance_rows(
                 c.port,
                 c.tags,
                 c.source,
+                {verified_chain_status_sql("c")} AS chain_status,
+                {effective_days_sql("c")} AS eff_days,
+                (SELECT ch.not_after FROM certificates ch
+                 WHERE ch.parent_cert_id = c.id
+                 ORDER BY julianday(ch.not_after) LIMIT 1) AS chain_not_after,
                 COALESCE(h.owner_name, '') AS owner_name
             FROM certificates c
             LEFT JOIN hosts h ON c.hostname = h.hostname AND c.port = h.port
             WHERE c.is_leaf = 1
         """
-        params: list[Any] = []
+        params: list[Any] = [status.trust, status.sql_now]
         # Match EFFECTIVE tags (cert ∪ host) like every other scope path
         # — filtering c.tags alone silently omitted certificates that
         # inherit the tag from their host (plan 055 finding C9).
@@ -274,20 +290,18 @@ def _load_compliance_rows(
         rows = conn.execute(sql, params).fetchall()
 
     result: list[dict[str, Any]] = []
-    now = datetime.now(UTC)
     for r in rows:
         d = dict(r)
-        days = (_parse_iso(d["not_after"]) - now).days
+        days = int(d["eff_days"])
+        not_after = d["not_after"]
+        chain_not_after = d["chain_not_after"]
+        if chain_not_after and _parse_iso(chain_not_after) < _parse_iso(not_after):
+            # A chain certificate expires first; that is the date that needs
+            # acting on, and the one the days count.
+            not_after = chain_not_after
+        # ``host`` is the endpoint (``name:port``); the port is carried
+        # separately for the CSV. Uploaded files have no endpoint.
         host = f"{d['hostname']}:{d['port']}" if d["hostname"] else "(uploaded)"
-        urgency = (
-            "expired"
-            if days < 0
-            else "critical"
-            if days < 7
-            else "warning"
-            if days < 30
-            else "healthy"
-        )
         result.append(
             {
                 "id": d["id"],
@@ -297,9 +311,9 @@ def _load_compliance_rows(
                 "subject": d["subject"],
                 "issuer": d["issuer"],
                 "not_before": d["not_before"],
-                "not_after": d["not_after"],
+                "not_after": not_after,
                 "days_remaining": days,
-                "urgency": urgency,
+                "urgency": effective_urgency(days, d["chain_status"]),
                 "owner_name": d["owner_name"],
                 "tags": d["tags"],
             }
@@ -321,6 +335,89 @@ def _describe_scope(
     return team_scope, "All monitored certificates"
 
 
+def _grade_map(db_path: str | Path, cert_ids: list[str]) -> dict[str, str]:
+    """Latest posture grade per certificate, one entry per certificate.
+
+    Certificates without a stored scan posture (typically uploaded files that
+    were never scanned) are evaluated from their DER, which is what the
+    certificate detail page shows for them (Issue 10).
+    """
+    from cert_watch.certificate_model import Certificate as _Cert
+    from cert_watch.certificate_model import parse_certificate
+    from cert_watch.database import get_posture_grades_for_certs
+    from cert_watch.database.connection import _connect
+    from cert_watch.posture import evaluate_posture
+
+    grade_map = get_posture_grades_for_certs(db_path, cert_ids) if cert_ids else {}
+    missing_ids = [cid for cid in cert_ids if cid not in grade_map]
+    if missing_ids:
+        placeholders = ",".join("?" * len(missing_ids))
+        with _connect(db_path) as conn:
+            cert_rows = conn.execute(
+                f"SELECT id, raw_der FROM certificates WHERE id IN ({placeholders})",
+                missing_ids,
+            ).fetchall()
+        for cr in cert_rows:
+            cid = cr["id"]
+            try:
+                if cr["raw_der"]:
+                    parsed = parse_certificate(bytes(cr["raw_der"]))
+                    if isinstance(parsed, _Cert):
+                        grade_map[cid] = evaluate_posture(cert=parsed, chain_status=None).grade
+            except Exception:
+                logger.debug("posture evaluation failed for cert %s", cid, exc_info=True)
+    return grade_map
+
+
+def _grade_distribution(grade_map: dict[str, str]) -> tuple[dict[str, int], list[str]]:
+    grade_dist: dict[str, int] = {"A+": 0, "A": 0, "B": 0, "C": 0, "F": 0}
+    all_grades: list[str] = []
+    for g in grade_map.values():
+        g_upper = g.upper()
+        if g_upper in grade_dist:
+            grade_dist[g_upper] += 1
+        else:
+            grade_dist["F"] += 1
+        all_grades.append(g_upper)
+    return grade_dist, all_grades
+
+
+def fleet_grade_summary(
+    db_path: str | Path, *, scope_tags: list[str] | tuple[str, ...] = (),
+) -> dict[str, Any] | None:
+    """The Posture page's fleet grade, over the compliance report's population.
+
+    One grade per current leaf certificate -- the latest stored posture, or a
+    live evaluation for an uploaded file -- so the Posture card and the
+    compliance report grade the same certificates. The page used to count
+    every ``scan_posture`` row ever written, so each rescan inflated the total
+    (#113). Returns ``None`` when nothing is graded.
+    """
+    from cert_watch.database import init_schema
+    from cert_watch.database.connection import _connect
+
+    init_schema(db_path)
+    sql = "SELECT c.id FROM certificates c LEFT JOIN hosts h ON c.hostname = h.hostname " \
+          "AND c.port = h.port WHERE c.is_leaf = 1"
+    params: list[Any] = []
+    if scope_tags:
+        from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
+
+        sql, params = _add_effective_tag_filter(
+            sql, params, scope_tags, col_cert="c.tags", col_host="h.tags"
+        )
+    with _connect(db_path) as conn:
+        cert_ids = [r["id"] for r in conn.execute(sql, params).fetchall()]
+    grade_dist, all_grades = _grade_distribution(_grade_map(db_path, cert_ids))
+    if not all_grades:
+        return None
+    return {
+        "grade": _fleet_grade(all_grades),
+        "counts": {g: n for g, n in grade_dist.items() if n},
+        "total": len(all_grades),
+    }
+
+
 def build_compliance_report(
     db_path: str | Path,
     *,
@@ -337,11 +434,7 @@ def build_compliance_report(
     report only ever covers certificates they can see, with or without a
     requested tag (#112). Empty means the whole estate.
     """
-    from cert_watch.database import (
-        get_posture_for_certs,
-        get_posture_grades_for_certs,
-        init_schema,
-    )
+    from cert_watch.database import get_posture_for_certs, init_schema
     from cert_watch.posture import tls_version_meets_1_2
 
     init_schema(db_path)
@@ -356,44 +449,7 @@ def build_compliance_report(
     total_hosts = len(host_set)
 
     cert_ids = [r["id"] for r in rows if r.get("id")]
-    grade_map = get_posture_grades_for_certs(db_path, cert_ids)
-
-    # Fallback: evaluate posture for certs without stored scan_posture
-    # (typically uploaded certs that were never scanned). This makes the
-    # compliance grade distribution match the cert detail page, which
-    # evaluates posture live for uploaded certs (Issue 10).
-    from cert_watch.certificate_model import Certificate as _Cert
-    from cert_watch.database.connection import _connect as _cmp_conn
-    from cert_watch.posture import evaluate_posture as _eval_posture
-    missing_ids = [r["id"] for r in rows if r.get("id") and r["id"] not in grade_map]
-    if missing_ids:
-        placeholders = ",".join("?" * len(missing_ids))
-        with _cmp_conn(db_path) as conn:
-            cert_rows = conn.execute(
-                f"SELECT id, raw_der FROM certificates WHERE id IN ({placeholders})",
-                missing_ids,
-            ).fetchall()
-        for cr in cert_rows:
-            cid = cr["id"]
-            try:
-                if cr["raw_der"]:
-                    from cert_watch.certificate_model import parse_certificate
-                    parsed = parse_certificate(bytes(cr["raw_der"]))
-                    if isinstance(parsed, _Cert):
-                        result = _eval_posture(cert=parsed, chain_status=None)
-                        grade_map[cid] = result.grade
-            except Exception:
-                logger.debug("posture evaluation failed for cert %s", cid, exc_info=True)
-
-    grade_dist: dict[str, int] = {"A+": 0, "A": 0, "B": 0, "C": 0, "F": 0}
-    all_grades: list[str] = []
-    for g in grade_map.values():
-        g_upper = g.upper()
-        if g_upper in grade_dist:
-            grade_dist[g_upper] += 1
-        else:
-            grade_dist["F"] += 1
-        all_grades.append(g_upper)
+    grade_dist, all_grades = _grade_distribution(_grade_map(db_path, cert_ids))
 
     fleet_grade = _fleet_grade(all_grades) if all_grades else ""
 
@@ -511,13 +567,17 @@ def build_compliance_report(
             ]
             if entry.findings:
                 failed.append(entry)
+        # ``days`` is the row's effective days, the value its urgency was
+        # computed from, and the bucket edges are the status rule's
+        # thresholds: a certificate never sits in a bucket its own status
+        # contradicts on expiry grounds.
         if days < 0:
             expired.append(entry)
-        elif days <= 7:
+        elif days < CRITICAL_DAYS:
             expiring_7.append(entry)
-        elif days <= 30:
+        elif days < WARNING_DAYS:
             expiring_30.append(entry)
-        elif days <= 90:
+        elif days < 90:
             expiring_90.append(entry)
 
     remediation = [

@@ -12,6 +12,7 @@ Group matching controls SMTP recipients, not independent webhook fan-out.
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections import Counter
 from contextlib import ExitStack
 from email.utils import getaddresses
@@ -166,22 +167,27 @@ def test_routing_matrix_delivers_exact_recipient_unions(db, tmp_path, monkeypatc
             GLOBAL_RECIPIENT, "TEAM@example.test", "member@example.test",
         ]),
         "orphan.routing.test": ({}, [GLOBAL_RECIPIENT]),
+        "renewed.routing.test": ({"host_tags": "alpha"}, [
+            GLOBAL_RECIPIENT, "alpha@example.test", "shared@example.test",
+        ]),
     }
     cert_ids = {host: _add_leaf(db, host, **options) for host, (options, _) in cases.items()}
     groups.assign_cert(manual_group, cert_ids["manual.routing.test"])
     healthy_id = _add_leaf(db, "healthy.routing.test", host_tags="alpha", days_valid=365)
-    renewed_id = _add_leaf(
-        db, "renewed.routing.test", host_tags="alpha", renewal_status="renewed",
-    )
+    renewed_id = cert_ids["renewed.routing.test"]
+    # Model a pre-0041 row directly: supported write paths no longer accept this value.
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE hosts SET renewal_status = 'renewed' WHERE hostname = ?",
+            ("renewed.routing.test",),
+        )
     assert [item["cert_id"] for item in find_orphan_certs(db)] == [
         cert_ids["orphan.routing.test"],
     ]
 
     repo = SqliteAlertRepository(db)
     created = evaluate_all_certs(db, repo)
-    assert Counter(alert.cert_id for alert in created) == Counter(
-        [*cert_ids.values(), renewed_id]
-    )
+    assert Counter(alert.cert_id for alert in created) == Counter(cert_ids.values())
     assert all(alert.threshold_days == 7 for alert in created)
     # Re-evaluation while delivery is pending must not multiply a multi-match alert.
     assert evaluate_all_certs(db, repo) == []
@@ -193,7 +199,7 @@ def test_routing_matrix_delivers_exact_recipient_unions(db, tmp_path, monkeypatc
     ):
         fallback = WebhookConfig(url=http.url("/global"), allow_private=True)
         assert process_pending(repo, _smtp_config(smtp), fallback) == {
-            "sent": len(cases) + 1, "failed": 0, "deferred": 0,
+            "sent": len(cases), "failed": 0, "deferred": 0,
         }
         _assert_receipts(smtp, {host: recipients for host, (_, recipients) in cases.items()})
         assert http.requests == []  # SMTP success does not also fan out to a webhook.
@@ -207,7 +213,7 @@ def test_routing_matrix_delivers_exact_recipient_unions(db, tmp_path, monkeypatc
     assert len(repo.list_all()) == len(cases)
     assert all(alert.status == "sent" and alert.sent_at is not None for alert in repo.list_all())
     assert repo.list_for_cert(healthy_id) == []
-    assert repo.list_for_cert(renewed_id) == []
+    assert len(repo.list_for_cert(renewed_id)) == 1
 
 
 def test_zero_group_estate_still_delivers_global_owner_and_role_routes(db, tmp_path, monkeypatch):

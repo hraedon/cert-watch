@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 from cert_watch.certificate_model import Certificate
@@ -117,7 +118,12 @@ def test_renewal_stalled_not_suppressed_by_legacy_renewed_value(tmp_path):
 
     db = str(tmp_path / "t.sqlite3")
     _insert_cert(db, cid="stalled-rn", days_valid=20, hostname="rn.example.com")
-    SqliteHostRepository(db).add(hostname="rn.example.com", port=443, renewal_status="renewed")
+    SqliteHostRepository(db).add(hostname="rn.example.com", port=443)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE hosts SET renewal_status = 'renewed' WHERE hostname = ?",
+            ("rn.example.com",),
+        )
     alert_repo = SqliteAlertRepository(db)
     created = evaluate_renewal_window(db, alert_repo, 30)
     assert [alert.cert_id for alert in created] == ["stalled-rn"]

@@ -67,13 +67,14 @@ class AlertStore:
             alert.hostname, alert.subject, alert.trigger_cert_id or alert.cert_id,
             alert.dedupe_key, _iso(alert.closed_at) if alert.closed_at else None,
             json.dumps(routing, separators=(",", ":"), sort_keys=True),
+            _iso(alert.created_at) if alert.status == "failed" else None,
             *duplicate_params,
         )
         sql = f"""INSERT INTO alerts
             (id, cert_id, alert_type, status, message, threshold_days,
              extra_recipients, created_at, sent_at, error_message, hostname,
-             subject, trigger_cert_id, dedupe_key, closed_at, routing)
-            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+             subject, trigger_cert_id, dedupe_key, closed_at, routing, failed_at)
+            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             WHERE NOT EXISTS (SELECT 1 FROM alerts WHERE {duplicate_predicate})"""
 
         def execute(active_conn: sqlite3.Connection) -> bool:
@@ -493,6 +494,10 @@ class AlertStore:
                             ELSE ? END,
                         attempt_count = attempt_count + ?,
                         last_attempt_at = CASE WHEN ? > 0 THEN ? ELSE last_attempt_at END,
+                        failed_at = CASE
+                            WHEN ? = 'failed' AND NOT (
+                                closed_at IS NOT NULL AND alert_type != 'drift')
+                            THEN ? ELSE failed_at END,
                         next_attempt_at = ?, failure_reason = ?,
                         lease_owner = NULL, lease_expires_at = NULL,
                         {deferral_sql}
@@ -505,6 +510,11 @@ class AlertStore:
                     error_message,
                     attempts,
                     attempts,
+                    _iso(now),
+                    # An alert can give up without an attempt (the bounded
+                    # evidence deferral), so the failure time is recorded
+                    # here, not inferred from last_attempt_at (#113 review).
+                    status,
                     _iso(now),
                     _iso(next_attempt_at) if next_attempt_at else None,
                     failure_reason,
@@ -548,7 +558,7 @@ class AlertStore:
                 return False
             ensure_write_scope(auth, self.db_path, cert_id=row["cert_id"])
             cursor = conn.execute(
-                """UPDATE alerts SET status = 'pending', attempt_count = 0,
+                """UPDATE alerts SET status = 'pending', failed_at = NULL, attempt_count = 0,
                        next_attempt_at = NULL, lease_owner = NULL, lease_expires_at = NULL,
                        failure_reason = NULL, error_message = NULL,
                        deferred_since = NULL, sent_at = NULL
@@ -563,7 +573,7 @@ class AlertStore:
         """Queue one pre-lifecycle expiry failure if its leaf is still current."""
         with _connect(self.db_path) as conn:
             cursor = conn.execute(
-                """UPDATE alerts SET status = 'pending', attempt_count = 0,
+                """UPDATE alerts SET status = 'pending', failed_at = NULL, attempt_count = 0,
                        next_attempt_at = NULL, lease_owner = NULL,
                        lease_expires_at = NULL, failure_reason = NULL,
                        error_message = NULL, deferred_since = NULL, sent_at = NULL
@@ -600,7 +610,7 @@ class AlertStore:
         """Legacy repository reset; production operator retry is failed-only."""
         with _connect(self.db_path) as conn:
             conn.execute(
-                """UPDATE alerts SET status = 'pending', error_message = NULL,
+                """UPDATE alerts SET status = 'pending', failed_at = NULL, error_message = NULL,
                        failure_reason = NULL, next_attempt_at = NULL,
                        lease_owner = NULL, lease_expires_at = NULL,
                        deferred_since = NULL, sent_at = NULL
@@ -628,10 +638,11 @@ class AlertStore:
             conn.execute(
                 """UPDATE alerts SET status = 'failed', error_message = ?,
                        failure_reason = COALESCE(failure_reason, 'legacy'),
+                       failed_at = CASE WHEN status = 'failed' THEN failed_at ELSE ? END,
                        next_attempt_at = NULL, lease_owner = NULL,
                        lease_expires_at = NULL, deferred_since = NULL
                    WHERE id = ?""",
-                (error_message, alert_id),
+                (error_message, _iso(datetime.now(UTC)), alert_id),
             )
             conn.commit()
 
