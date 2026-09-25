@@ -22,7 +22,6 @@ from cert_watch.status_model import (
     AxisSettings,
     StatusModelContext,
     attach_status_models,
-    load_delivery_statuses,
     prepare_status_model_context,
     register_status_model_functions,
 )
@@ -70,7 +69,8 @@ def list_dashboard_grouped_page(
         db_path, certificate_status=status, settings=axis_settings
     )
     candidates = inventory_candidates_sql(
-        source=source, q=q, scope_tags=scope_tags, status=status, axes=axes
+        source=source, q=q, scope_tags=scope_tags, status=status, axes=axes,
+        sql_delivery=bool(delivery),
     )
     if candidates is None:
         return [], 0
@@ -80,17 +80,6 @@ def list_dashboard_grouped_page(
     )
     assert member_candidates is not None
     member_base_sql, member_params = member_candidates
-
-    if delivery:
-        with _connect(db_path) as conn:
-            register_status_model_functions(conn, axes)
-            ids = tuple(
-                row[0]
-                for row in conn.execute(
-                    f"SELECT ekey FROM ({base_sql}) WHERE etype = 'leaf'", params
-                ).fetchall()
-            )
-        load_delivery_statuses(db_path, ids, axes)
 
     for column, value in (
         ("urgency", urgency),
@@ -149,7 +138,7 @@ def list_dashboard_grouped_page(
                 reverse=direction == "DESC",
             )
         ]
-        built = build_inventory_entries(conn, ordered, status=status, axes=axes)
+        built = build_inventory_entries(db_path, conn, ordered, status=status, axes=axes)
 
     grouped = group_entries_by_fingerprint(built, force=True)
     attach_status_models(db_path, grouped, axes)

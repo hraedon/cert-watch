@@ -39,16 +39,15 @@
       <div class="cw-chiprow">
         <b>Scan coverage</b>
         {% if scan_coverage.total %}
-        <span><a class="cw-link" href="/browse?monitoring=current&grouped=0">{{ scan_coverage.current }} of {{ scan_coverage.total }} monitored endpoints have current observations</a></span>
+        {% set monitored_total = axis_stats.monitoring.current + axis_stats.monitoring.failing + axis_stats.monitoring.never_scanned %}
+        <span><a class="cw-link" href="/browse?monitoring=current&grouped=0">{{ axis_stats.monitoring.current }} of {{ monitored_total }} monitored endpoints have current observations</a></span>
         {% else %}<span class="cw-muted">No monitored endpoints</span>{% endif %}
       </div>
       <p class="cw-hint">Current means a successful scan within its configured cadence, with no later incomplete attempt. Uploaded files are excluded.</p>
       {% if scan_coverage.total %}
       <div class="cw-chiprow">
-        <a class="cw-chip {{ 't-warn' if scan_coverage.overdue else 't-muted' }}" href="/browse?monitoring=failing&grouped=0">{{ scan_coverage.overdue }} overdue</a>
-        <a class="cw-chip t-muted" href="/browse?monitoring=never_scanned&grouped=0">{{ scan_coverage.unobserved }} without a successful scan</a>
-        <a class="cw-chip {{ 't-warn' if scan_coverage.failed else 't-muted' }}" href="/browse?monitoring=failing&grouped=0">{{ scan_coverage.failed }} incomplete within cadence</a>
-        {% if scan_coverage.unknown %}<span class="cw-chip t-warn">{{ scan_coverage.unknown }} with unknown timing</span>{% endif %}
+        <a class="cw-chip {{ 't-warn' if axis_stats.monitoring.failing else 't-muted' }}" href="/browse?monitoring=failing&grouped=0">{{ axis_stats.monitoring.failing }} failing or overdue</a>
+        <a class="cw-chip t-muted" href="/browse?monitoring=never_scanned&grouped=0">{{ axis_stats.monitoring.never_scanned }} without a successful scan</a>
       </div>
       {% endif %}
     </div>

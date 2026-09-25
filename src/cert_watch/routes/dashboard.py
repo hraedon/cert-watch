@@ -18,10 +18,9 @@ from cert_watch.auth.scope import ScopeDeniedError, writable_scope_tags
 from cert_watch.database import (
     AlertStore,
     dashboard_axis_stats,
-    dashboard_urgency_stats,
+    dashboard_inventory_count,
     get_write_lock,
     list_calendar,
-    list_dashboard_page,
 )
 from cert_watch.database.chain_status_cache import prepare_status
 from cert_watch.database.connection import _connect
@@ -86,13 +85,16 @@ def home(
         db, scope_tags=scope_tags, window_days=settings.renewal_window_days,
         scan_evidence=scan_evidence, status=status,
     )
-    stats = dashboard_urgency_stats(db, scope_tags=scope_tags, status=status)
     axis_stats = dashboard_axis_stats(
         db, scope_tags=scope_tags, status=status, axes=axes
     )
-    _, tracked_total = list_dashboard_page(
-        db, per_page=1, scope_tags=scope_tags, status=status, axes=axes
-    )
+    stats = {
+        "expired": axis_stats["condition"]["expired"],
+        "critical": axis_stats["condition"]["le7"],
+        "warning": axis_stats["condition"]["8to30"],
+        "healthy": axis_stats["condition"]["ok"],
+    }
+    tracked_total = dashboard_inventory_count(db, scope_tags=scope_tags)
 
     view = present_home(
         queue=items,

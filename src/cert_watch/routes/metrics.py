@@ -10,10 +10,11 @@ from fastapi.responses import PlainTextResponse
 from prometheus_client import CollectorRegistry, Gauge, generate_latest
 
 from cert_watch.auth.guards import metrics_guard
-from cert_watch.database import dashboard_urgency_stats, get_posture_grades_for_certs
+from cert_watch.database import dashboard_overall_stats, get_posture_grades_for_certs
 from cert_watch.database.connection import _connect, _parse_iso
-from cert_watch.routes._deps import _db_path
+from cert_watch.routes._deps import _db_path, _get_settings
 from cert_watch.security.ratelimit import rate_limit
+from cert_watch.status_model import AxisSettings
 
 logger = logging.getLogger("cert_watch.routes.metrics")
 
@@ -70,7 +71,7 @@ def metrics(
     )
     urgency_gauge = Gauge(
         "cert_watch_certificates_by_urgency",
-        "Leaf certificates grouped by expiry urgency",
+        "Leaf certificates grouped by overall display state",
         ["urgency"],
         registry=registry,
     )
@@ -102,7 +103,9 @@ def metrics(
     now = datetime.now(UTC)
     # The dashboard's own counts (chain-aware, one rule), as documented; an
     # expiry-only recount here disagreed with Home and Browse (#113).
-    urgency_counts = dashboard_urgency_stats(db)
+    urgency_counts = dashboard_overall_stats(
+        db, axis_settings=AxisSettings.from_settings(_get_settings(request))
+    )
     with _connect(db) as conn:
         cert_rows = conn.execute(
             "SELECT c.id, c.hostname, c.port, c.subject, c.not_after, "

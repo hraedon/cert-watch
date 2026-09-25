@@ -17,6 +17,7 @@ from cert_watch.auth.guards import (
 from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.database import (
     SqliteCertificateRepository,
+    get_dashboard_entry,
     list_cert_history,
     list_dashboard_page,
 )
@@ -27,7 +28,9 @@ from cert_watch.routes.api._shared import (
     JsonBodyError,
     _normalize_pagination,
     _pagination_links,
+    delivery_details_allowed,
     status_api_row,
+    status_for_api,
     tags_from_json_body,
 )
 from cert_watch.security.ratelimit import rate_limit
@@ -155,7 +158,13 @@ def api_list_certificates(
     # Re-normalize against the scoped total that came back from the query.
     return JSONResponse(
         content={
-            "certificates": [status_api_row(row) for row in rows],
+            "certificates": [
+                status_api_row(
+                    row,
+                    reveal_delivery_details=delivery_details_allowed(request),
+                )
+                for row in rows
+            ],
             "pagination": {
                 "page": page,
                 "limit": limit,
@@ -179,15 +188,17 @@ def api_get_certificate(
     cert = repo.get_by_id(cert_id)
     if cert is None:
         return JSONResponse(content={"error": "not found"}, status_code=404)
-    query = f"{cert.subject}"
-    rows, _ = list_dashboard_page(
+    row = get_dashboard_entry(
         db,
-        q=query,
-        per_page=0,
+        cert_id,
         scope_tags=scope_tags_from_auth(getattr(request.state, "auth_context", None)),
         axis_settings=AxisSettings.from_settings(_get_settings(request)),
     )
-    status = next((row["status"] for row in rows if row.get("id") == cert_id), None)
+    status = row.get("status") if row else None
+    if isinstance(status, dict):
+        status = status_for_api(
+            status, reveal_delivery_details=delivery_details_allowed(request)
+        )
     return JSONResponse(
         content={
             "id": cert_id,

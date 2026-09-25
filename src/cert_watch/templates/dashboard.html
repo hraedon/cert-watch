@@ -30,7 +30,7 @@
     <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.7) }}chain incomplete</span>
   {% elif e.chain_status == 'invalid' %}
     <span class="cw-chip t-crit">{{ icons.svg_icon('alert', 11, 1.7) }}chain invalid</span>
-  {% elif e.chain_status == 'unverified' %}
+  {% elif e.chain_status in ('unknown', 'unverified') %}
     <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.7) }}chain not verified</span>
   {% elif e.chain_status == 'self-signed' %}
     <span class="cw-chip t-muted">{{ icons.svg_icon('key', 11, 1.7) }}self-signed</span>
@@ -50,7 +50,7 @@
     {% else %}
       <span class="cw-chip">{{ icons.svg_icon('globe', 12, 1.6) }}Public CT</span>
     {% endif %}
-    {% if grouped or e.source == 'scanned' %}{{ chain_chip(e) }}{% endif %}
+    {% if e.kind != 'pending' %}{{ chain_chip(e) }}{% endif %}
   </div>
 {% endmacro %}
 

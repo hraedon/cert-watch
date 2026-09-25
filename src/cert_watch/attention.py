@@ -298,7 +298,7 @@ def attention_queue_page(
         page_params.append(limit)
     with _connect(db_path) as conn:
         rows = conn.execute(page_sql, page_params).fetchall()
-        entries = build_inventory_entries(conn, rows, status=status)
+        entries = build_inventory_entries(db_path, conn, rows, status=status)
     total = rows[0]["total_items"] if rows else 0
     stalled = {r["ekey"] for r in rows if r["stalled"]}
     items: list[dict[str, Any]] = []

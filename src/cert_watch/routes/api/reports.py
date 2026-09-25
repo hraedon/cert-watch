@@ -16,7 +16,11 @@ from cert_watch.database import SqliteHostRepository, list_dashboard_page
 from cert_watch.readiness import build_readiness_report, readiness_report_to_dict
 from cert_watch.routes._deps import _csv_safe, _db_path, _get_settings
 from cert_watch.routes._scoped import enforce_scope_tag, scope_tags_from_auth
-from cert_watch.routes.api._shared import compliance_signing_key, status_api_row
+from cert_watch.routes.api._shared import (
+    compliance_signing_key,
+    delivery_details_allowed,
+    status_api_row,
+)
 from cert_watch.status_model import AxisSettings, overall_state
 
 logger = logging.getLogger("cert_watch.routes.api.reports")
@@ -137,7 +141,15 @@ def api_export_certificates_json(
         axis_settings=AxisSettings.from_settings(_get_settings(request)),
     )
     return JSONResponse(
-        content={"certificates": [status_api_row(row) for row in rows]},
+        content={
+            "certificates": [
+                status_api_row(
+                    row,
+                    reveal_delivery_details=delivery_details_allowed(request),
+                )
+                for row in rows
+            ]
+        },
         headers={"Content-Disposition": "attachment; filename=certificates.json"},
     )
 
@@ -165,7 +177,7 @@ def api_report_inventory_csv(
             "not_before",
             "not_after",
             "days_remaining",
-            "urgency",
+            "overall_status",
             "chain_valid",
             "fingerprint_sha256",
             "tags",
@@ -186,7 +198,7 @@ def api_report_inventory_csv(
                 _csv_safe(r.get("not_before", "")),
                 _csv_safe(r.get("not_after", "")),
                 _csv_safe(r.get("days_remaining", "")),
-                _csv_safe(r.get("urgency", "")),
+                _csv_safe(overall_state(r)),
                 _csv_safe(r.get("chain_valid", "")),
                 _csv_safe(r.get("fingerprint_sha256", "")),
                 _csv_safe(r.get("tags", "")),
@@ -232,7 +244,7 @@ def api_report_expiring_csv(
             "issuer",
             "not_after",
             "days_remaining",
-            "urgency",
+            "overall_status",
             "owner",
             "tags",
         ]
@@ -246,7 +258,7 @@ def api_report_expiring_csv(
                 _csv_safe(r.get("issuer", "")),
                 _csv_safe(r.get("not_after", "")),
                 _csv_safe(r.get("days_remaining", "")),
-                _csv_safe(r.get("urgency", "")),
+                _csv_safe(overall_state(r)),
                 _csv_safe(r.get("owner_name", "")),
                 _csv_safe(r.get("tags", "")),
             ]

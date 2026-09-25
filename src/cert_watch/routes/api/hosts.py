@@ -25,7 +25,9 @@ from cert_watch.routes.api._shared import (
     JsonBodyError,
     _normalize_pagination,
     _pagination_links,
+    delivery_details_allowed,
     json_body,
+    status_for_api,
     tags_from_json_body,
 )
 from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit, rate_limit
@@ -228,7 +230,7 @@ def api_list_hosts(
     rows, total = list_dashboard_page(
         db,
         source="scanned",
-        sort_by="name",
+        sort_by="added_at",
         page=max(page, 1),
         per_page=limit,
         scope_tags=scope_tags,
@@ -258,7 +260,10 @@ def api_list_hosts(
                     "notes": h.notes,
                     "expected_issuers": h.expected_issuers,
                     "added_at": h.added_at.isoformat(),
-                    "status": status,
+                    "status": status_for_api(
+                        status,
+                        reveal_delivery_details=delivery_details_allowed(request),
+                    ),
                 }
                 for h, status in page_hosts
                 if h is not None

@@ -65,6 +65,7 @@ _URGENCY_TONES = {
     "warning": "var(--warn)",
     "healthy": "var(--ok)",
     "gray": "var(--text-3)",
+    "failing": "var(--crit)",
     "neutral": "var(--text-2)",
 }
 

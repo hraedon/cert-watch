@@ -8,7 +8,8 @@ from typing import Any
 
 from cert_watch.database import (
     dashboard_axis_stats,
-    dashboard_urgency_stats,
+    dashboard_inventory_count,
+    dashboard_overall_stats,
     distinct_tags,
     get_posture_grades_for_certs,
     list_calendar,
@@ -18,7 +19,7 @@ from cert_watch.database import (
     pivot_urgency_stats,
 )
 from cert_watch.database.chain_status_cache import prepare_status
-from cert_watch.scan_freshness import ScanEvidence, load_scan_evidence
+from cert_watch.scan_freshness import ScanEvidence
 from cert_watch.status_model import AxisSettings, prepare_status_model_context
 
 _GLOBAL_VIEWS = frozenset({"issuer", "owner", "renewal_method", "calendar"})
@@ -102,11 +103,15 @@ def load_browse_page(
     if calendar_data is not None:
         total = sum(int(bucket.get("count", 0)) for bucket in calendar_data)
         total_pages = 1
-        pivot_stats = dashboard_urgency_stats(db_path, scope_tags=scope_tags, status=status)
+        pivot_stats = dashboard_overall_stats(
+            db_path, scope_tags=scope_tags, status=status, axes=axes
+        )
     elif pivot_groups is not None:
         total = sum(int(group["count"]) for group in pivot_groups)
         total_pages = 1
-        pivot_stats = pivot_urgency_stats(db_path, scope_tags=scope_tags, status=status)
+        pivot_stats = pivot_urgency_stats(
+            db_path, scope_tags=scope_tags, status=status, axes=axes
+        )
     elif grouped:
         entries, total = list_dashboard_grouped_page(
             db_path,
@@ -149,8 +154,13 @@ def load_browse_page(
         page = max(1, min(page, total_pages))
 
     if pivot_stats is None:
-        pivot_stats = dashboard_urgency_stats(
-            db_path, q=q, source=source, scope_tags=scope_tags, status=status
+        pivot_stats = dashboard_overall_stats(
+            db_path,
+            q=q,
+            source=source,
+            scope_tags=scope_tags,
+            status=status,
+            axes=axes,
         )
 
     axis_stats = dashboard_axis_stats(
@@ -159,31 +169,24 @@ def load_browse_page(
 
     if pivot_groups is not None:
         tracked_total = total
+    elif calendar_data is not None:
+        # Calendar buckets only contain certificates with an expiry date; the
+        # page-level inventory total must still include pending hosts.
+        tracked_total = dashboard_inventory_count(db_path, scope_tags=scope_tags)
+    elif not any((urgency, condition, monitoring, renewal, delivery)):
+        tracked_total = total
     else:
-        _, tracked_total = list_dashboard_page(
-            db_path,
-            q=q,
-            source=source,
-            per_page=1,
-            scope_tags=scope_tags,
-            status=status,
-            axes=axes,
+        tracked_total = dashboard_inventory_count(
+            db_path, q=q, source=source, scope_tags=scope_tags
         )
 
     is_global_view = pivot_groups is not None or calendar_data is not None
     display_entries = [] if is_global_view else entries
     cert_ids = [entry["id"] for entry in display_entries if entry.get("id")]
     posture_grades = get_posture_grades_for_certs(db_path, cert_ids) if cert_ids else {}
-    scan_evidence = (
-        load_scan_evidence(
-            db_path,
-            scope_tags=scope_tags,
-            hour=sched_hour,
-            minute=sched_min,
-        )
-        if display_entries
-        else {}
-    )
+    # Every displayed row already carries the canonical monitoring state.
+    # Loading fleet-wide ScanEvidence here made a 25-row page scan all hosts.
+    scan_evidence: dict[str, ScanEvidence] = {}
     return BrowsePageData(
         entries=display_entries,
         all_tags=distinct_tags(db_path, scope_tags=scope_tags),

@@ -20,13 +20,13 @@ from cert_watch.database import (
     SqliteCertificateRepository,
     SqliteTrustAnchorRepository,
     distinct_tags,
+    get_dashboard_entry,
     get_latest_scan_record,
     get_pending_host_detail_records,
     get_posture_for_cert,
     get_renewal_history,
     get_stored_certificate_detail_records,
     list_cert_history,
-    list_dashboard_page,
 )
 from cert_watch.scan_freshness import ScanEvidence, load_scan_evidence
 from cert_watch.status_model import AxisSettings
@@ -117,19 +117,15 @@ def load_certificate_detail(
             hour=sched_hour,
             minute=sched_min,
         ).get(pending.host.id)
-        rows, _ = list_dashboard_page(
+        row = get_dashboard_entry(
             db_path,
-            source="scanned",
-            q=f"{pending.host.hostname}:{pending.host.port}",
-            per_page=0,
+            pending.host.id,
             scope_tags=scope_tags,
             axis_settings=axis_settings or AxisSettings(
                 sched_hour=sched_hour, sched_min=sched_min
             ),
         )
-        status_model = next(
-            (row["status"] for row in rows if row.get("host_id") == pending.host.id), None
-        )
+        status_model = row.get("status") if row else None
         return PendingHostDetailData(
             cert_id=cert_id,
             host=pending.host,
@@ -166,19 +162,15 @@ def load_certificate_detail(
             hour=sched_hour,
             minute=sched_min,
         ).get(stored.host.id)
-    query = f"{stored.hostname}:{stored.port}" if stored.hostname else stored.cert.subject
-    rows, _ = list_dashboard_page(
+    row = get_dashboard_entry(
         db_path,
-        q=query,
-        per_page=0,
+        cert_id,
         scope_tags=scope_tags,
         axis_settings=axis_settings or AxisSettings(
             sched_hour=sched_hour, sched_min=sched_min
         ),
     )
-    status_model = next(
-        (row["status"] for row in rows if row.get("id") == cert_id), None
-    )
+    status_model = row.get("status") if row else None
     return StoredCertificateDetailData(
         cert_id=cert_id,
         cert=stored.cert,

@@ -117,7 +117,8 @@ Every page counts the estate with the same definitions.
   preserves the scanner text. `never_scanned` means no attempt and no
   successful observation are recorded. A failing or never-scanned endpoint
   is never labelled Healthy or OK overall, even when its last certificate's
-  condition is `ok`.
+  condition is `ok`. Uploaded files use `not_monitored`: they have no endpoint
+  scan lifecycle and are excluded from monitoring counts and filters.
 - **Renewal** — precedence is `in_progress` when an operator reported that
   host state; then `stalled` when the current leaf is inside the configured
   renewal window with no successor; then `automation_configured` for an ACME
@@ -130,17 +131,22 @@ Every page counts the estate with the same definitions.
   the global plus routed recipients and is deliverable only when its relay,
   sender and at least one recipient exist. The global webhook is deliverable
   when configured. Each channel includes its latest append-only delivery
-  outcome. `unrouted` means no certificate-specific recipient or matching
-  group (global fallbacks may still receive it); `failing` means a route has
-  no usable channel or its latest configured-channel outcome was not fully
-  accepted; otherwise it is `ok`.
+  outcome. `unrouted` means no route at all: no certificate-specific or group
+  route and no global recipient or webhook fallback. A route that exists only
+  globally is therefore `ok` when its channel can deliver; a later slice may
+  expose that distinction separately. `failing` means a route has no usable
+  channel or its latest configured-channel outcome was not fully accepted;
+  otherwise it is `ok`. Read-level API users see only delivery state, channel
+  types and anonymous counts; recipient identities and group names are admin-only.
 - **Filters** — Browse and the host/certificate JSON lists accept the same
   combinable URL parameters: `condition=expired|le7|8to30|ok`,
   `monitoring=current|failing|never_scanned`,
   `renewal=automation_configured|manual|stalled|in_progress|unknown`, and
   `delivery=ok|failing|unrouted`. They are applied in SQL after the caller's
   effective tag scope. Grouped Browse paginates the matching fingerprint
-  groups in SQL before it builds display rows.
+  groups in SQL before it builds display rows. A grouped filter or search
+  selects a group when any member matches, then shows every in-scope member of
+  that selected group; the group is the result unit.
 - **Days** — whole days until the leaf certificate expires, negative once it
   has expired ("expired 41 days ago"). A group view's *Earliest expiry* is the
   smallest effective days in the group, so it agrees with the group's status.
@@ -154,7 +160,8 @@ Every page counts the estate with the same definitions.
   and the compliance report's grade distribution cover the same certificates.
 - **Compliance report** — *Certificates* are the certificates in scope and
   *Endpoints* the scanned endpoints among them. Its expiry sections place each
-  certificate by its effective days, with the condition thresholds, and list
+  certificate by its effective days, with the legacy display-status boundaries
+  (under 7 days, then under 30 days), and list
   the expiry date and days that put it
   there: for a certificate whose intermediate expires first, the
   intermediate's. Each entry also carries monitoring, renewal and delivery;

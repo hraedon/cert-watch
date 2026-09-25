@@ -26,8 +26,9 @@ def pivot_urgency_stats(
     scope_tags: list[str] | tuple[str, ...] | None = None,
     *,
     status: StatusContext | None = None,
+    axes: Any = None,
 ) -> dict[str, int]:
-    """Chain-aware urgency counts matching the pivot rows.
+    """Overall display-state counts matching the pivot rows.
 
     The pivots group every inventory row, uploaded files included, so their
     cards are the unfiltered inventory's cards. Counting only scanned rows here
@@ -35,7 +36,9 @@ def pivot_urgency_stats(
     the same estate (#113). Pass the render's *status* so the cards and the
     groups are judged at one instant with one trust snapshot.
     """
-    return dashboard_urgency_stats(db_path, scope_tags=scope_tags, status=status)
+    return dashboard_overall_stats(
+        db_path, scope_tags=scope_tags, status=status, axes=axes
+    )
 
 
 def dashboard_urgency_stats(
@@ -76,6 +79,52 @@ def dashboard_urgency_stats(
     return result
 
 
+def dashboard_overall_stats(
+    db_path: str | Path,
+    *,
+    q: str | None = None,
+    source: str | None = None,
+    scope_tags: list[str] | tuple[str, ...] | None = None,
+    axis_settings: Any = None,
+    status: StatusContext | None = None,
+    axes: Any = None,
+) -> dict[str, int]:
+    """Count leaf certificates by honest overall display state in SQL."""
+    from cert_watch.database.chain_status_cache import prepare_status
+    from cert_watch.database.dashboard_page import inventory_candidates_sql
+    from cert_watch.database.schema import init_schema
+    from cert_watch.status_model import (
+        prepare_status_model_context,
+        register_status_model_functions,
+    )
+
+    init_schema(db_path)
+    status = status or prepare_status(db_path)
+    axes = axes or prepare_status_model_context(
+        db_path, certificate_status=status, settings=axis_settings
+    )
+    candidates = inventory_candidates_sql(
+        q=q, source=source, scope_tags=scope_tags, status=status, axes=axes
+    )
+    result = dict.fromkeys(
+        ("expired", "critical", "warning", "healthy", "failing", "gray"), 0
+    )
+    if candidates is None:
+        return result
+    sql, params = candidates
+    with _connect(db_path) as conn:
+        register_status_model_functions(conn, axes)
+        rows = conn.execute(
+            f"SELECT overall_state, COUNT(*) AS n FROM ({sql}) "
+            "WHERE etype = 'leaf' GROUP BY overall_state",
+            params,
+        ).fetchall()
+    for row in rows:
+        if row["overall_state"] in result:
+            result[row["overall_state"]] = int(row["n"])
+    return result
+
+
 def dashboard_expiry_stats(
     db_path: str | Path,
     *,
@@ -84,7 +133,7 @@ def dashboard_expiry_stats(
     scope_tags: list[str] | tuple[str, ...] | None = None,
     now: datetime | None = None,
 ) -> dict[str, int]:
-    """Expiry-only counts for Home; Browse uses chain-aware urgency counts."""
+    """Return expiry-only condition counts for Home's condition panel."""
     include_scanned = source in (None, "scanned")
     include_uploaded = source != "scanned"
     like = f"%{_escape_like(q.lower())}%" if q else None
@@ -167,3 +216,26 @@ def count_leaf_certs(
     with _connect(db_path) as conn:
         row = conn.execute(sql, params).fetchone()
     return row[0] if row else 0
+
+
+def dashboard_inventory_count(
+    db_path: str | Path,
+    *,
+    q: str | None = None,
+    source: str | None = None,
+    scope_tags: list[str] | tuple[str, ...] | None = None,
+) -> int:
+    """Count Browse inventory rows without deriving any status axis."""
+    from cert_watch.database.dashboard_page import inventory_candidates_sql
+    from cert_watch.database.schema import init_schema
+
+    init_schema(db_path)
+    candidates = inventory_candidates_sql(
+        q=q, source=source, scope_tags=scope_tags
+    )
+    if candidates is None:
+        return 0
+    sql, params = candidates
+    with _connect(db_path) as conn:
+        row = conn.execute(f"SELECT COUNT(*) FROM ({sql})", params).fetchone()
+    return int(row[0]) if row else 0

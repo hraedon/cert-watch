@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from cert_watch.database.chain_status_cache import StatusContext
     from cert_watch.status_model import AxisSettings, StatusModelContext
 
-_URGENCY_ORDER = ("expired", "critical", "warning", "healthy", "gray")
+_URGENCY_ORDER = ("expired", "failing", "critical", "warning", "gray", "healthy")
 
 _METHOD_LABELS = {
     "acme": "ACME",
@@ -86,9 +86,9 @@ def list_fleet_pivot(
     with _connect(db_path) as conn:
         register_status_model_functions(conn, axes)
         rows = conn.execute(
-            f"SELECT {column} AS grp, urgency, monitoring, COUNT(*) AS n,"
+            f"SELECT {column} AS grp, overall_state, COUNT(*) AS n,"
             f" MIN(eff_days) AS min_days, MIN(sort_expiry) AS first_expiry"
-            f" FROM ({sql}) GROUP BY grp, urgency, monitoring",
+            f" FROM ({sql}) GROUP BY grp, overall_state",
             params,
         ).fetchall()
     # One row per (raw group value, status): bounded by the number of groups,
@@ -101,7 +101,6 @@ def list_fleet_pivot(
                 "key": key,
                 "count": 0,
                 "_urgencies": set(),
-                "_monitoring": set(),
                 "earliest_expiry": None,
                 "entries": None,
                 "_first": row["first_expiry"],
@@ -109,8 +108,7 @@ def list_fleet_pivot(
         )
         group["_first"] = min(group["_first"], row["first_expiry"])
         group["count"] += row["n"]
-        group["_urgencies"].add(row["urgency"] or "gray")
-        group["_monitoring"].add(row["monitoring"] or "never_scanned")
+        group["_urgencies"].add(row["overall_state"] or "gray")
         days = row["min_days"]
         if days is not None and (
             group["earliest_expiry"] is None or days < group["earliest_expiry"]
@@ -123,16 +121,7 @@ def list_fleet_pivot(
     for group in ordered:
         del group["_first"]
         urgencies = group.pop("_urgencies")
-        monitoring_states = group.pop("_monitoring")
         worst = next((u for u in _URGENCY_ORDER if u in urgencies), "gray")
-        if worst == "healthy" and "failing" in monitoring_states:
-            worst = "failing"
-        elif worst == "healthy" and (
-            "gray" in urgencies or "never_scanned" in monitoring_states
-        ):
-            # A healthy group that still has never-scanned endpoints is not
-            # known to be healthy.
-            worst = "gray"
         group["worst_urgency"] = worst
         result.append(group)
     return result
@@ -204,10 +193,11 @@ def get_pivot_group_page(
             return [], 0
         ph = ",".join("?" * len(raws))
         group_sql = (
-            "SELECT etype, ekey, sort_expiry, chain_status, eff_days, condition,"
+            "SELECT etype, ekey, hostname, port, sort_expiry, chain_status, eff_days, condition,"
             " monitoring, monitoring_last_success, monitoring_last_attempt,"
             " monitoring_attempt_status, monitoring_error, monitoring_first_failed,"
-            f" renewal, delivery FROM ({sql}) WHERE {column} IN ({ph})"
+            " renewal, has_successor, delivery, overall_state"
+            f" FROM ({sql}) WHERE {column} IN ({ph})"
         )
         group_params = [*params, *raws]
         total = conn.execute(
@@ -218,7 +208,7 @@ def get_pivot_group_page(
             page_sql += " LIMIT ? OFFSET ?"
             group_params += [per_page, max(0, (page - 1) * per_page)]
         ordered = conn.execute(page_sql, group_params).fetchall()
-        entries = build_inventory_entries(conn, ordered, status=status, axes=axes)
+        entries = build_inventory_entries(db_path, conn, ordered, status=status, axes=axes)
     attach_status_models(db_path, entries, axes)
     for entry in entries:
         entry["_pivot_key"] = group_key

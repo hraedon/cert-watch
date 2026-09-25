@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from cert_watch.config import Settings
 
 CONDITIONS = ("expired", "le7", "8to30", "ok")
-MONITORING_STATES = ("current", "failing", "never_scanned")
+MONITORING_STATES = ("current", "failing", "never_scanned", "not_monitored")
 RENEWAL_STATES = ("automation_configured", "manual", "stalled", "in_progress", "unknown")
 DELIVERY_STATES = ("ok", "failing", "unrouted")
 
@@ -184,18 +184,71 @@ def prepare_status_model_context(
     certificate_status: StatusContext,
     settings: AxisSettings | None = None,
 ) -> StatusModelContext:
-    """Prepare request-wide renewal evidence without materialising dashboard rows."""
-    from cert_watch.renewal_analytics import compute_fleet_analytics
+    """Prepare the cheap request-wide context.
 
-    analytics = {
-        (item.hostname, int(item.port or 0)): item.automation_classification
-        for item in compute_fleet_analytics(db_path)
-    }
+    Historical renewal analytics are deliberately loaded later, for only the
+    rows a request will return.  Preparing a page must not scan the estate's
+    complete history before SQL pagination has selected that page.
+    """
     return StatusModelContext(
         certificate_status=certificate_status,
         settings=settings or AxisSettings(),
-        renewal_analytics=analytics,
+        renewal_analytics={},
         delivery={},
+    )
+
+
+def load_renewal_analytics(
+    db_path: str | Path,
+    endpoints: tuple[tuple[str, int], ...],
+    context: StatusModelContext,
+) -> None:
+    """Load renewal classifications for the selected endpoints only."""
+    missing = tuple(
+        dict.fromkeys(
+            endpoint for endpoint in endpoints
+            if endpoint[0] and endpoint not in context.renewal_analytics
+        )
+    )
+    if not missing:
+        return
+    from cert_watch.renewal_analytics import compute_endpoint_analytics
+
+    found = {
+        (item.hostname, int(item.port or 0)): item.automation_classification
+        for item in compute_endpoint_analytics(db_path, missing)
+    }
+    for endpoint in missing:
+        context.renewal_analytics[endpoint] = found.get(endpoint, "unknown")
+
+
+def renewal_state_for_row(
+    *,
+    hostname: str | None,
+    port: int | None,
+    renewal_method: str | None,
+    operator_status: str | None,
+    not_after: str | None,
+    has_successor: bool,
+    context: StatusModelContext,
+) -> tuple[str, str]:
+    """Classify one selected row from its stored and bounded history evidence."""
+    stalled = False
+    cfg = context.settings
+    if hostname and not_after and not has_successor and cfg.renewal_window_days > 0:
+        try:
+            expires = datetime.fromisoformat(not_after)
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=UTC)
+            days = (expires - context.now).days
+            stalled = 0 <= days <= cfg.renewal_window_days
+        except (TypeError, ValueError, OverflowError):
+            stalled = False
+    return renewal_state(
+        renewal_method,
+        operator_status,
+        stalled,
+        context.renewal_analytics.get((hostname or "", int(port or 0))),
     )
 
 
@@ -233,21 +286,14 @@ def register_status_model_functions(
         not_after: object,
         has_successor: object,
     ) -> str:
-        stalled = False
-        if hostname and not_after and not bool(has_successor) and cfg.renewal_window_days > 0:
-            try:
-                expires = datetime.fromisoformat(str(not_after))
-                if expires.tzinfo is None:
-                    expires = expires.replace(tzinfo=UTC)
-                days = (expires - context.now).days
-                stalled = 0 <= days <= cfg.renewal_window_days
-            except (TypeError, ValueError, OverflowError):
-                stalled = False
-        state, _source = renewal_state(
-            str(method or ""),
-            str(operator or ""),
-            stalled,
-            context.renewal_analytics.get((str(hostname or ""), int(str(port or 0)))),
+        state, _source = renewal_state_for_row(
+            hostname=str(hostname or ""),
+            port=int(str(port or 0)),
+            renewal_method=str(method or ""),
+            operator_status=str(operator or ""),
+            not_after=str(not_after) if not_after else None,
+            has_successor=bool(has_successor),
+            context=context,
         )
         return state
 
@@ -256,6 +302,73 @@ def register_status_model_functions(
         "cw_delivery_state",
         1,
         lambda cert_id: context.delivery.get(str(cert_id), {}).get("state", "unrouted"),
+    )
+
+
+def delivery_state_sql(
+    cert_alias: str | None,
+    host_alias: str | None,
+    settings: AxisSettings,
+) -> str:
+    """Return SQL for the delivery state without expanding recipient identities.
+
+    This is the aggregate/filter path.  Full routing resolution remains the
+    display-row path, where names and addresses are actually needed.
+    """
+    c = cert_alias
+    h = host_alias
+    cert_id = f"{c}.id" if c else "NULL"
+    cert_tags = f"{c}.tags" if c else "''"
+    host_tags = f"{h}.tags" if h else "''"
+    owner_route = f"NULLIF(TRIM(COALESCE({h}.owner_email, '')), '') IS NOT NULL" if h else "0"
+    group_match = (
+        "EXISTS(SELECT 1 FROM alert_groups ag WHERE "
+        f"EXISTS(SELECT 1 FROM alert_group_certs agc WHERE agc.cert_id = {cert_id} "
+        "AND agc.group_id = ag.id) OR "
+        f"cw_tags_overlap({cert_tags}, {host_tags}, ag.match_tags) OR "
+        "EXISTS(SELECT 1 FROM roles ro WHERE ro.alert_group_id = ag.id "
+        f"AND cw_tags_overlap({cert_tags}, {host_tags}, ro.scope_tag)))"
+    )
+    group_recipients = (
+        "EXISTS(SELECT 1 FROM alert_groups ag WHERE "
+        "NULLIF(TRIM(REPLACE(COALESCE(ag.recipients, ''), ',', '')), '') "
+        "IS NOT NULL AND ("
+        f"EXISTS(SELECT 1 FROM alert_group_certs agc WHERE agc.cert_id = {cert_id} "
+        "AND agc.group_id = ag.id) OR "
+        f"cw_tags_overlap({cert_tags}, {host_tags}, ag.match_tags) OR "
+        "EXISTS(SELECT 1 FROM roles ro WHERE ro.alert_group_id = ag.id "
+        f"AND cw_tags_overlap({cert_tags}, {host_tags}, ro.scope_tag))))"
+    )
+    global_recips = int(bool(settings.global_recipients))
+    global_webhook = int(settings.webhook_configured)
+    smtp_can = (
+        f"({int(settings.smtp_configured)} AND "
+        f"({global_recips} OR {owner_route} OR {group_recipients}))"
+    )
+    any_route = f"({global_recips} OR {global_webhook} OR {owner_route} OR {group_match})"
+
+    def latest_outcome(channel_sql: str) -> str:
+        return (
+            "COALESCE((SELECT CASE "
+            "WHEN json_extract(e.details, '$.outcome') IN ('accepted', 'partial', 'failed') "
+            "THEN json_extract(e.details, '$.outcome') ELSE 'unknown' END "
+            "FROM alert_delivery_events e JOIN alerts a ON a.id = e.alert_id "
+            f"WHERE a.cert_id = {cert_id} AND e.event_kind = 'completed' "
+            f"AND {channel_sql} ORDER BY e.id DESC LIMIT 1), '')"
+        )
+
+    smtp_failed = (
+        f"({int(settings.smtp_configured)} AND {latest_outcome("e.channel = 'smtp'")} "
+        "IN ('failed', 'partial', 'unknown'))"
+    )
+    webhook_failed = (
+        f"({global_webhook} AND {latest_outcome("e.channel != 'smtp'")} "
+        "IN ('failed', 'partial', 'unknown'))"
+    )
+    return (
+        f"CASE WHEN NOT {any_route} THEN 'unrouted' "
+        f"WHEN NOT ({smtp_can} OR {global_webhook}) OR {smtp_failed} OR {webhook_failed} "
+        "THEN 'failing' ELSE 'ok' END"
     )
 
 
@@ -335,7 +448,12 @@ def load_delivery_statuses(
                 "last_outcome": latest.get("webhook"),
             },
         )
-        unrouted = not specific and not groups
+        unrouted = (
+            not specific
+            and not groups
+            and not cfg.global_recipients
+            and not cfg.webhook_configured
+        )
         failed_outcome = any(
             channel["last_outcome"] in {"failed", "partial", "unknown"}
             for channel in channels

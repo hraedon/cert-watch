@@ -9,7 +9,6 @@ from cert_watch.database.dashboard_page import inventory_candidates_sql
 from cert_watch.status_model import (
     AxisSettings,
     StatusModelContext,
-    load_delivery_statuses,
     prepare_status_model_context,
     register_status_model_functions,
 )
@@ -31,7 +30,8 @@ def dashboard_axis_stats(
         db_path, certificate_status=status, settings=axis_settings
     )
     candidates = inventory_candidates_sql(
-        q=q, source=source, scope_tags=scope_tags, status=status, axes=axes
+        q=q, source=source, scope_tags=scope_tags, status=status, axes=axes,
+        sql_delivery=True,
     )
     result = {
         "condition": dict.fromkeys(("expired", "le7", "8to30", "ok"), 0),
@@ -44,24 +44,23 @@ def dashboard_axis_stats(
     if candidates is None:
         return result
     sql, params = candidates
+    columns = {
+        f"{axis}_{state}": (axis, state)
+        for axis, states in result.items()
+        for state in states
+    }
+    aggregates = ", ".join(
+        f"SUM(CASE WHEN {axis} = '{state}' THEN 1 ELSE 0 END) AS {alias}"
+        for alias, (axis, state) in columns.items()
+    )
     with _connect(db_path) as conn:
         register_status_model_functions(conn, axes)
-        cert_ids = tuple(
-            row[0]
-            for row in conn.execute(
-                f"SELECT ekey FROM ({sql}) WHERE etype = 'leaf'", params
-            ).fetchall()
-        )
-    load_delivery_statuses(db_path, cert_ids, axes)
-    with _connect(db_path) as conn:
-        register_status_model_functions(conn, axes)
-        for axis in result:
-            rows = conn.execute(
-                f"SELECT {axis} AS state, COUNT(*) AS n FROM ({sql})"
-                f" WHERE {axis} IS NOT NULL GROUP BY {axis}",
-                params,
-            ).fetchall()
-            for row in rows:
-                if row["state"] in result[axis]:
-                    result[axis][row["state"]] = int(row["n"])
+        row = conn.execute(
+            f"WITH inventory AS MATERIALIZED ({sql}) "
+            f"SELECT {aggregates} FROM inventory",
+            params,
+        ).fetchone()
+    if row is not None:
+        for alias, (axis, state) in columns.items():
+            result[axis][state] = int(row[alias] or 0)
     return result

@@ -79,6 +79,9 @@ from cert_watch.database.dashboard_helpers import (
     _sort_unified as _sort_unified,
 )
 from cert_watch.database.dashboard_page import (
+    get_dashboard_entry as get_dashboard_entry,
+)
+from cert_watch.database.dashboard_page import (
     list_dashboard_page as list_dashboard_page,
 )
 from cert_watch.database.dashboard_page import (
@@ -98,6 +101,12 @@ from cert_watch.database.dashboard_stats import (
 )
 from cert_watch.database.dashboard_stats import (
     dashboard_expiry_stats as dashboard_expiry_stats,
+)
+from cert_watch.database.dashboard_stats import (
+    dashboard_inventory_count as dashboard_inventory_count,
+)
+from cert_watch.database.dashboard_stats import (
+    dashboard_overall_stats as dashboard_overall_stats,
 )
 from cert_watch.database.dashboard_stats import (
     dashboard_urgency_stats as dashboard_urgency_stats,

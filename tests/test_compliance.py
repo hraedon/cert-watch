@@ -966,10 +966,11 @@ class TestReportIssue113:
         assert "(uploaded)<" in html
 
     def test_bucket_edges_follow_the_status_thresholds(self, tmp_path, monkeypatch):
-        """The four-axis condition bands include their 7- and 30-day edges."""
+        """Compliance buckets use the legacy status-rule exclusive edges."""
         from datetime import UTC, datetime, timedelta
 
         from cert_watch.certificate_model import Certificate
+        from cert_watch.scheduler import ScanHistory, record_scan_history
         from tests._helpers import seed_certificate, seed_host
 
         monkeypatch.setattr("cert_watch.cert_chain.chain_status", lambda *a: "public")
@@ -988,11 +989,20 @@ class TestReportIssue113:
                 cert_id=f"c-{name}", hostname=f"{name}.example.test", port=443,
                 source="scanned",
             )
+            record_scan_history(
+                db,
+                ScanHistory(
+                    f"{name}.example.test",
+                    443,
+                    "success",
+                    scanned_at=now - timedelta(hours=1),
+                ),
+            )
         report = build_compliance_report(str(db))
         buckets = {b.label: [e.subject for e in b.entries] for b in report.remediation_buckets}
-        assert buckets["Expiring within 7 days"] == ["CN=seven.example.test"]
-        assert buckets["Expiring within 30 days"] == ["CN=thirty.example.test"]
-        assert buckets["Expiring within 90 days"] == []
+        assert buckets["Expiring within 7 days"] == []
+        assert buckets["Expiring within 30 days"] == ["CN=seven.example.test"]
+        assert buckets["Expiring within 90 days"] == ["CN=thirty.example.test"]
         urgency = {
             e.subject: e.urgency for b in report.remediation_buckets for e in b.entries
         }

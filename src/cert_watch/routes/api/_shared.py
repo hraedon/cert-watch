@@ -16,13 +16,52 @@ from cert_watch.tags import format_tags, parse_tags
 logger = logging.getLogger("cert_watch.routes.api")
 
 
-def status_api_row(row: dict[str, Any]) -> dict[str, Any]:
+def delivery_details_allowed(request: Request) -> bool:
+    """Only administrators may read routing identities from status blocks."""
+    auth = getattr(request.state, "auth_context", None)
+    return auth is None or bool(getattr(auth, "is_admin", False))
+
+
+def status_for_api(model: dict[str, Any], *, reveal_delivery_details: bool) -> dict[str, Any]:
+    """Copy a status model, reducing delivery to anonymous counts when needed."""
+    result = dict(model)
+    raw = model.get("delivery")
+    if reveal_delivery_details or not isinstance(raw, dict):
+        return result
+    raw_channels = raw.get("channels")
+    channels: list[Any] = raw_channels if isinstance(raw_channels, list) else []
+    result["delivery"] = {
+        "state": raw.get("state", "unrouted"),
+        "recipient_count": len(raw.get("recipients") or []),
+        "matching_group_count": len(raw.get("matching_groups") or []),
+        "channels": [
+            {
+                "channel": channel.get("channel"),
+                "route_count": len(channel.get("recipients") or []),
+            }
+            for channel in channels
+            if isinstance(channel, dict)
+        ],
+    }
+    return result
+
+
+def status_api_row(
+    row: dict[str, Any], *, reveal_delivery_details: bool = False
+) -> dict[str, Any]:
     """Copy a dashboard row with an honest compatibility status token."""
     result = dict(row)
     result["urgency"] = overall_state(row)
     result["overall_state"] = result["urgency"]
+    if isinstance(row.get("status"), dict):
+        result["status"] = status_for_api(
+            row["status"], reveal_delivery_details=reveal_delivery_details
+        )
     if row.get("hosts"):
-        result["hosts"] = [status_api_row(child) for child in row["hosts"]]
+        result["hosts"] = [
+            status_api_row(child, reveal_delivery_details=reveal_delivery_details)
+            for child in row["hosts"]
+        ]
     return result
 
 

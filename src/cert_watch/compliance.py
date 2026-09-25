@@ -353,9 +353,11 @@ def _load_compliance_rows(
                 "not_before": d["not_before"],
                 "not_after": not_after,
                 "days_remaining": days,
-                # Compatibility field: certificate urgency remains stable;
-                # user-facing reports render the independent axes below.
-                "urgency": effective_urgency(days, d["chain_status"]),
+                # Compatibility field now carries the honest overall display
+                # state; condition remains separately available below.
+                "urgency": model.get(
+                    "overall_state", effective_urgency(days, d["chain_status"])
+                ),
                 "owner_name": d["owner_name"],
                 "tags": d["tags"],
                 "condition": model.get("condition", ""),
@@ -629,9 +631,9 @@ def build_compliance_report(
         # contradicts on expiry grounds.
         if days < 0:
             expired.append(entry)
-        elif days <= CRITICAL_DAYS:
+        elif days < CRITICAL_DAYS:
             expiring_7.append(entry)
-        elif days <= WARNING_DAYS:
+        elif days < WARNING_DAYS:
             expiring_30.append(entry)
         elif days < 90:
             expiring_90.append(entry)

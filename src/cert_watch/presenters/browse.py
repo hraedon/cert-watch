@@ -213,7 +213,19 @@ def _freshness(
         )
     scan = evidence.get(str(raw.get("host_id") or ""))
     if scan is None:
-        return 0, 0, "", ""
+        if not raw.get("host_id"):
+            return 0, 0, "", ""
+        state = str(raw.get("monitoring") or "never_scanned")
+        return (
+            int(state == "current"),
+            1,
+            {
+                "current": "Current scan",
+                "failing": "Monitoring failing",
+                "never_scanned": "No successful scan",
+            }.get(state, ""),
+            "cw-muted" if state == "current" else "t-warn",
+        )
     return (
         int(scan.state == "current"),
         1,
@@ -243,17 +255,15 @@ def _present_entry(
     raw_condition = raw.get("condition")
     condition = str(raw_condition) if raw_condition is not None else None
     monitoring = str(raw.get("monitoring") or "never_scanned")
-    if raw.get("host_id") and monitoring == "failing":
-        overall_label, overall_tone = "Scan failing", "t-crit"
-    elif raw.get("host_id") and monitoring == "never_scanned":
-        overall_label, overall_tone = "Never scanned", "t-muted"
-    else:
-        overall_label, overall_tone = {
-            "expired": ("Expired", "t-expired"),
-            "le7": ("≤7 days", "t-crit"),
-            "8to30": ("8–30 days", "t-warn"),
-            "ok": ("OK", "t-ok"),
-        }.get(condition or "", ("Unknown", "t-muted"))
+    overall = str(raw.get("overall_state") or raw.get("urgency") or "gray")
+    overall_label, overall_tone = {
+        "expired": ("Expired", "t-expired"),
+        "critical": ("Critical", "t-crit"),
+        "warning": ("Warning", "t-warn"),
+        "healthy": ("Healthy", "t-ok"),
+        "failing": ("Scan failing", "t-crit"),
+        "gray": ("Never scanned", "t-muted"),
+    }.get(overall, ("Unknown", "t-muted"))
     return BrowseEntryView(
         id=str(raw.get("id") or ""),
         host_id=raw.get("host_id"),

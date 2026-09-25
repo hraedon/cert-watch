@@ -354,6 +354,40 @@ def compute_fleet_analytics(
     return results
 
 
+def compute_endpoint_analytics(
+    db_path: str | Path,
+    endpoints: tuple[tuple[str, int], ...],
+) -> list[HostRenewalAnalytics]:
+    """Compute history analytics for a bounded set of displayed endpoints."""
+    init_schema(db_path)
+    if not endpoints:
+        return []
+    wanted = tuple(dict.fromkeys((host, int(port)) for host, port in endpoints))
+    rows: list[Any] = []
+    with _connect(db_path) as conn:
+        for start in range(0, len(wanted), 350):
+            chunk = wanted[start : start + 350]
+            where = " OR ".join("(hostname = ? AND port = ?)" for _ in chunk)
+            rows.extend(
+                conn.execute(
+                    "SELECT hostname, port, fingerprint_sha256, issuer, not_after, "
+                    "not_before, scanned_at FROM cert_history WHERE " + where
+                    + " ORDER BY hostname, port, scanned_at ASC",
+                    [value for endpoint in chunk for value in endpoint],
+                ).fetchall()
+            )
+    from collections import defaultdict
+
+    by_host: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        item = dict(row)
+        by_host[(item["hostname"], int(item.get("port") or 0))].append(item)
+    return [
+        _compute_host_from_entries(host, by_host.get((host, port), []), port=port)
+        for host, port in wanted
+    ]
+
+
 def detect_renewal_overdue(
     db_path: str | Path, hostname: str, *, port: int | None = None
 ) -> RenewalOverdueSignal | None:

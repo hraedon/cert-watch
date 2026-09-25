@@ -7,7 +7,7 @@
   /* ---- pivot group lazy expansion (BC-048) ----
    * The expansion row itself is toggled by core.js via data-expand;
    * this hook fills it with fetched entries on first open.          */
-  var VALID_URGENCY = { expired: 1, critical: 1, warning: 1, healthy: 1, gray: 1 };
+  var VALID_URGENCY = { expired: 1, critical: 1, warning: 1, healthy: 1, failing: 1, gray: 1 };
 
   document.addEventListener('click', function (e) {
     var trigger = e.target.closest('[data-expand^="pivot-detail-"]');
@@ -25,7 +25,7 @@
       div.className = 'row';
       var name = entry.name || entry.host || '—';
       var urg = VALID_URGENCY[entry.urgency] ? entry.urgency : 'gray';
-      var tone = { expired: 't-expired', critical: 't-crit', warning: 't-warn', healthy: 't-ok', gray: 't-muted' }[urg];
+      var tone = { expired: 't-expired', critical: 't-crit', warning: 't-warn', healthy: 't-ok', failing: 't-crit', gray: 't-muted' }[urg];
       var link;
       if (entry.id) {
         link = document.createElement('a');
