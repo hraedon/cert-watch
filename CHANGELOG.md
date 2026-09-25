@@ -13,7 +13,22 @@ All notable changes to cert-watch are documented in this file.
   alert delivery routes/outcomes. Browse and both JSON lists accept combinable
   SQL filters for every axis while preserving tag scope (#126 S1).
 
+### Changed
+
+- Visual system (#126 S2): one type scale (12, 14, 16, 20, 28 px); colour
+  means status only, so links, focus rings, active states and the wordmark
+  are neutral ink and links carry a hairline underline instead of the bronze
+  accent; expired uses the crit colour plus the word "Expired" instead of a
+  separate violet; a failing scan renders as a warning (monitoring), not
+  critical; monospace is limited to hostnames, serials and fingerprints.
+
 ### Fixed
+
+- Accessibility (#126 S2): every page has a `<main>` landmark, every form
+  field has an associated label, empty action-column headers are named for
+  screen readers, and secondary text no longer uses `--text-3`, which failed
+  4.5:1 contrast. Text on tinted status fills is now ink with the status
+  colour on the icon or fill; chips and the danger button are outlined.
 
 - An endpoint with a failed, overdue or never-successful scan is no longer
   labelled Healthy/OK because its last stored certificate was fine. Chain

@@ -88,10 +88,10 @@
           {% if m.total > 0 %}
             {% set pct = (m.passing / m.total * 100) %}
             {{ ui.bar(pct | int, tone=('t-crit' if pct < 50 else 't-warn' if pct < 80 else 't-ok'), thick=true) }}
-            <span class="mono tnum cw-gradecount">{{ m.display }}</span>
+            <span class="tnum cw-gradecount">{{ m.display }}</span>
           {% else %}
             <span class="cw-spacer"></span>
-            <span class="mono tnum cw-gradecount cw-muted">{{ m.display }}</span>
+            <span class="tnum cw-gradecount cw-muted">{{ m.display }}</span>
           {% endif %}
         </div>
       {% endfor %}
@@ -149,11 +149,11 @@
   {# ---- Signed footer ---- #}
   <div class="cw-panel">
     <div class="cw-panel-body">
-      <div class="cw-note mono">
+      <div class="cw-note">
         {{ icons.svg_icon('key', 14) }}
         <div>
-          Content SHA-256: {{ report.content_sha256 }}<br>
-          HMAC-SHA256 signature: {{ report.signature }}<br>
+          Content SHA-256: <span class="mono">{{ report.content_sha256 }}</span><br>
+          HMAC-SHA256 signature: <span class="mono">{{ report.signature }}</span><br>
           Generated at: {{ report.generated_at[:16] | replace('T', ' ') }} UTC<br>
           Verify: <code>cert-watch verify-report &lt;file&gt;</code>
         </div>

@@ -1,10 +1,13 @@
 """Guardrail: status colours stay separable, including under colour-vision
 deficiency (WI-145).
 
-The status quad (--ok, --warn, --crit, --expired) is the one thing an operator
-must never confuse on a triage page. WI-145 showed how separation can silently
-collapse when a palette refresh retunes one token without re-checking the pair
-distances, and that nobody had ever computed the distances under CVD simulation
+The status trio (--ok, --warn, --crit) is the one thing an operator must never
+confuse on a triage page. Expired is not a fourth hue: since #126 (S2) it renders
+in --crit and is told apart by the word "Expired", so the retired violet
+--cw-expired is gone and the test below pins that it stays gone. WI-145 showed
+how separation can silently collapse when a palette refresh retunes one token
+without re-checking the pair distances, and that nobody had ever computed the
+distances under CVD simulation
 (patina's check_contrast.py explicitly did not). This test computes CIELAB dE76
 for every status pair in both themes, for normal vision and under the three
 dichromacy simulations (Machado et al. 2009, severity 1.0), and fails if any
@@ -13,8 +16,8 @@ pair drops below the floors patina's plan-004 constraint search used:
   * normal vision: dE76 >= 15
   * each CVD simulation: dE76 >= 8
 
-The values are parsed from tokens.css and the app-owned cw.css (not duplicated here),
-so the test tracks whatever the stylesheet actually ships. Pure stdlib — no colour library.
+The values are parsed from tokens.css (not duplicated here), so the test tracks
+whatever the stylesheet actually ships. Pure stdlib — no colour library.
 """
 
 from __future__ import annotations
@@ -35,7 +38,7 @@ TOKENS_CSS = (
     / "tokens.css"
 )
 
-STATUS_TOKENS = ("ok", "warn", "crit", "expired")
+STATUS_TOKENS = ("ok", "warn", "crit")
 
 NORMAL_FLOOR = 15.0
 CVD_FLOOR = 8.0
@@ -113,7 +116,6 @@ def delta_e76(
 def _parse_theme_colors() -> dict[str, dict[str, str]]:
     """Extract {theme: {token: hex}} for the status tokens from tokens.css."""
     css = TOKENS_CSS.read_text(encoding="utf-8")
-    app_css = TOKENS_CSS.with_name("cw.css").read_text(encoding="utf-8")
     themes: dict[str, dict[str, str]] = {}
     # The default :root block is the dark theme; data-theme="light" overrides.
     blocks = {
@@ -125,11 +127,6 @@ def _parse_theme_colors() -> dict[str, dict[str, str]]:
     for theme, match in blocks.items():
         assert match, f"could not locate the {theme} theme block in tokens.css"
         body = match.group(1)
-        app_match = re.search(
-            rf':root\[data-theme="{theme}"\]\s*\{{(.*?)\n\}}', app_css, re.DOTALL
-        )
-        assert app_match, f"could not locate the {theme} theme block in cw.css"
-        body += app_match.group(1).replace("--cw-expired:", "--expired:")
         found = {}
         for token in STATUS_TOKENS:
             m = re.search(rf"--{token}:\s*(#[0-9a-fA-F]{{6}})\s*;", body)
@@ -184,18 +181,12 @@ def test_pipeline_matches_wi145_reference_measurements() -> None:
     assert feared == pytest.approx(21.2, abs=0.15)
 
 
-def test_expired_palette_retains_separation_with_vendored_status_colors() -> None:
-    distances = []
-    for colors in _THEMES.values():
-        for token in ("ok", "warn", "crit"):
-            distances.append(
-                delta_e76(hex_to_lab(colors["expired"]), hex_to_lab(colors[token]))
-            )
-            for kind in _CVD_MATRICES:
-                distances.append(
-                    delta_e76(
-                        simulate_lab(colors["expired"], kind),
-                        simulate_lab(colors[token], kind),
-                    )
-                )
-    assert min(distances) >= CVD_FLOOR
+def test_expired_renders_as_crit_not_a_separate_hue() -> None:
+    """Colour means status (#126 S2): expired is crit plus the word "Expired".
+    A separate expired hue would reintroduce a fourth status colour that has
+    to be kept separable from the other three."""
+    app_css = TOKENS_CSS.with_name("cw.css").read_text(encoding="utf-8")
+    assert "--cw-expired" not in app_css
+    rule = re.search(r"\.t-expired\s*\{([^}]*)\}", app_css)
+    assert rule, ".t-expired rule not found in cw.css"
+    assert "var(--crit)" in rule.group(1)

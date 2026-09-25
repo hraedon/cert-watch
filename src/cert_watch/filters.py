@@ -60,12 +60,14 @@ _URGENCY_LABELS = {
 }
 
 _URGENCY_TONES = {
-    "expired": "var(--cw-expired)",
+    # Expired shares crit; the word "Expired" carries the difference (#126).
+    "expired": "var(--crit)",
     "critical": "var(--crit)",
     "warning": "var(--warn)",
     "healthy": "var(--ok)",
     "gray": "var(--text-3)",
-    "failing": "var(--crit)",
+    # A failing scan is a monitoring problem: warn, not crit (#126).
+    "failing": "var(--warn)",
     "neutral": "var(--text-2)",
 }
 
@@ -96,7 +98,7 @@ def urgency_label(urgency: str) -> str:
 def urgency_tone(urgency: str) -> str:
     """Map an urgency bucket to its CSS colour-variable (WI-108).
 
-    Replaces the ``{% set _c = 'var(--cw-expired)' if urg == 'expired' else ... %}``
+    Replaces the ``{% set _c = ... if urg == 'expired' else ... %}``
     if-chain duplicated across dashboard.html, certificate_detail.html, and
     team_dashboard.html.
     """

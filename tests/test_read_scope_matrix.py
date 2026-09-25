@@ -404,9 +404,10 @@ _NOISE: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(Generated(?: at)?[:,]? ?)\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}[0-9:.+]*"),
      r"\1<ts>"),
     (re.compile(r'("content_sha256":\s*")[0-9a-f]{64}'), r"\1<hash>"),
-    (re.compile(r"(Content SHA-256[:,] ?)[0-9a-f]{64}"), r"\1<hash>"),
+    # The page wraps the hash and signature in a mono span (#126 S2).
+    (re.compile(r'(Content SHA-256[:,] ?(?:<span class="mono">)?)[0-9a-f]{64}'), r"\1<hash>"),
     (re.compile(r'("signature":\s*")[^"]*'), r"\1<sig>"),
-    (re.compile(r"(HMAC-SHA256 signature[:,] ?)[0-9a-f]+"), r"\1<sig>"),
+    (re.compile(r'(HMAC-SHA256 signature[:,] ?(?:<span class="mono">)?)[0-9a-f]+'), r"\1<sig>"),
 )
 
 

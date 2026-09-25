@@ -59,7 +59,7 @@
       </details>
 
     </header>
-    <div class="cw-page">
+    <main class="cw-page" id="main">
 
 
       <div id="cw-health" class="cw-health cw-hidden">
@@ -220,7 +220,7 @@ Calendar · all</a>
 
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
 
-</span> <span class="cw-id">Unknown</span></td>
+</span> <span class="cw-strong">Unknown</span></td>
           <td class="num">4</td>
           <td><span class="cw-status t-expired">
   <span class="dot" aria-hidden="true"></span>Expired
@@ -236,7 +236,7 @@ Calendar · all</a>
 
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
 
-</span> <span class="cw-id">Manual</span></td>
+</span> <span class="cw-strong">Manual</span></td>
           <td class="num">1</td>
           <td><span class="cw-status t-warn">
   <span class="dot" aria-hidden="true"></span>Warning
@@ -252,9 +252,9 @@ Calendar · all</a>
 
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
 
-</span> <span class="cw-id">cert-manager</span></td>
+</span> <span class="cw-strong">cert-manager</span></td>
           <td class="num">1</td>
-          <td><span class="cw-status t-crit">
+          <td><span class="cw-status t-warn">
   <span class="dot" aria-hidden="true"></span>Scan failing
 </span></td>
           <td class="num">—</td>
@@ -316,17 +316,17 @@ Bulk import</button>
       <form method="post" action="/hosts" class="cw-form">
         <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
         <div class="cw-field">
-          <label class="cw-label">Hostname</label>
-          <input class="cw-input mono" type="text" name="hostname" required placeholder="example.com" data-testid="scan-hostname-input">
+          <label class="cw-label" for="scan-hostname">Hostname</label>
+          <input class="cw-input mono" type="text" id="scan-hostname" name="hostname" required placeholder="example.com" data-testid="scan-hostname-input">
         </div>
         <div class="cw-form-grid">
           <div class="cw-field">
-            <label class="cw-label">Port</label>
-            <input class="cw-input mono" type="number" name="port" value="443" min="1" max="65535">
+            <label class="cw-label" for="scan-port">Port</label>
+            <input class="cw-input tnum" type="number" id="scan-port" name="port" value="443" min="1" max="65535">
           </div>
           <div class="cw-field">
-            <label class="cw-label">Alert threshold (days)</label>
-            <input class="cw-input mono" type="number" name="threshold_days" placeholder="14, 7, 3, 1" min="1">
+            <label class="cw-label" for="scan-threshold">Alert threshold (days)</label>
+            <input class="cw-input tnum" type="number" id="scan-threshold" name="threshold_days" placeholder="14, 7, 3, 1" min="1">
           </div>
         </div>
         <div class="cw-field">
@@ -343,17 +343,17 @@ Bulk import</button>
         </div>
         <div class="cw-form-grid">
           <div class="cw-field">
-            <label class="cw-label">Tags <span class="cw-muted">(optional)</span></label>
-            <input class="cw-input" type="text" name="tags" placeholder="production, edge">
+            <label class="cw-label" for="scan-tags">Tags <span class="cw-muted">(optional)</span></label>
+            <input class="cw-input" type="text" id="scan-tags" name="tags" placeholder="production, edge">
           </div>
           <div class="cw-field">
-            <label class="cw-label">Scan cadence (hours) <span class="cw-muted">(optional)</span></label>
-            <input class="cw-input mono" type="number" name="scan_interval_hours" min="1" max="8760" placeholder="Daily schedule">
+            <label class="cw-label" for="scan-cadence">Scan cadence (hours) <span class="cw-muted">(optional)</span></label>
+            <input class="cw-input tnum" type="number" id="scan-cadence" name="scan_interval_hours" min="1" max="8760" placeholder="Daily schedule">
           </div>
         </div>
         <div class="cw-field">
-          <label class="cw-label">Notes <span class="cw-muted">(optional)</span></label>
-          <textarea class="cw-input" name="notes" rows="3" placeholder="Runbook context or operational notes"></textarea>
+          <label class="cw-label" for="scan-notes">Notes <span class="cw-muted">(optional)</span></label>
+          <textarea class="cw-input" id="scan-notes" name="notes" rows="3" placeholder="Runbook context or operational notes"></textarea>
         </div>
         <label class="cw-check">
           <input type="checkbox" name="common_ports" value="true"> Scan common TLS ports (443, 8443, 993, 995…)
@@ -382,8 +382,8 @@ Add &amp; scan</button>
           <input type="file" id="file-input" name="file" required accept=".pem,.crt,.cer,.der,.pfx,.p12,.p7b,.p7c" class="cw-hidden" data-testid="upload-file-input">
         </label>
         <div class="cw-field">
-          <label class="cw-label">Password <span class="cw-muted">(PKCS#12 only, optional)</span></label>
-          <input class="cw-input" type="password" name="password" placeholder="optional">
+          <label class="cw-label" for="upload-password">Password <span class="cw-muted">(PKCS#12 only, optional)</span></label>
+          <input class="cw-input" type="password" id="upload-password" name="password" placeholder="optional">
         </div>
         <div class="cw-form-foot">
           <button type="button" class="cw-btn" data-drawer-close="add-drawer">Cancel</button>
@@ -425,7 +425,7 @@ Import</button>
   </div>
 </div>
 
-    </div>
+    </main>
   </div>
   <script src="/static/js/core.js" nonce="{{CSP_NONCE}}"></script>
 

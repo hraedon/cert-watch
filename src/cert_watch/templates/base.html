@@ -64,7 +64,7 @@
       </details>
       {% block topbar_actions %}{% endblock %}
     </header>
-    <div class="cw-page">
+    <main class="cw-page" id="main">
       {% if error %}
         <div class="cw-flash t-crit" id="cw-flash-error">
           <span>{{ error }}</span>
@@ -94,7 +94,7 @@
       </div>
       {% endif %}
       {% block content %}{% endblock %}
-    </div>
+    </main>
   </div>
   <script src="/static/js/core.js" nonce="{{ request.state.csp_nonce }}"></script>
   {% block scripts %}{% endblock %}

@@ -35,7 +35,7 @@
           <td>
             <input type="hidden" name="rule_id" value="{{ rule.rule_id }}">
             <input type="hidden" name="category_{{ rule.rule_id }}" value="{{ rule.category }}">
-            <span class="cw-id">{{ rule.rule_id | humanize_label }}</span>
+            <span class="cw-strong">{{ rule.rule_id | humanize_label }}</span>
             <div class="cw-sub">{{ rule.category }}</div>
           </td>
           <td>
@@ -63,7 +63,7 @@
             {% elif rule.rule_id == 'key_size_ec' %}
               <div class="cw-field">
                 <label class="cw-label" for="allowed_curves_{{ rule.rule_id }}">Allowed curves (comma-separated)</label>
-                <input class="cw-input mono" type="text" id="allowed_curves_{{ rule.rule_id }}" name="allowed_curves_{{ rule.rule_id }}"
+                <input class="cw-input" type="text" id="allowed_curves_{{ rule.rule_id }}" name="allowed_curves_{{ rule.rule_id }}"
                        value="{{ rule.parameters.get('allowed_curves', []) | join(', ') }}"
                        placeholder="secp256r1, secp384r1, secp521r1">
               </div>

@@ -68,7 +68,7 @@
             {% if it.detail_url %}
               <a href="{{ it.detail_url }}" class="cw-id">{{ it.endpoint }}</a>
             {% else %}<span class="cw-id">{{ it.endpoint }}</span>{% endif %}
-            {% if it.host_count > 1 %}<span class="cw-chip t-accent">{{ it.host_count }} hosts</span>{% endif %}
+            {% if it.host_count > 1 %}<span class="cw-chip t-ink">{{ it.host_count }} hosts</span>{% endif %}
           </div>
           <div class="cw-sub">{{ it.reasons | join(' · ') }}</div>
         </div>
@@ -99,7 +99,7 @@
                       icon='check-circle', tone='t-ok', testid='queue-calm') }}
         {% else %}
           {% call ui.empty('No certificates yet', 'Scan a host, upload a certificate file, or import a list of hosts to start watching your estate.',
-                      icon='plus', tone='t-accent', testid='empty-onboarding') %}
+                      icon='plus', tone='t-ink', testid='empty-onboarding') %}
             {% if may_write %}<a href="/browse" class="cw-btn primary">{{ icons.svg_icon('plus', 15, 2) }}Add certificates</a>{% endif %}
           {% endcall %}
         {% endif %}
@@ -120,7 +120,7 @@
       {% for b in horizon %}
         <div class="cw-cal-row{% if b.is_empty %} quiet{% endif %}">
           <div class="cw-cal-date">
-            <span class="mono {{ 'cw-muted' if b.is_empty }}">{{ b.bucket_start }}</span>
+            <span class="tnum {{ 'cw-muted' if b.is_empty }}">{{ b.bucket_start }}</span>
             {% if b.bucket_start == current_week_start %}<div class="cw-cal-now">this week</div>{% endif %}
           </div>
           {% if not b.is_empty %}
@@ -131,7 +131,7 @@
           {% endif %}
         </div>
       {% else %}
-        {{ ui.empty('No expirations in the next 12 weeks', 'Future expirations will appear here as they enter the horizon.', icon='calendar', tone='t-accent') }}
+        {{ ui.empty('No expirations in the next 12 weeks', 'Future expirations will appear here as they enter the horizon.', icon='calendar', tone='t-ink') }}
       {% endfor %}
     </div>
   </div>

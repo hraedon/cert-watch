@@ -34,12 +34,12 @@
   {% if trust_anchors %}
   <div class="cw-table-clip">
   <table class="cw-table">
-    <thead><tr><th>Subject</th><th>Added</th><th></th></tr></thead>
+    <thead><tr><th>Subject</th><th>Added</th><th><span class="cw-sr">Actions</span></th></tr></thead>
     <tbody>
       {% for a in trust_anchors %}
       <tr>
         <td class="mono">{{ a.subject }}</td>
-        <td class="mono">{{ a.created_at.strftime("%Y-%m-%d") }}</td>
+        <td class="tnum">{{ a.created_at.strftime("%Y-%m-%d") }}</td>
         <td>
           {% if may_write %}
           <form method="post" action="/trust-anchors/{{ a.id }}/delete" class="cw-inline confirm-form" data-confirm="Remove this trust anchor? Certs chained to it will grade incomplete again.">

@@ -138,7 +138,8 @@ def test_add_host_creates_row(page: Page, cert_watch_server: str) -> None:
     for toggle in page.locator("tr[data-expand^='batch-']").all():
         toggle.click()
     expect(page.get_by_text("nonexistent.invalid:443", exact=True).first).to_be_visible()
-    expect(page.locator(".cw-subrow .cw-chip.t-crit").first).to_be_visible()
+    # A failed scan is a monitoring problem, so it renders warn, not crit (#126).
+    expect(page.locator(".cw-subrow .cw-chip.t-warn").first).to_be_visible()
 
 
 def test_host_notes_editor_has_distinct_view_and_edit_states(

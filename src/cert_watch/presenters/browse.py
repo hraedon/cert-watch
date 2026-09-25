@@ -261,7 +261,7 @@ def _present_entry(
         "critical": ("Critical", "t-crit"),
         "warning": ("Warning", "t-warn"),
         "healthy": ("Healthy", "t-ok"),
-        "failing": ("Scan failing", "t-crit"),
+        "failing": ("Scan failing", "t-warn"),
         "gray": ("Never scanned", "t-muted"),
     }.get(overall, ("Unknown", "t-muted"))
     return BrowseEntryView(

@@ -1,6 +1,8 @@
 {# Shared UI components for the v2 design system.
    Grammar: tone is a modifier (.t-ok/.t-warn/.t-crit/.t-expired/
-   .t-accent/.t-muted); components decide how to render it.       #}
+   .t-ink/.t-neutral/.t-muted); components decide how to render it.
+   Colour is status only: crit = expired / <= 7 days / delivery failing,
+   warn = 8-30 days / monitoring failing, ok = current.            #}
 {% from "macros/icons.html" import svg_icon %}
 
 {# Map an urgency bucket to its tone class. #}
@@ -9,7 +11,7 @@
   {%- elif urgency == 'critical' -%}t-crit
   {%- elif urgency == 'warning' -%}t-warn
   {%- elif urgency == 'healthy' -%}t-ok
-  {%- elif urgency == 'failing' -%}t-crit
+  {%- elif urgency == 'failing' -%}t-warn
   {%- else -%}t-muted
   {%- endif -%}
 {%- endmacro %}
@@ -65,7 +67,7 @@
 {% endmacro %}
 
 {# Progress/expiry bar as SVG — width in an attribute, not style=. #}
-{% macro bar(pct, tone='t-accent', thick=false) -%}
+{% macro bar(pct, tone='t-neutral', thick=false) -%}
 <svg class="cw-bar {{ tone }}{% if thick %} thick{% endif %}" role="img" aria-label="{{ pct }}%" preserveAspectRatio="none">
   <rect class="track" width="100%" height="100%"/>
   <rect class="fill" width="{{ [0, [pct, 100] | min] | max }}%" height="100%"/>

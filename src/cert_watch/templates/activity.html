@@ -87,7 +87,7 @@
   <div class="cw-panel">
     {% if alerts %}
       {% for a in alerts %}
-        {% set sev_tone = 't-crit' if a.alert_type in ('expired', 'scan_failure') else 't-warn' if a.alert_type in ('expiry_warning', 'drift') else 't-muted' %}
+        {% set sev_tone = 't-crit' if a.alert_type == 'expired' else 't-warn' if a.alert_type in ('scan_failure', 'expiry_warning', 'drift') else 't-muted' %}
         {% set type_labels = {'expired': 'Expired', 'scan_failure': 'Scan failure', 'expiry_warning': 'Expiry warning', 'drift': 'Drift', 'mis_issuance': 'CT mis-issuance'} %}
         <div class="cw-panel-body" data-alert-id="{{ a.id }}">
           <div class="cw-chiprow">
@@ -137,7 +137,7 @@
               <span class="cw-sub" data-testid="alert-undelivered">Still queued past the cycle that should have sent it.</span>
             {% endif %}
             <span class="cw-spacer"></span>
-            <span class="cw-sub mono tnum">{{ a.created_at[:16] | replace('T', ' ') if a.created_at else '' }}</span>
+            <span class="cw-sub tnum">{{ a.created_at[:16] | replace('T', ' ') if a.created_at else '' }}</span>
           </div>
           <details class="cw-delivery-details" data-testid="notification-details">
             <summary class="cw-btn ghost sm">Why and delivery details</summary>
@@ -219,18 +219,19 @@
             <th>Result</th>
             <th class="num">Endpoints</th>
             <th class="num">Attempts</th>
-            <th></th>
+            <th><span class="cw-sr">Details</span></th>
           </tr>
         </thead>
         <tbody>
           {% for b in batches %}
-          {% set result_tone = 't-ok' if b.result == 'success' else 't-warn' if b.result == 'partial' else 't-crit' %}
+          {# A failed scan is a monitoring problem: warn, never crit (#126). #}
+          {% set result_tone = 't-ok' if b.result == 'success' else 't-warn' %}
           <tr data-expand="batch-{{ loop.index }}" tabindex="0" role="button" aria-expanded="false" aria-controls="batch-{{ loop.index }}">
-            <td class="mono tnum">{{ b.scanned_at[:16] | replace('T', ' ') if b.scanned_at else '—' }}</td>
+            <td class="tnum">{{ b.scanned_at[:16] | replace('T', ' ') if b.scanned_at else '—' }}</td>
             <td>{{ ui.status(label=b.result, tone=result_tone) }}</td>
             <td class="num">
               {{ b.successes }}/{{ b.total }}
-              {% if b.failures > 0 %}<span class="cw-chip t-crit">{{ b.failures }} failed</span>{% endif %}{% if b.incomplete %} <span class="cw-chip t-warn">{{ b.incomplete }} incomplete</span>{% endif %}
+              {% if b.failures > 0 %}<span class="cw-chip t-warn">{{ b.failures }} failed</span>{% endif %}{% if b.incomplete %} <span class="cw-chip t-warn">{{ b.incomplete }} incomplete</span>{% endif %}
             </td>
             <td class="num">{{ b.attempts }}</td>
             <td class="num"><span class="chev">{{ icons.svg_icon('chevron-down', 14) }}</span></td>
@@ -241,8 +242,8 @@
               <div class="row">
                 <span class="cw-id">{{ h.hostname }}:{{ h.port }}</span>
                 {% if h.status == 'failure' %}
-                  {{ ui.status(label='failed', tone='t-crit') }}
-                  {% if h.error_message %}<span class="cw-chip t-crit">{{ h.error_message }}</span>{% endif %}
+                  {{ ui.status(label='failed', tone='t-warn') }}
+                  {% if h.error_message %}<span class="cw-chip t-warn">{{ h.error_message }}</span>{% endif %}
                 {% elif h.status == 'success' %}
                   {{ ui.status(label='ok', tone='t-ok') }}
                 {% else %}
@@ -257,7 +258,7 @@
       </table>
     </div>
     {% else %}
-      {{ ui.empty('No scans recorded yet', 'Scan history will appear here after the first scan.', icon='clock', tone='t-accent') }}
+      {{ ui.empty('No scans recorded yet', 'Scan history will appear here after the first scan.', icon='clock', tone='t-ink') }}
     {% endif %}
   </div>
 
@@ -300,10 +301,10 @@
         <tbody>
           {% for r in rows %}
           <tr>
-            <td class="mono tnum">{{ r.ts[:19] | replace('T', ' ') if r.ts else '—' }}</td>
-            <td class="mono">{{ r.actor or 'anonymous' }}</td>
+            <td class="tnum">{{ r.ts[:19] | replace('T', ' ') if r.ts else '—' }}</td>
+            <td>{{ r.actor or 'anonymous' }}</td>
             <td>{{ r.action }}</td>
-            <td>{{ r.target_type or '' }}{% if r.target_id %} <span class="cw-chip inset mono">{{ r.target_id[:8] }}{% if r.target_id | length > 8 %}…{% endif %}</span>{% endif %}</td>
+            <td>{{ r.target_type or '' }}{% if r.target_id %} <span class="cw-chip inset">{{ r.target_id[:8] }}{% if r.target_id | length > 8 %}…{% endif %}</span>{% endif %}</td>
             <td class="cw-muted">{{ r.detail or '' }}</td>
             <td class="mono cw-muted">{{ r.source_ip or '' }}</td>
           </tr>
