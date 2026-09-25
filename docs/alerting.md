@@ -17,6 +17,9 @@ step.
 
 Every endpoint is tracked separately. A wildcard certificate served by five
 hosts produces an alert for each of them, routed to each host's owner.
+Marking a renewal **in progress** suppresses only the renewal-stalled condition;
+it never suppresses expiry warnings or expired alerts. Renewal completion is
+established by observing a successor certificate, not by an operator report.
 
 ### Expiry thresholds
 

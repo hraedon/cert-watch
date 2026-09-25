@@ -52,6 +52,32 @@ def _alert_delivery_counts(db: str | Path, *, now: datetime) -> tuple[int, int]:
     return (int(row[0] or 0), int(row[1] or 0)) if row else (0, 0)
 
 
+# Alerts whose delivery failed in the window and that have not been delivered
+# since: gave up (``failed``) in the window -- by when they became failed, since
+# an alert can give up without any attempt (the bounded evidence deferral), so
+# ``last_attempt_at`` stays empty and hid it (#113 review) -- or still
+# retrying (``pending``/``sending``) with their latest recorded attempt refused
+# or failed in the window. Counting only ``failed`` rows hid a webhook that
+# returned HTTP 500 on every attempt for the whole backoff schedule -- up to
+# 12 attempts over days -- behind "failed_alerts_24h: 0" (#113). A deferral
+# (the attempt could not even be recorded) writes no ledger row and is counted
+# by ``undelivered_alerts`` instead.
+_FAILED_ALERTS_SQL = """
+    SELECT COUNT(*) FROM alerts a
+    WHERE (a.status = 'failed' AND a.failed_at > ?)
+       OR (a.status IN ('pending', 'sending') AND EXISTS (
+            SELECT 1 FROM alert_delivery_events c
+            WHERE c.alert_id = a.id AND c.event_kind = 'completed'
+              AND c.occurred_at > ?
+              AND json_extract(c.details, '$.outcome') = 'failed'
+              AND c.id = (
+                  SELECT MAX(c2.id) FROM alert_delivery_events c2
+                  WHERE c2.alert_id = a.id AND c2.event_kind = 'completed'
+              )
+       ))
+"""
+
+
 def _undelivered_count(db: str | Path, *, now: datetime) -> int:
     """Count overdue pending rows and abandoned sending leases."""
     overdue, stale_leases = _alert_delivery_counts(db, now=now)
@@ -290,11 +316,7 @@ def build_api_health_response(request: Request) -> JSONResponse:
         now = datetime.now(UTC)
         cutoff = (now - timedelta(hours=UNDELIVERED_AFTER_HOURS)).isoformat()
         with _connect(db) as conn:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM alerts "
-                "WHERE status = 'failed' AND last_attempt_at > ?",
-                (cutoff,),
-            ).fetchone()
+            row = conn.execute(_FAILED_ALERTS_SQL, (cutoff, cutoff)).fetchone()
             checks["failed_alerts_24h"] = row[0] if row else 0
             checks["undelivered_alerts"] = (
                 _undelivered_count(db, now=now) if delivery_configured else 0
@@ -304,6 +326,24 @@ def build_api_health_response(request: Request) -> JSONResponse:
         checks["failed_alerts_24h"] = 0
         checks["undelivered_alerts"] = 0
         alert_query_ok = False
+
+    # Registered endpoints that have never produced a certificate. The strip
+    # used to read "Monitoring pipeline healthy" while endpoints had never
+    # been scanned successfully (#113). Scoped like Home's scan-coverage panel,
+    # whose "without a successful scan" chip is the same count.
+    try:
+        from cert_watch.routes._scoped import scope_tags_from_auth
+        from cert_watch.scan_freshness import load_scan_evidence
+
+        scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+        evidence = load_scan_evidence(db, scope_tags=scope_tags)
+        checks["endpoints_without_successful_scan"] = sum(
+            1 for item in evidence.values() if item.state == "unobserved"
+        )
+    except Exception:
+        logger.warning("health scan coverage query failed", exc_info=True)
+        checks["endpoints_without_successful_scan"] = 0
+        scan_query_ok = False
 
     # Auth status
     auth = getattr(request.app.state, "auth_provider", None)
@@ -325,6 +365,7 @@ def build_api_health_response(request: Request) -> JSONResponse:
     elif (
         _count(checks, "failed_alerts_24h") > 0
         or _count(checks, "undelivered_alerts") > 0
+        or _count(checks, "endpoints_without_successful_scan") > 0
         or checks.get("last_scan_status") in ("failure", "partial")
     ):
         overall = "warning"

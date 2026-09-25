@@ -216,9 +216,9 @@
         <thead>
           <tr>
             <th>When</th>
-            <th>Trigger</th>
             <th>Result</th>
-            <th class="num">Hosts</th>
+            <th class="num">Endpoints</th>
+            <th class="num">Attempts</th>
             <th></th>
           </tr>
         </thead>
@@ -227,12 +227,12 @@
           {% set result_tone = 't-ok' if b.result == 'success' else 't-warn' if b.result == 'partial' else 't-crit' %}
           <tr data-expand="batch-{{ loop.index }}" tabindex="0" role="button" aria-expanded="false" aria-controls="batch-{{ loop.index }}">
             <td class="mono tnum">{{ b.scanned_at[:16] | replace('T', ' ') if b.scanned_at else '—' }}</td>
-            <td><span class="cw-chip">{{ icons.svg_icon('refresh', 11, 1.6) }}{{ b.trigger }}</span></td>
             <td>{{ ui.status(label=b.result, tone=result_tone) }}</td>
             <td class="num">
               {{ b.successes }}/{{ b.total }}
-              {% if b.failures > 0 %}<span class="cw-chip t-crit">{{ b.failures }} failed</span>{% endif %}
+              {% if b.failures > 0 %}<span class="cw-chip t-crit">{{ b.failures }} failed</span>{% endif %}{% if b.incomplete %} <span class="cw-chip t-warn">{{ b.incomplete }} incomplete</span>{% endif %}
             </td>
+            <td class="num">{{ b.attempts }}</td>
             <td class="num"><span class="chev">{{ icons.svg_icon('chevron-down', 14) }}</span></td>
           </tr>
           <tr class="cw-subrow cw-hidden" id="batch-{{ loop.index }}">

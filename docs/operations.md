@@ -65,13 +65,81 @@ your monitoring network at the ingress or firewall.
 | `cert_watch_scan_errors` | `host`, `reason` | Recorded scan failures (until retention removes them) |
 | `cert_watch_last_scan_timestamp_seconds` | | When the most recent scan finished |
 | `cert_watch_alerts` | `status` | Alerts by lifecycle state (pending, sending, failed, …) |
-| `cert_watch_alerts_failed_recent` | | Alerts that gave up in the last 24 hours; the `CertWatchAlertDeliveryFailed` rule uses it |
+| `cert_watch_alerts_failed_recent` | | Alerts that gave up in the last 24 hours, counted from when they gave up; the `CertWatchAlertDeliveryFailed` rule uses it |
 
 `deploy/k8s/prometheus-rules.yaml` contains ready-made rules. The one to keep
 even if you use no others is **`CertWatchScanStalled`**: no scan for 36 hours.
 A cert-watch that has stopped scanning looks healthy from the outside, and it
 is the failure that matters most. It has happened in practice, on IIS hosts
 that weren't configured to start the process without an incoming request.
+
+**The health strip** at the top of every page polls `/api/health` (any
+signed-in user). It turns amber when any of these is non-zero or the last scan
+failed, and red when the scheduler or the database is down:
+
+| Field | Counts |
+|-------|--------|
+| `failed_alerts_24h` | Alerts not delivered whose delivery failed in the last 24 hours: gave up in that time (counted from when they gave up, attempt or not), or still retrying after a refused or failed attempt (an HTTP 500 from the webhook, say) |
+| `undelivered_alerts` | Alerts still pending a day after creation, or stuck in a sending lease; only when SMTP or a webhook is configured |
+| `endpoints_without_successful_scan` | Endpoints in your scope that have never been scanned successfully (Home's "without a successful scan" chip) |
+
+Its timestamps are UTC, like the rest of the UI.
+
+### What the numbers mean
+
+Every page counts the estate with the same definitions.
+
+- **Endpoint** — a registered `host:port`. It is *scanned* once a scan has
+  stored its certificate, and *pending* until then. A later failed scan
+  doesn't make it pending again: it keeps the certificate it last saw.
+- **Certificate** — a stored leaf certificate: the current one for each
+  scanned endpoint (a rescan replaces it) and one per uploaded file. Chain
+  certificates aren't counted.
+- **Tracked** — one row per endpoint, scanned or pending, plus one per
+  uploaded file. Home, Inventory and the issuer, owner and renewal-method views
+  show the same total and the same status counts; the group views split those
+  same rows. Grouping Inventory by certificate shares one row between
+  endpoints but doesn't change the counts.
+- **Effective days** — whole days until the soonest expiry among the leaf
+  and the chain certificates stored with it, negative once one has expired.
+  An expired intermediate makes a leaf with 99 days left −3.
+- **Status** — Expired (effective days below 0), Critical (under 7),
+  Warning (under 30) or Healthy. A Healthy certificate whose chain can't be
+  verified (self-signed, incomplete, invalid or unknown) is shown as Warning;
+  adding or removing a trust anchor changes this everywhere at once. Until
+  a certificate's chain has been verified against the current trust anchors
+  (for a moment after a change), its counts treat it as unverified, never
+  as Healthy. Pending
+  endpoints have no status yet. Home, Inventory (and its status filter and
+  certificate grouping), Home's *Needs attention* queue, the issuer, owner
+  and renewal-method views, a view's expanded group, the compliance report and
+  `cert_watch_certificates_by_urgency` all use this one rule, and the counts
+  are computed in the database with the same rule the rows show.
+- **Days** — whole days until the leaf certificate expires, negative once it
+  has expired ("expired 41 days ago"). A group view's *Earliest expiry* is the
+  smallest effective days in the group, so it agrees with the group's status.
+- **Needs attention** (Home) — one item per problem per endpoint: expiry by
+  the status rule (renewal stalls inside the renewal window rank just after
+  Expired), an unverified chain, a failing scan, or scan evidence that is
+  overdue. Home shows the 50 most urgent and says how many there are.
+  Expanding a group view's row loads it 100 rows at a time.
+- **Graded** — a certificate with a posture grade: its latest scan's grade, or,
+  for an uploaded file, the grade of the file itself. The Posture fleet grade
+  and the compliance report's grade distribution cover the same certificates.
+- **Compliance report** — *Certificates* are the certificates in scope and
+  *Endpoints* the scanned endpoints among them. Its expiry sections place each
+  certificate by its effective days, with the status thresholds (within 7 days
+  means under 7 days left), and list the expiry date and days that put it
+  there: for a certificate whose intermediate expires first, the
+  intermediate's. So a certificate's section, days and Urgency always agree.
+- **Posture trends** count each endpoint once per month, by its latest scan
+  that month.
+- **Scan history** groups scans that ran within five minutes of each other.
+  *Endpoints* counts each endpoint once, judged by its latest attempt in the
+  batch: successful only when that scan fully succeeded. A partial scan is
+  shown as incomplete, not as a success, and makes the batch partial.
+  *Attempts* counts every attempt, retries included. What started a scan
+  (the schedule, Scan now, the API) isn't recorded, so it isn't shown.
 
 **Logs** go to standard output. Set `CERT_WATCH_LOG_FORMAT=json` for structured
 output. Each scan, alert delivery attempt and scheduler cycle is logged, and

@@ -63,6 +63,23 @@ class PivotGroupView:
     worst_urgency: str
     earliest_expiry: int | None
 
+    @property
+    def earliest_expiry_label(self) -> str:
+        """Days to the group's earliest expiry, honest once it has passed."""
+        return days_remaining_label(self.earliest_expiry)
+
+
+def days_remaining_label(days: int | None) -> str:
+    """``"12 days"``, ``"1 day"``, ``"today"`` or ``"expired 41 days ago"``."""
+    if days is None:
+        return "—"
+    if days < 0:
+        n = -days
+        return f"expired {n} day{'s' if n != 1 else ''} ago"
+    if days == 0:
+        return "today"
+    return f"{days} day{'s' if days != 1 else ''}"
+
 
 @dataclass(frozen=True)
 class CalendarBucketView:

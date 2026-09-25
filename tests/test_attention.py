@@ -157,28 +157,19 @@ class TestQueueAssembly:
         assert "renewal unknown" not in item["reasons"]
         assert not any("renewal window" in reason for reason in item["reasons"])
 
-    def test_deployment_endpoint_prefers_host_over_certificate_name(
-        self, db: Path, monkeypatch
-    ):
-        import cert_watch.database as database
+    def test_deployment_endpoint_prefers_host_over_certificate_name(self, db: Path):
         from cert_watch.attention import build_attention_queue
 
-        deployment = {
-            "id": "cert-1",
-            "kind": "scanned",
-            "source": "scanned",
-            "name": "*.example.com",
-            "host": "api.example.com:443",
-            "host_id": "host-1",
-            "days_remaining": 20,
-            "chain_status": "public",
-            "renewal_method": "manual",
-        }
-        monkeypatch.setattr(
-            database,
-            "list_dashboard_grouped_page",
-            lambda *args, **kwargs: ([{"kind": "grouped", "hosts": [deployment]}], 1),
-        )
+        SqliteHostRepository(db).add("api.example.com", 443, renewal_method="manual")
+        now = datetime.now(UTC)
+        seed_scanned(db, "api.example.com", 443, Certificate(
+            subject="CN=*.example.com",
+            issuer="CN=Test CA",
+            not_before=now - timedelta(days=5),
+            not_after=now + timedelta(days=20, hours=12),
+            san_dns_names=["*.example.com"],
+            fingerprint_sha256="w" * 64,
+        ))
 
         item = build_attention_queue(db)[0]
         assert item["endpoint"] == "api.example.com:443"
@@ -203,7 +194,7 @@ class TestQueueAssembly:
         assert items[0]["severity"] == "stalled"
         assert repo.list_for_cert(cert_id) == before  # Home only reads current state.
 
-    @pytest.mark.parametrize("resolution", ["in_progress", "renewed", "successor"])
+    @pytest.mark.parametrize("resolution", ["in_progress", "successor"])
     def test_handled_condition_clears_despite_pending_notification(self, db: Path, resolution):
         from cert_watch.attention import build_attention_queue
 
@@ -224,6 +215,20 @@ class TestQueueAssembly:
                 )
                 conn.commit()
         assert not any(item["kind"] == "renewal_stalled" for item in build_attention_queue(db))
+
+    def test_legacy_renewed_value_does_not_clear_home_condition(self, db: Path):
+        from cert_watch.attention import build_attention_queue
+
+        cert_id = _seed(db, "legacy", 20, renewal_method="acme")
+        with sqlite3_conn(db) as conn:
+            conn.execute(
+                "UPDATE hosts SET renewal_status = 'renewed' WHERE hostname = ?",
+                ("legacy.example.com",),
+            )
+            conn.commit()
+
+        items = [item for item in build_attention_queue(db) if item["cert_id"] == cert_id]
+        assert any(item["kind"] == "renewal_stalled" for item in items)
 
     def test_scan_failing_host_queued(self, db: Path):
         from cert_watch.attention import build_attention_queue

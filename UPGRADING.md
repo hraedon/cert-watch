@@ -25,14 +25,47 @@ with the CSV import; history is not carried over that way.
 
 ## Upgrading from 1.0.3 (unreleased)
 
-Nothing to migrate. One behaviour change affects access control:
+The manual `renewed` host status has been removed. Operators can still mark a
+renewal `in_progress`, which suppresses renewal-stalled notices only; expiry
+warnings and expired alerts always remain active until a scan observes a
+successor certificate.
+
+Migration **0041** changes every stored `renewed` status to `pending` and
+writes one audit-log row for each host changed. Scripts that send
+`renewal_status: "renewed"` to either host write API must be updated: the
+request now receives a `400` or `422` validation error instead of being
+accepted. Use `in_progress` only while work is underway, or omit the field/use
+`pending` when it is not.
+
+Three schema migrations are applied on startup; nothing else to reconfigure.
+
+- **0039** adds a cached chain status to each certificate row
+  (`chain_status`, `chain_status_basis`). The cache is filled on the first
+  page load after the upgrade, one chain verification per certificate. Until
+  a certificate's entry is filled -- and whenever its chain, the trust
+  anchors or the system CA bundle change, until it is re-verified -- it
+  counts as *unverified* (Warning), never Healthy.
+- **0040** adds `alerts.failed_at`, the time an alert gave up, which
+  `/api/health` `failed_alerts_24h` and `cert_watch_alerts_failed_recent`
+  now count by. Existing failed alerts are dated by their last delivery
+  attempt; one that failed without any attempt is dated to the upgrade, so
+  it shows as a recent failure for the first 24 hours rather than possibly
+  being missed.
+
+Behaviour to be aware of: Home's *Needs attention* panel lists the 50 most
+urgent items and says how many there are, and expanding a group in the
+issuer, owner or renewal-method views loads 100 rows at a time. Tag scopes
+now match tags stored with spaces (`staging, edge` is in scope `edge`)
+everywhere, as grouped Browse already did.
+
+One more behaviour change affects access control:
 
 - **Certificate tags are now durable grants.** A scan no longer wipes the
   tags set on a certificate itself, and a renewal carries them to the new
   certificate. In 1.0.3 and earlier the next scan cleared them, so removing
   a team's tag from the *host* was enough to revoke that team's access within
-  a scan cycle. Now a team keeps access through a tag set on the certificate until
-  that tag is removed too. Before relying on a host tag change to revoke
+  a scan cycle. Now a team keeps access through a tag set on the certificate
+  until that tag is removed too. Before relying on a host tag change to revoke
   access, check the certificate's own tags on its detail page. (Tags that
   earlier releases already wiped are not restored.)
 

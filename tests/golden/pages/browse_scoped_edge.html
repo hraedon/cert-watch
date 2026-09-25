@@ -133,7 +133,7 @@ Hosts — owners · renewal · tags (CSV)</a>
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>
 
 Tracked</span>
-  <div class="cw-stat-val">0</div>
+  <div class="cw-stat-val">1</div>
   <div class="cw-stat-sub">endpoints / files</div>
 </a>
 
@@ -204,7 +204,7 @@ Healthy</span>
 
       <input class="cw-input" type="text" name="q" value="" placeholder="Search subject, issuer, host, tag…" aria-label="Search certificates" list="dash-all-tags" data-testid="dashboard-search">
       <datalist id="dash-all-tags">
-
+        <option value="edge"></option><option value="staging"></option>
       </datalist>
     </div>
     <button type="submit" class="cw-btn">Search</button>
@@ -315,6 +315,9 @@ Monitored</span>
             <td data-label="Status"><span class="cw-status t-muted">
   <span class="dot" aria-hidden="true"></span>Unknown
 </span>
+
+
+    <div class="cw-sub t-warn">No successful scan</div>
 
 </td>
             <td data-label="Grade">

@@ -290,11 +290,10 @@
                     <select id="endpoint-renewal-status" name="renewal_status" class="cw-select" aria-describedby="endpoint-renewal-help">
                       <option value="pending" {% if host_info.renewal_status == 'pending' %}selected{% endif %}>No completion reported</option>
                       <option value="in_progress" {% if host_info.renewal_status == 'in_progress' %}selected{% endif %}>In progress — operator reported</option>
-                      <option value="renewed" {% if host_info.renewal_status == 'renewed' %}selected{% endif %}>Complete — operator reported</option>
                     </select>
                     <div class="cw-hint" id="endpoint-renewal-help">
                       <p>In progress suppresses new renewal-stalled notices and the Home stalled status until you change this report.</p>
-                      <p>Complete also suppresses new expiry alerts until the next successful scan resets the report. It does not prove a replacement certificate is deployed. Existing queued notifications are unchanged.</p>
+                      <p>This operator report never suppresses expiry or expired alerts. cert-watch observes a completed renewal only when a scan sees the replacement certificate.</p>
                     </div>
                   </div>
                 </div>

@@ -203,10 +203,10 @@ def _match_preview(
     are labelled "tag matches" accordingly. Operators verifying total routing
     for a group with manual/role-linked certs must account for those separately.
 
-    Matching is Unicode-case-insensitive via the ``cw_casefold`` SQL function
-    (WI-066), so it agrees with the alert engine's Python ``casefold()`` match
-    for non-ASCII tags (Turkish dotless-i, German ß, etc.) as well as the
-    dashboard scope filter.
+    Matching parses and casefolds the stored tags with the shared tag parser
+    (the ``cw_tag_set`` SQL function), so it agrees with the alert engine's
+    Python match for non-ASCII tags (Turkish dotless-i, German ß, etc.) and for
+    tags stored with spaces, and with the dashboard scope filter (WI-066).
     """
     from cert_watch.database.connection import _connect
     from cert_watch.database.dashboard import _escape_like
@@ -224,10 +224,11 @@ def _match_preview(
     conditions: list[str] = []
     params: list[str] = []
     for tag in normalized:
-        like = f"%,{_escape_like(tag)},%"
+        # The shared tag parser (``cw_tag_set``), as the scope filter uses: a
+        # stored "staging, edge" matches "edge" here too.
+        like = f"%,{_escape_like(tag.casefold())},%"
         conditions.append(
-            "cw_casefold(',' || COALESCE(c.tags, '') || ',') LIKE cw_casefold(?) ESCAPE '\\' "
-            "OR cw_casefold(',' || COALESCE(h.tags, '') || ',') LIKE cw_casefold(?) ESCAPE '\\'"
+            "cw_tag_set(c.tags) LIKE ? ESCAPE '\\' OR cw_tag_set(h.tags) LIKE ? ESCAPE '\\'"
         )
         params.extend([like, like])
     where = " OR ".join(conditions)

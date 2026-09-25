@@ -12,53 +12,58 @@ from cert_watch.alerting.routing import _load_host_owner_maps
 from cert_watch.database import Alert, AlertRepository
 
 
+def renewal_window_sql(alias: str = "c") -> str:
+    """SQL: leaf row *alias* is in its renewal window with the renewal unhandled.
+
+    Binds ``?`` window days, ``?`` now (``_sql_now``), ``?`` window days. The one
+    predicate Home's attention queue and the renewal notification share: the
+    leaf's own days are within the window (not expired), no successor
+    certificate replaces it (a row naming itself doesn't count), and its host
+    is not marked in progress. A legacy
+    ``renewed`` value is not evidence that a replacement certificate exists.
+    """
+    return (
+        f"(? > 0 AND cw_effective_days({alias}.not_after, NULL, ?) BETWEEN 0 AND ?"
+        f" AND NOT EXISTS (SELECT 1 FROM certificates succ"
+        # A row naming itself is not replaced by anything (#115 review).
+        f" WHERE succ.replaces_cert_id = {alias}.id AND succ.id != {alias}.id)"
+        f" AND COALESCE((SELECT rh.renewal_status FROM hosts rh"
+        f" WHERE rh.hostname = {alias}.hostname AND rh.port = {alias}.port), '')"
+        f" != 'in_progress')"
+    )
+
+
 def renewal_window_candidates(
     db_path: str | Path,
     window_days: int = 30,
 ) -> list[dict[str, Any]]:
     """Read current, unhandled renewal conditions without consulting alerts.
 
-    Home and notification generation share this predicate: a leaf is inside
-    the configured window, has no successor, and its host is not marked as
-    renewed or in progress. Delivery success/failure does not resolve it.
-    Each result contains the certificate fields, days_remaining, and owner.
+    Home and notification generation share this predicate
+    (:func:`renewal_window_sql`): a leaf is inside the configured window, has
+    no successor, and its host is not marked as in progress.
+    Delivery success/failure does not resolve it. Each result contains the
+    certificate fields, days_remaining, and owner.
     """
     if window_days <= 0:
         return []
-    from cert_watch.database import _connect, _parse_iso
+    from cert_watch.database import _connect
+    from cert_watch.database.connection import _sql_now
 
-    now = datetime.now(UTC)
+    now = _sql_now(datetime.now(UTC))
     with _connect(db_path) as conn:
-        superseded = {
-            r["replaces_cert_id"]
-            for r in conn.execute(
-                # A row naming itself is not superseded (#115 review).
-                "SELECT DISTINCT replaces_cert_id FROM certificates "
-                "WHERE replaces_cert_id IS NOT NULL AND replaces_cert_id != id"
-            ).fetchall()
-        }
         leaves = conn.execute(
-            "SELECT id, subject, hostname, port, not_after, fingerprint_sha256 "
-            "FROM certificates WHERE is_leaf = 1"
+            "SELECT c.id, c.subject, c.hostname, c.port, c.not_after, c.fingerprint_sha256,"
+            " cw_effective_days(c.not_after, NULL, ?) AS days_remaining"
+            f" FROM certificates c WHERE c.is_leaf = 1 AND {renewal_window_sql('c')}",
+            (now, window_days, now, window_days),
         ).fetchall()
 
     _host_thresholds, host_owners = _load_host_owner_maps(db_path)
-    candidates: list[dict[str, Any]] = []
-    for leaf in leaves:
-        cid = leaf["id"]
-        if cid in superseded:
-            continue  # a successor cert already exists → renewal worked
-        try:
-            days = (_parse_iso(leaf["not_after"]) - now).days
-        except (ValueError, TypeError):  # date parse
-            continue
-        if days < 0 or days > window_days:
-            continue  # expired (expiry_warning owns it) or outside the window
-        owner = host_owners.get((leaf["hostname"], leaf["port"]), {})
-        if owner.get("renewal_status") in ("renewed", "in_progress"):
-            continue  # operator has flagged renewal as handled
-        candidates.append({**dict(leaf), "days_remaining": days, "owner": owner})
-    return candidates
+    return [
+        {**dict(leaf), "owner": host_owners.get((leaf["hostname"], leaf["port"]), {})}
+        for leaf in leaves
+    ]
 
 
 def evaluate_renewal_window(

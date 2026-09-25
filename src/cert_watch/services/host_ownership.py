@@ -34,7 +34,7 @@ from cert_watch.services.certificate_identity import (
 )
 
 VALID_RENEWAL_METHODS = frozenset({"", "acme", "cert-manager", "manual"})
-VALID_RENEWAL_STATUSES = frozenset({"pending", "in_progress", "renewed"})
+VALID_RENEWAL_STATUSES = frozenset({"pending", "in_progress"})
 
 
 @dataclass(frozen=True)
@@ -122,7 +122,8 @@ def _validate(update: HostOwnershipUpdate) -> None:
         if update.renewal_status not in VALID_RENEWAL_STATUSES:
             raise HostOwnershipValidationError(
                 "renewal_status",
-                f"renewal_status must be one of {set(VALID_RENEWAL_STATUSES)}"
+                "renewal_status must be 'pending' or 'in_progress'; "
+                "'renewed' is no longer supported",
             )
     if update.renewal_method is not None:
         if not isinstance(update.renewal_method, str):

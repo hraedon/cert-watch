@@ -1,0 +1,147 @@
+{
+ "generated_at": "2026-09-24T08:00:51.582335+00:00",
+ "version": "1.0.2",
+ "commit": "",
+ "scope_tag": "",
+ "scope_description": "All monitored certificates",
+ "total_certs": 4,
+ "total_hosts": 3,
+ "grade_distribution": {
+  "A+": 1,
+  "A": 1,
+  "B": 1,
+  "C": 0,
+  "F": 0
+ },
+ "fleet_grade": "B",
+ "compliance_metrics": [
+  {
+   "label": "No SHA-1 signature (SHA-256+)",
+   "passing": 3,
+   "total": 3,
+   "collected": true,
+   "pct": 100.0,
+   "display": "3 of 3 (100.0%)"
+  },
+  {
+   "label": "Strong key (RSA >= 2048 or ECDSA)",
+   "passing": 3,
+   "total": 3,
+   "collected": true,
+   "pct": 100.0,
+   "display": "3 of 3 (100.0%)"
+  },
+  {
+   "label": "TLS >= 1.2 at last scan",
+   "passing": 3,
+   "total": 3,
+   "collected": true,
+   "pct": 100.0,
+   "display": "3 of 3 (100.0%)"
+  },
+  {
+   "label": "HSTS present (port 443)",
+   "passing": 3,
+   "total": 3,
+   "collected": true,
+   "pct": 100.0,
+   "display": "3 of 3 (100.0%)"
+  },
+  {
+   "label": "CAA present for domain",
+   "passing": 0,
+   "total": 0,
+   "collected": false,
+   "pct": 0.0,
+   "display": "Not collected"
+  },
+  {
+   "label": "Revocation endpoint reachable",
+   "passing": 0,
+   "total": 0,
+   "collected": false,
+   "pct": 0.0,
+   "display": "Not collected"
+  }
+ ],
+ "remediation_buckets": [
+  {
+   "label": "Expired",
+   "count": 0,
+   "entries": []
+  },
+  {
+   "label": "Expiring within 7 days",
+   "count": 1,
+   "entries": [
+    {
+     "host": "ldap.example.test:636",
+     "port": 636,
+     "subject": "CN=ldap.example.test",
+     "issuer": "CN=Example Test CA",
+     "not_after": "2026-09-27T20:00:51.571040+00:00",
+     "days_remaining": 3,
+     "urgency": "critical",
+     "findings": [],
+     "owner": "",
+     "tags": ""
+    }
+   ]
+  },
+  {
+   "label": "Expiring within 30 days",
+   "count": 2,
+   "entries": [
+    {
+     "host": "(uploaded)",
+     "port": 0,
+     "subject": "CN=hsm.example.test",
+     "issuer": "CN=Example Test CA",
+     "not_after": "2026-10-14T20:00:51.571040+00:00",
+     "days_remaining": 20,
+     "urgency": "warning",
+     "findings": [],
+     "owner": "",
+     "tags": ""
+    },
+    {
+     "host": "www.example.test:443",
+     "port": 443,
+     "subject": "CN=www.example.test",
+     "issuer": "CN=Example Test CA",
+     "not_after": "2026-10-24T20:00:51.571040+00:00",
+     "days_remaining": 30,
+     "urgency": "healthy",
+     "findings": [],
+     "owner": "",
+     "tags": ""
+    }
+   ]
+  },
+  {
+   "label": "Expiring within 90 days",
+   "count": 1,
+   "entries": [
+    {
+     "host": "api.example.test:8443",
+     "port": 8443,
+     "subject": "CN=api.example.test",
+     "issuer": "CN=Example Test CA",
+     "not_after": "2026-11-23T20:00:51.571040+00:00",
+     "days_remaining": 60,
+     "urgency": "healthy",
+     "findings": [],
+     "owner": "",
+     "tags": ""
+    }
+   ]
+  },
+  {
+   "label": "Failed posture checks",
+   "count": 0,
+   "entries": []
+  }
+ ],
+ "content_sha256": "13246c74db932f44d766696afea9c4df12302452f0c86bcc3abed2fda368a449",
+ "signature": "09b6e62d6e671c2b7cfddc448cf7abf041e2b95ee013a1f44441ff598f3d6f24"
+}

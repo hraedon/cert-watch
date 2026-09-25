@@ -23,7 +23,7 @@
   {# ---- Stat strip ---- #}
   <div class="cw-stats">
     {% if fleet_grade %}
-    {{ ui.stat('Fleet grade', fleet_grade.grade, 'worst-weighted across ' ~ fleet_grade.total ~ ' scanned cert' ~ ('s' if fleet_grade.total != 1 else ''),
+    {{ ui.stat('Fleet grade', fleet_grade.grade, 'worst-weighted across ' ~ fleet_grade.total ~ ' graded certificate' ~ ('s' if fleet_grade.total != 1 else ''),
                tone=('t-ok' if fleet_grade.grade in ('A+', 'A') else 't-warn' if fleet_grade.grade == 'B' else 't-crit'), icon='shield') }}
     {% else %}
     {{ ui.stat('Fleet grade', '—', 'no scans graded yet', icon='shield') }}
@@ -73,7 +73,7 @@
   <div class="cw-panel">
     <div class="cw-panel-head">
       <h2>Current grade distribution</h2>
-      <span class="cw-hint">latest scan per certificate</span>
+      <span class="cw-hint">latest grade per certificate · uploaded files graded from the file</span>
     </div>
     <div class="cw-panel-body">
       {% for g in ['A+', 'A', 'B', 'C', 'D', 'F'] %}

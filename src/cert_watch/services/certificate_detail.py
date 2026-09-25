@@ -121,11 +121,17 @@ def load_certificate_detail(
         )
 
     chain_certs = [cert for _, cert in stored.chain]
-    status = chain_status(
-        stored.cert,
-        chain_certs,
-        SqliteTrustAnchorRepository(db_path).list_entries(),
-    )
+    try:
+        status = chain_status(
+            stored.cert,
+            chain_certs,
+            SqliteTrustAnchorRepository(db_path).list_entries(),
+        )
+    except Exception:
+        # Fail closed, as every other surface does: a chain that could not
+        # be verified is unverified (Warning), never an error page (#113).
+        logger.warning("chain verification failed for certificate %s", cert_id, exc_info=True)
+        status = "unverified"
     posture = get_posture_for_cert(db_path, cert_id)
     posture_is_stored = posture is not None
     if posture is None:

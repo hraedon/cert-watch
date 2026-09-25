@@ -61,17 +61,18 @@ def test_endpoint_settings_save_reopen_and_restore_defaults(
     expect(interval).to_have_value("48")
     expect(threshold).to_have_value("14")
     expect(page.locator("#endpoint-renewal-help")).to_contain_text(
-        "suppresses new expiry alerts until the next successful scan"
+        "never suppresses expiry or expired alerts"
     )
+    expect(status.locator('option[value="renewed"]')).to_have_count(0)
     assert page.evaluate("document.documentElement.scrollWidth === window.innerWidth")
     interval.fill("6")
     threshold.fill("45")
-    status.select_option("renewed")
+    status.select_option("in_progress")
     page.get_by_test_id("endpoint-settings-save").click()
     expect(page.get_by_test_id("endpoint-settings-saved")).to_be_visible()
     saved = hosts.get(host_id)
     assert (saved.scan_interval_hours, saved.threshold_days, saved.renewal_status) == (
-        6, 45, "renewed",
+        6, 45, "in_progress",
     )
     assert saved.owner_name == "Operations"
     assert saved.renewal_method == "manual"
@@ -80,7 +81,7 @@ def test_endpoint_settings_save_reopen_and_restore_defaults(
     page.get_by_test_id("endpoint-settings-edit").click()
     expect(interval).to_have_value("6")
     expect(threshold).to_have_value("45")
-    expect(status).to_have_value("renewed")
+    expect(status).to_have_value("in_progress")
     interval.fill("")
     threshold.fill("")
     status.select_option("pending")

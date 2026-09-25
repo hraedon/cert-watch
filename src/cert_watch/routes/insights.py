@@ -12,14 +12,16 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
 from cert_watch.auth.guards import get_auth_context
-from cert_watch.compliance import build_compliance_report, report_to_dict
+from cert_watch.compliance import (
+    build_compliance_report,
+    fleet_grade_summary,
+    report_to_dict,
+)
 from cert_watch.crypto_posture import analyze_fleet_crypto, crypto_posture_to_dict
 from cert_watch.database import (
     list_grade_trends,
     list_tls_version_trends,
-    posture_grade_counts,
 )
-from cert_watch.posture import GRADE_WORST_ORDER
 from cert_watch.readiness import build_readiness_report, readiness_report_to_dict
 from cert_watch.routes._deps import _db_path, get_templates
 from cert_watch.routes._scoped import enforce_scope_tag, scope_tags_from_auth
@@ -108,28 +110,20 @@ def posture_view(request: Request) -> HTMLResponse:
     grade_max: int = 1
     try:
         tls_trends, tls_max = _pivot_tls_monthly(
-            list_tls_version_trends(db, days=180, scope_tags=scope_tags)
+            list_tls_version_trends(db, days=180, scope_tags=scope_tags, bucket="month")
         )
     except Exception:
         logger.exception("posture: TLS trends query failed")
     try:
         grade_trends, grade_max = _pivot_grade_monthly(
-            list_grade_trends(db, days=180, scope_tags=scope_tags)
+            list_grade_trends(db, days=180, scope_tags=scope_tags, bucket="month")
         )
     except Exception:
         logger.exception("posture: grade trends query failed")
 
-    # Fleet posture grade (worst-weighted across scanned certs) + distribution
-    fleet_grade = None
-    counts = posture_grade_counts(db, scope_tags=scope_tags)
-    if counts:
-        worst = max(GRADE_WORST_ORDER.get(g, 0) for g in counts)
-        _by_ordinal = {v: k for k, v in GRADE_WORST_ORDER.items()}
-        fleet_grade = {
-            "grade": _by_ordinal.get(worst, "F"),
-            "counts": counts,
-            "total": sum(counts.values()),
-        }
+    # Fleet posture grade + distribution: one grade per current certificate,
+    # the same population the compliance report grades (#113).
+    fleet_grade = fleet_grade_summary(db, scope_tags=scope_tags)
 
     return templates.TemplateResponse(
         request=request,
