@@ -100,3 +100,29 @@ def test_dashboard_search_matches_pending_host_tags(tmp_path, reload_app):
 
     assert "pending.example.com" in hit
     assert "pending.example.com" not in miss
+
+
+def test_settings_tags_registry_renders_with_alert_group(tmp_path, reload_app):
+    """#113 item 1: the tag registry 500'd once any alert group existed.
+
+    ``AlertGroup.match_tags`` is already a parsed list; the registry fed it
+    back through ``parse_tags`` (which expects the CSV string) and raised
+    ``AttributeError: 'list' object has no attribute 'split'``.
+    """
+    from cert_watch.database import SqliteAlertGroupRepository
+
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    SqliteAlertGroupRepository(db).create(
+        name="payments-oncall",
+        recipients=["oncall@example.test"],
+        match_tags=["payments", "prod"],
+    )
+
+    with TestClient(app_mod.app) as client:
+        r = client.get("/settings/tags")
+
+    assert r.status_code == 200
+    assert "payments" in r.text
+    assert "payments-oncall" in r.text

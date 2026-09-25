@@ -121,6 +121,69 @@ class ScopeDeniedError(PermissionError):
     is the user-facing message the route adapters have always shown."""
 
 
+def unknown_target_scope_error(auth_ctx: Any, db_path: str | Path) -> Exception:
+    """What a certificate id that doesn't exist gets from this caller -- used
+    where an id must be answered exactly like an unknown one: the scope
+    refusal for a scoped caller, else ``CertificateNotFoundError``."""
+    from cert_watch.services.certificate_identity import CertificateNotFoundError
+
+    message = write_scope_error(auth_ctx, db_path)
+    if message:
+        return ScopeDeniedError(message)
+    return CertificateNotFoundError("certificate not found")
+
+
+def _effective_tags_on(
+    conn: Any, *, cert_id: str | None = None, host_id: str | None = None
+) -> set[str]:
+    """:func:`_effective_tags` read on *conn*, inside the caller's write
+    transaction (the repository helpers use their own and would commit it)."""
+    from cert_watch.tags import merge_tags, parse_tags
+
+    if cert_id:
+        row = conn.execute(
+            "SELECT c.tags AS cert_tags, h.tags AS host_tags FROM certificates c "
+            "LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port "
+            "WHERE c.id = ?",
+            (cert_id,),
+        ).fetchone()
+        if row is not None:
+            return set(merge_tags(row["cert_tags"], row["host_tags"]))
+    if host_id:
+        row = conn.execute("SELECT tags FROM hosts WHERE id = ?", (host_id,)).fetchone()
+        if row is not None:
+            return set(parse_tags(row["tags"]))
+    return set()
+
+
+def ensure_write_scope_on(
+    conn: Any,
+    auth_ctx: Any,
+    *,
+    cert_id: str | None = None,
+    host_id: str | None = None,
+) -> None:
+    """The authoritative scope check: :func:`ensure_write_scope` evaluated on
+    *conn* after ``BEGIN IMMEDIATE``, immediately before the write, so a
+    concurrent change of the target's tags (a host moved to another team)
+    can't land between the check and the write (#115 review round 10). The
+    earlier :func:`ensure_write_scope` stays for response ordering."""
+    require_auth_context(auth_ctx)
+    if getattr(auth_ctx, "is_admin", False):
+        return
+    scope_tag = getattr(auth_ctx, "scope_tag", "") or ""
+    if not scope_tag:
+        return
+    from cert_watch.tags import parse_tags
+
+    target_tags = _effective_tags_on(conn, cert_id=cert_id, host_id=host_id)
+    if not _folded(parse_tags(scope_tag)) & _folded(target_tags):
+        raise ScopeDeniedError("operation not permitted outside your team scope")
+    may_write_tags = getattr(auth_ctx, "may_write_tags", None)
+    if callable(may_write_tags) and not may_write_tags(target_tags):
+        raise ScopeDeniedError("your access to this resource's tags is read-only")
+
+
 def ensure_write_scope(
     auth_ctx: Any,
     db_path: str | Path,

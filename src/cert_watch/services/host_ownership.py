@@ -14,8 +14,14 @@ from typing import Any
 from urllib.parse import urlparse
 
 from cert_watch.audit import export_audit, record_audit
-from cert_watch.auth.scope import ensure_write_scope, require_auth_context
-from cert_watch.database.connection import _connect, get_write_lock
+from cert_watch.auth.scope import (
+    ScopeDeniedError,
+    ensure_write_scope,
+    ensure_write_scope_on,
+    require_auth_context,
+    write_scope_error,
+)
+from cert_watch.database.connection import _connect, begin_immediate, get_write_lock
 from cert_watch.database.host_ops import (
     resolve_host_target,
 )
@@ -23,6 +29,10 @@ from cert_watch.database.host_ops import (
     update_host_ownership as persist_host_ownership,
 )
 from cert_watch.email_validation import is_safe_email_address
+from cert_watch.services.certificate_identity import (
+    ensure_not_superseded,
+    refuse_if_superseded,
+)
 
 VALID_RENEWAL_METHODS = frozenset({"", "acme", "cert-manager", "manual"})
 VALID_RENEWAL_STATUSES = frozenset({"pending", "in_progress"})
@@ -136,6 +146,19 @@ def _validate(update: HostOwnershipUpdate) -> None:
             raise HostOwnershipValidationError("runbook_url", error)
 
 
+def _unknown_answer(auth: Any, db_path: str | Path) -> Callable[[], Exception]:
+    """What an id that names no host or certificate gets from this caller:
+    the scope refusal for a scoped caller (authorization comes before the
+    lookup), else the lookup failure. Only scoped callers can be denied the
+    current certificate, so in practice this is the scope refusal."""
+
+    def answer() -> Exception:
+        error = write_scope_error(auth, db_path)
+        return ScopeDeniedError(error) if error else HostOwnershipTargetError("resource_not_found")
+
+    return answer
+
+
 def resolve_host_ownership_target(
     db_path: str | Path, resource_id: str, *, auth: Any
 ) -> HostOwnershipTarget:
@@ -147,9 +170,23 @@ def resolve_host_ownership_target(
     caller gets the lookup failure. A certificate that exists but has no
     host is judged by its own effective tags, as ``update_host_ownership``
     would judge it.
+
+    An id that names a certificate a renewal has replaced -- gone, or a
+    stale row still coexisting with its successor -- raises
+    :class:`CertificateSupersededError` naming the current certificate when
+    *auth* may see both it and the addressed row; otherwise it gets exactly
+    the unknown-id answer. The authoritative check is repeated inside the
+    write transaction by :func:`update_host_ownership`.
     """
     require_auth_context(auth)
     lookup = resolve_host_target(_connect(db_path), resource_id)
+    if lookup.status != "host":
+        # A renewed-away certificate id -- gone, or a stale row still
+        # coexisting with its successor -- is refused, or answered as unknown
+        # when the caller can't see it or the current certificate.
+        refuse_if_superseded(
+            db_path, resource_id, auth=auth, hidden=_unknown_answer(auth, db_path)
+        )
     if lookup.host is None:
         ensure_write_scope(auth, db_path, cert_id=resource_id)
         raise HostOwnershipTargetError(lookup.status)
@@ -180,7 +217,12 @@ def update_host_ownership(
     if isinstance(target, str):
         target = HostOwnershipTarget(host_id=target, source="host", resource_id=target)
     host_id = target.host_id
+    named_cert = target.resource_id if target.source == "certificate" else ""
     with get_write_lock():
+        if named_cert:
+            refuse_if_superseded(
+                db_path, named_cert, auth=auth, hidden=_unknown_answer(auth, db_path)
+            )
         ensure_write_scope(auth, db_path, **target.scope_target())
         if callable(update):
             update = update()
@@ -188,6 +230,19 @@ def update_host_ownership(
         detail = asdict(update)
         conn = _connect(db_path)
         try:
+            begin_immediate(conn)
+            if named_cert:
+                # The route named a certificate: if a renewal replaced it since
+                # the target was resolved -- in this process or another --
+                # refuse rather than act on a stale id. Checked inside the
+                # write transaction, so it still holds when the write commits.
+                ensure_not_superseded(
+                    conn, named_cert, auth=auth, hidden=_unknown_answer(auth, db_path)
+                )
+            # Authoritative scope check, as the target stands in this
+            # transaction: a host moved to another team since the check
+            # above is refused (#115 review round 10).
+            ensure_write_scope_on(conn, auth, **target.scope_target())
             updated = persist_host_ownership(conn, host_id, **detail)
             if updated is None:
                 raise HostNotFoundError("host not found")

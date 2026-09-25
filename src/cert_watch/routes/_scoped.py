@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import Request
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from cert_watch.auth.scope import (
     _effective_tags,
@@ -13,6 +15,7 @@ from cert_watch.auth.scope import (
     new_tags_scope_error,
     write_scope_error,
 )
+from cert_watch.services.certificate_identity import CertificateSupersededError
 
 
 def scope_tags_from_auth(auth_ctx: Any) -> tuple[str, ...]:
@@ -127,3 +130,28 @@ def scope_new_tags_denied(
 ) -> str | None:
     """:func:`new_tags_scope_error` for the request's AuthContext."""
     return new_tags_scope_error(getattr(request.state, "auth_context", None), new_tags)
+
+
+def superseded_json(exc: CertificateSupersededError) -> JSONResponse:
+    """409 naming the current certificate for a mutation on a renewed-away id
+    (:mod:`cert_watch.services.certificate_identity`)."""
+    return JSONResponse(
+        status_code=409,
+        content={
+            "error": "certificate superseded by a renewal; nothing was changed",
+            "cert_id": exc.cert_id,
+            "current_cert_id": exc.current_id,
+        },
+    )
+
+
+def superseded_redirect(exc: CertificateSupersededError) -> RedirectResponse:
+    """The HTML-form counterpart of :func:`superseded_json`: back to the
+    current certificate with a note."""
+    message = (
+        "This certificate was renewed before your change was saved, so nothing "
+        "was changed. This is the current certificate; make the change again here."
+    )
+    return RedirectResponse(
+        url=f"/certificates/{exc.current_id}?error={quote(message)}", status_code=303
+    )

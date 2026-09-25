@@ -22,7 +22,7 @@ from cert_watch.database import (
 )
 from cert_watch.posture import check_revocation_endpoints
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth
-from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth
+from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth, superseded_json
 from cert_watch.routes.api._shared import (
     JsonBodyError,
     _normalize_pagination,
@@ -30,6 +30,10 @@ from cert_watch.routes.api._shared import (
     tags_from_json_body,
 )
 from cert_watch.security.ratelimit import rate_limit
+from cert_watch.services.certificate_identity import (
+    CertificateNotFoundError,
+    CertificateSupersededError,
+)
 from cert_watch.services.certificate_management import (
     MAX_UPLOAD_BYTES,
     CertificateValidationError,
@@ -218,6 +222,10 @@ async def api_delete_certificate(
         )
     except ScopeDeniedError as exc:
         return JSONResponse(status_code=403, content={"error": str(exc)})
+    except CertificateSupersededError as exc:
+        return superseded_json(exc)
+    except CertificateNotFoundError:
+        return JSONResponse(status_code=404, content={"error": "certificate not found"})
     if not deleted:
         return JSONResponse(status_code=404, content={"error": "certificate not found"})
     return JSONResponse(content={"status": "deleted", "id": cert_id})
@@ -338,6 +346,10 @@ async def api_set_cert_tags(
     except (JsonBodyError, ResourceMetadataValidationError) as exc:
         return JSONResponse(content={"error": str(exc)}, status_code=400)
     except ResourceMetadataNotFoundError:
+        return JSONResponse(content={"error": "not found"}, status_code=404)
+    except CertificateSupersededError as exc:
+        return superseded_json(exc)
+    except CertificateNotFoundError:
         return JSONResponse(content={"error": "not found"}, status_code=404)
     return JSONResponse(
         content={

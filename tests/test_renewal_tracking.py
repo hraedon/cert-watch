@@ -65,4 +65,7 @@ def test_dashboard_includes_replaces_info(tmp_path, self_signed_leaf):
     rows = list_dashboard_rows(db)
     assert len(rows) >= 1
     leaf_row = next(r for r in rows if r["host"] == "dash.example.com:443")
-    assert leaf_row["replaces_cert_id"] == first_id
+    # An unchanged rescan is the same certificate: it keeps its id and its
+    # (empty) lineage instead of "replacing" the row it rewrote (#113).
+    assert leaf_row["id"] == first_id
+    assert leaf_row["replaces_cert_id"] is None

@@ -44,12 +44,15 @@ from cert_watch.database.connection import get_write_lock
 
 # Dashboard
 from cert_watch.database.dashboard_detail import (
+    CurrentCertificateRef,
     LatestScanRecord,
     PendingHostDetailRecords,
     StoredCertificateDetailRecords,
     get_cert_detail,
+    get_latest_scan_record,
     get_pending_host_detail_records,
     get_stored_certificate_detail_records,
+    resolve_current_certificate,
 )
 from cert_watch.database.dashboard_grouped import (
     list_dashboard_grouped_page as list_dashboard_grouped_page,
@@ -314,6 +317,9 @@ __all__ = [  # noqa: RUF022 — exports are grouped by database subsystem
     "dashboard_urgency_stats",
     "get_cert_detail",
     "get_pending_host_detail_records",
+    "get_latest_scan_record",
+    "resolve_current_certificate",
+    "CurrentCertificateRef",
     "get_stored_certificate_detail_records",
     "list_dashboard_grouped_page",
     "list_dashboard_page",

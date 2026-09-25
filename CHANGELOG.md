@@ -6,6 +6,106 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Settings → Tags no longer fails with a server error once any alert group
+  exists (#113).
+- A signed-in user who is not an administrator and opens a Settings page is
+  sent to Home with "Settings are available to administrators only." It
+  previously redirected to `/settings` forever (#113).
+- Certificate links keep working after a rescan. A rescan that sees the same
+  certificate keeps its id, so detail pages, bookmarks, API ids and renewal
+  webhook links no longer break on the next scan. A link to a certificate
+  that has since been renewed, or to an endpoint's host id, now opens the
+  endpoint's current certificate with a short note, instead of "certificate
+  not found". The link follows an internal record of renewals that the scan
+  writes with each one (migration 0042), one step at a time and only on the
+  same host and port -- not the event log -- so a renewal webhook's
+  `cert_watch_url`, a bookmark or a shared link keeps working regardless of
+  event-log retention or which events Settings → Event stream stores. A
+  deleted certificate, a contradictory or ambiguous record, or a step at
+  another endpoint resolves to "not found" rather than a guess.
+  Scope still applies: a link never reveals a certificate the viewer can't
+  see (#113).
+- A scan no longer drops a scanned certificate's own tags or its manual
+  alert-group assignments. Up to 1.0.3 every scan, changed or not, rewrote
+  the certificate without them, which silently narrowed tag-scoped access,
+  compliance scope and alert routing. Both are now kept on a rescan and
+  carried to the new certificate when the endpoint's certificate is renewed.
+  Tags and assignments already lost can't be recovered; set them again once
+  (#113). Only the certificate the scan continues from is carried: the
+  current row holding exactly the scanned certificate on a rescan, the
+  endpoint's current certificate on a renewal. "Current" follows renewal
+  lineage, not timestamps: a row that another row replaces is never
+  current, however recent its timestamp. When an endpoint holds an extra,
+  stale leaf row (the schema allows one), its tags and group assignments are
+  dropped with it and never merged into the live certificate, where they
+  would widen who can see and change it and revive an old alert
+  destination. If an endpoint holds two certificates that are both current,
+  a renewal carries only the tags and assignments they share and logs a
+  warning.
+- Because a certificate's own tags now survive scans, a tag set on the
+  certificate keeps granting its team access after the host's tag is
+  removed. In 1.0.3 and earlier the next scan wiped certificate tags, so
+  removing the host tag was enough. See UPGRADING.md (#113).
+- A change sent for a certificate that has since been renewed is refused
+  instead of silently doing nothing. This covers deleting it, setting its
+  tags, setting its owner, and assigning it to or removing it from an alert
+  group. The API answers 409 with `current_cert_id`; the web forms return to
+  the current certificate with a note. Nothing is applied to the renewed
+  certificate on the sender's behalf. Whether a change goes ahead is decided
+  from the stored certificates alone: a stale certificate still stored beside
+  its replacement is refused, and so is one whose replacement record is
+  ambiguous, loops or moves to another endpoint -- those get the "not found"
+  answer and nothing is changed. For an id that no longer exists, whether a
+  change happens never depends on the renewal record: the answer names the
+  current certificate only when the same renewal chain the certificate links
+  use (above) leads to it, and removing a leftover alert-group assignment for
+  such an id still removes it. A
+  malformed event-log entry no longer breaks these changes or certificate
+  links. A caller outside the current certificate's tag scope gets
+  exactly the answer an unknown id gets on that route, so the refusal
+  doesn't reveal that the id was real. Only a renewal counts: an id whose
+  certificate was deleted is an ordinary "not found". The check and the
+  change happen in one database transaction, so a scan in another process
+  can't renew the certificate in between. The caller's tag scope is checked
+  again in that transaction, just before the change, for certificate
+  deletes, certificate tags, ownership and host notes and tags: a host
+  moved to another team while the request was in flight is refused, not
+  changed on the new team's behalf. Assigning a certificate to an
+  alert group also checks, in that transaction, that the group and the
+  certificate still exist. Removing a certificate from an alert group it
+  isn't assigned to now answers 404 instead of "unassigned" (#113).
+- Deleting a certificate that doesn't exist from its page now says
+  "certificate not found" instead of returning Home as if it had worked, and
+  no longer writes a `cert.delete` audit entry for a delete that removed
+  nothing (#113).
+- A certificate whose stored lineage names itself is no longer treated as
+  replaced by itself. Such a row was skipped by the expiry and renewal-window
+  alerts for good. A rescan now also repairs the self-reference (#113).
+- A certificate's detail page says when the endpoint's latest scan failed.
+  It previously showed the last good certificate as "Healthy" with its grade
+  and never showed the error. The page now marks the latest scan as failed,
+  shows when, gives a plain-language cause and a next step for common errors
+  (DNS, refused or timed-out connections, non-TLS ports, dropped or rejected
+  handshakes, blocked addresses), keeps the raw error beside it, and notes
+  that the certificate shown is from the last successful scan. Pending hosts
+  get the same explanation (#113).
+- Adding a host lands on the new host's page with "Host added and scanned."
+  (or, when the first scan failed, a note pointing at the failure details)
+  instead of Home with no confirmation. Adding a host on its common TLS ports
+  lands on Browse, filtered to that host, with a count of what was added
+  (#113).
+- The note on Settings → Users now describes how local users' roles actually
+  work: the assigned role applies immediately, role IdP mappings don't apply
+  to local users, and a user with no role is read-only. It previously said a
+  role applied only once the role map referenced it, and that no role map
+  meant full access (#113).
+- Settings → Alert groups warns when a group has email recipients but email
+  delivery isn't configured, and names what is missing (an SMTP server, a
+  From address, at least one global recipient). Without all three there is
+  no email transport, so group recipients silently received nothing (#113).
+- "Scan now" on a detail page returns to that page instead of Home, and the
+  detail page now shows the flash messages that actions returning to it set
+  (#113).
 - An operator-reported renewal can no longer suppress expiry warnings or
   expired alerts. This includes failed-scan scenarios where the replacement
   certificate cannot be observed (#117).

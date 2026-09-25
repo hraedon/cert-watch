@@ -152,6 +152,15 @@ from cert_watch.migrations.m0041_retire_renewed_status import (
 from cert_watch.migrations.m0041_retire_renewed_status import (
     upgrade as retire_renewed_status_upgrade,
 )
+from cert_watch.migrations.m0042_certificate_lineage import (
+    DESCRIPTION as certificate_lineage_description,
+)
+from cert_watch.migrations.m0042_certificate_lineage import (
+    MIGRATION_ID as certificate_lineage_id,
+)
+from cert_watch.migrations.m0042_certificate_lineage import (
+    upgrade as certificate_lineage_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -289,4 +298,9 @@ runner.register(
     retire_renewed_status_id,
     retire_renewed_status_description,
     retire_renewed_status_upgrade,
+)
+runner.register(
+    certificate_lineage_id,
+    certificate_lineage_description,
+    certificate_lineage_upgrade,
 )

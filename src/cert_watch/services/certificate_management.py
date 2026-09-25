@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,13 +13,19 @@ from cert_watch.audit import record_audit
 from cert_watch.auth.scope import (
     ensure_new_tags_in_scope,
     ensure_write_scope,
+    ensure_write_scope_on,
     require_auth_context,
+    unknown_target_scope_error,
 )
 from cert_watch.cert_chain import validate_is_ca_certificate
 from cert_watch.database import (
     SqliteTrustAnchorRepository,
     delete_certificate_cascade,
     get_write_lock,
+)
+from cert_watch.services.certificate_identity import (
+    ensure_not_superseded,
+    refuse_if_superseded,
 )
 from cert_watch.tags import format_tags, merge_tags
 from cert_watch.upload import ParseError, UploadedEntry, store_uploaded, upload_certificate
@@ -114,16 +121,32 @@ def delete_certificate(
 ) -> bool:
     require_auth_context(auth)
     with get_write_lock():
+        def hidden() -> Exception:
+            return unknown_target_scope_error(auth, db_path)
+
+        def guard(conn: sqlite3.Connection) -> None:
+            # Inside the write transaction, immediately before the write:
+            # lineage, then the authoritative scope check (#115 rounds 3, 10).
+            ensure_not_superseded(conn, cert_id, auth=auth, hidden=hidden)
+            ensure_write_scope_on(conn, auth, cert_id=cert_id)
+
+        refuse_if_superseded(db_path, cert_id, auth=auth, hidden=hidden)
         ensure_write_scope(auth, db_path, cert_id=cert_id)
-        deleted = delete_certificate_cascade(db_path, cert_id)
-    record_audit(
-        db_path,
-        actor=actor,
-        action="cert.delete",
-        target_type="certificate",
-        target_id=cert_id,
-        source_ip=source_ip,
-    )
+        deleted = delete_certificate_cascade(
+            db_path,
+            cert_id,
+            guard=guard,
+        )
+    if deleted:
+        # A delete that removed nothing is not an event worth auditing.
+        record_audit(
+            db_path,
+            actor=actor,
+            action="cert.delete",
+            target_type="certificate",
+            target_id=cert_id,
+            source_ip=source_ip,
+        )
     return deleted
 
 

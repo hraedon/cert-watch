@@ -6,7 +6,7 @@ import json
 import sqlite3
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,6 +18,7 @@ from cert_watch.database.connection import (
     _iso,
     _parse_iso,
     _sql_now,
+    begin_immediate,
     parse_san_dns_names,
 )
 from cert_watch.host_validation import canonical_hostname
@@ -1101,6 +1102,14 @@ class AlertGroup:
     digest_cadence_days: int = 7
 
 
+def _missing_group_or_cert(conn: sqlite3.Connection, group_id: str, cert_id: str) -> str | None:
+    if conn.execute("SELECT 1 FROM alert_groups WHERE id = ?", (group_id,)).fetchone() is None:
+        return "group_not_found"
+    if conn.execute("SELECT 1 FROM certificates WHERE id = ?", (cert_id,)).fetchone() is None:
+        return "certificate_not_found"
+    return None
+
+
 class SqliteAlertGroupRepository:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
@@ -1264,22 +1273,62 @@ class SqliteAlertGroupRepository:
             conn.commit()
             return r.rowcount > 0
 
-    def assign_cert(self, group_id: str, cert_id: str) -> None:
+    def assign_cert(
+        self,
+        group_id: str,
+        cert_id: str,
+        *,
+        guard: Callable[[sqlite3.Connection], None] | None = None,
+        require_existing: bool = False,
+    ) -> str:
+        """Assign one certificate to a group, in one ``BEGIN IMMEDIATE``
+        transaction. *guard* runs first and may raise to refuse. With
+        *require_existing*, the group and the certificate must both exist at
+        write time -- checked on the same connection, so another process
+        can't delete either in between -- and nothing is written otherwise.
+        Returns ``"assigned"``, ``"group_not_found"`` or
+        ``"certificate_not_found"``."""
         with _connect(self.db_path) as conn:
+            begin_immediate(conn)
+            if guard is not None:
+                guard(conn)
+            if require_existing:
+                missing = _missing_group_or_cert(conn, group_id, cert_id)
+                if missing is not None:
+                    conn.rollback()
+                    return missing
             conn.execute(
                 "INSERT OR IGNORE INTO alert_group_certs (group_id, cert_id)"
                 " VALUES (?, ?)",
                 (group_id, cert_id),
             )
             conn.commit()
+            return "assigned"
 
-    def unassign_cert(self, group_id: str, cert_id: str) -> None:
+    def unassign_cert(
+        self,
+        group_id: str,
+        cert_id: str,
+        *,
+        guard: Callable[[sqlite3.Connection], None] | None = None,
+    ) -> str:
+        """Remove one manual assignment, in one ``BEGIN IMMEDIATE``
+        transaction that *guard* runs first in. Returns ``"unassigned"``,
+        ``"group_not_found"`` or ``"not_assigned"`` (nothing removed)."""
         with _connect(self.db_path) as conn:
-            conn.execute(
+            begin_immediate(conn)
+            if guard is not None:
+                guard(conn)
+            group = conn.execute("SELECT 1 FROM alert_groups WHERE id = ?", (group_id,))
+            if group.fetchone() is None:
+                conn.rollback()
+                return "group_not_found"
+            cursor = conn.execute(
                 "DELETE FROM alert_group_certs WHERE group_id = ? AND cert_id = ?",
                 (group_id, cert_id),
             )
             conn.commit()
+            return "unassigned" if cursor.rowcount > 0 else "not_assigned"
 
     def groups_for_cert_manual(self, cert_id: str) -> list[str]:
         with _connect(self.db_path) as conn:

@@ -77,6 +77,12 @@
           <button type="button" class="x" data-dismiss="cw-flash-warn" title="Dismiss" aria-label="Dismiss">&times;</button>
         </div>
       {% endif %}
+      {%- if notice|default('') %}
+        <div class="cw-flash t-ok" id="cw-flash-notice" role="status" data-testid="flash-notice">
+          <span>{{ notice }}</span>
+          <button type="button" class="x" data-dismiss="cw-flash-notice" title="Dismiss" aria-label="Dismiss">&times;</button>
+        </div>
+      {%- endif %}
       <div id="cw-health" class="cw-health cw-hidden">
         <span class="cw-status"><span class="dot" id="cw-health-dot" aria-hidden="true"></span><span id="cw-health-text">Loading…</span></span>
         <button type="button" class="x" data-dismiss="cw-health" data-dismiss-key="cw-health-dismissed" id="cw-health-dismiss" title="Dismiss" aria-label="Dismiss">&times;</button>

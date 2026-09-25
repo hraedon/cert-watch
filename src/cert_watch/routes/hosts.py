@@ -22,7 +22,7 @@ from cert_watch.config import Settings
 from cert_watch.database import SqliteHostRepository
 from cert_watch.host_validation import hostname_is_valid
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth
-from cert_watch.routes._scoped import scope_write_denied, tags_with_scope
+from cert_watch.routes._scoped import scope_write_denied, superseded_redirect, tags_with_scope
 from cert_watch.scan import (
     ScanError,
     resolve_and_validate_host,
@@ -35,6 +35,7 @@ from cert_watch.scan_freshness import (
 )
 from cert_watch.scheduler import ScanHistory, record_scan_history
 from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
+from cert_watch.services.certificate_identity import CertificateSupersededError
 from cert_watch.services.host_management import (
     HostNotFoundError as ManagedHostNotFoundError,
 )
@@ -242,6 +243,10 @@ async def update_host_owner(
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
         )
+    except CertificateSupersededError as exc:
+        # This legacy route also accepts a certificate id; one that a renewal
+        # replaced is refused with the current certificate, never retargeted.
+        return superseded_redirect(exc)
     except (HostOwnershipTargetError, OwnershipHostNotFoundError):
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
     except ScopeDeniedError as exc:
@@ -346,7 +351,7 @@ async def add_host(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
         )
     try:
-        await create_hosts(
+        created = await create_hosts(
             _db_path(request),
             _get_settings(request),
             hostname=hostname,
@@ -365,7 +370,20 @@ async def add_host(
         )
     except (HostValidationError, ScopeDeniedError) as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
-    return RedirectResponse(url="/", status_code=303)
+    # Land on what was added (#113). One endpoint: its detail page, by host
+    # id, which resolves to the certificate the first scan stored. Several
+    # (common ports): Browse, filtered to the host name.
+    if len(created.host_ids) == 1:
+        return RedirectResponse(
+            url=f"/certificates/{created.host_ids[0]}?added=1", status_code=303
+        )
+    notice = f"Added {len(created.host_ids)} endpoints for {hostname.strip()}"
+    if created.scanned:
+        notice += f"; {created.scanned} scanned successfully"
+    return RedirectResponse(
+        url=f"/browse?q={quote(hostname.strip())}&grouped=0&notice={quote(notice + '.')}",
+        status_code=303,
+    )
 
 
 @router.post("/hosts/import")
@@ -553,12 +571,19 @@ async def scan_all_hosts(
 async def scan_host_now(
     request: Request,
     host_id: IdParam,
+    return_to: str = Form(""),
     _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
+    # The detail page's Scan now returns to that endpoint's page (#113); the
+    # Home queue's returns Home. Only these two fixed targets exist, so the
+    # field can't be used to redirect anywhere else.
+    base = f"/certificates/{host_id}" if return_to == "detail" else "/"
+
+    def back(query: str = "") -> RedirectResponse:
+        return RedirectResponse(url=f"{base}?{query}" if query else base, status_code=303)
+
     if not check_rate_limit(f"scan_host:{_extract_client_ip(request)}", 10, 60):
-        return RedirectResponse(
-            url=f"/?error={quote('rate limited: too many scan requests')}", status_code=303
-        )
+        return back(f"error={quote('rate limited: too many scan requests')}")
     db = _db_path(request)
     # The service authorizes the target before it looks it up, so a scoped
     # caller learns nothing about ids outside their scope (#112 review); the
@@ -578,12 +603,13 @@ async def scan_host_now(
     except ScopeDeniedError as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     if result.status == "success":
-        return RedirectResponse(url="/", status_code=303)
+        return back("scanned=1" if return_to == "detail" else "")
     if result.status == "store_error":
-        return RedirectResponse(
-            url=f"/?warning={quote('scan succeeded but store failed')}", status_code=303
-        )
+        return back(f"warning={quote('scan succeeded but store failed')}")
+    if return_to == "detail":
+        # The page itself explains the failure (cause, next step, raw error).
+        return back("scanned=1")
     host = SqliteHostRepository(db).get(host_id)
     endpoint = f"{host.hostname}:{host.port}" if host is not None else host_id
     msg = f"scan failed for {endpoint}: {result.error}"
-    return RedirectResponse(url=f"/?warning={quote(msg)}", status_code=303)
+    return back(f"warning={quote(msg)}")

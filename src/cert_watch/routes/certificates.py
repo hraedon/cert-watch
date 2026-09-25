@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from urllib.parse import quote
+from pathlib import Path
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -16,11 +17,13 @@ from cert_watch.auth.guards import (
     write_form_guard,
 )
 from cert_watch.auth.scope import ScopeDeniedError
+from cert_watch.database import resolve_current_certificate
 from cert_watch.presenters.certificate_detail import present_certificate_detail
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth, get_templates
 from cert_watch.routes._scoped import (
     scope_read_denied,
     scope_tags_from_auth,
+    superseded_redirect,
     tags_with_scope,
 )
 from cert_watch.routes.hosts import endpoint_settings_writable
@@ -29,6 +32,10 @@ from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
 from cert_watch.services.certificate_detail import (
     PendingHostDetailData,
     load_certificate_detail,
+)
+from cert_watch.services.certificate_identity import (
+    CertificateNotFoundError,
+    CertificateSupersededError,
 )
 from cert_watch.services.certificate_management import (
     CertificateValidationError,
@@ -68,6 +75,31 @@ templates = get_templates()
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
+def _redirect_to_current_certificate(
+    request: Request, db: Path, stale_id: str
+) -> RedirectResponse | None:
+    """Send a stale certificate id, or a host id, to the endpoint's current
+    certificate (#113): ids change on renewal, and links must survive that.
+
+    The target is authorized before its id is revealed; an out-of-scope
+    target answers exactly like an unknown id.
+    """
+    ref = resolve_current_certificate(db, stale_id)
+    if ref is None:
+        return None
+    if scope_read_denied(request, db, cert_id=ref.cert_id):
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
+    params = [
+        (key, value)
+        for key, value in request.query_params.multi_items()
+        if key != "superseded"
+    ]
+    if ref.superseded:
+        params.append(("superseded", "1"))
+    query = f"?{urlencode(params)}" if params else ""
+    return RedirectResponse(url=f"/certificates/{ref.cert_id}{query}", status_code=303)
+
+
 @router.get("/certificates/{cert_id}", response_class=HTMLResponse, response_model=None)
 def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | RedirectResponse:
     db = _db_path(request)
@@ -80,6 +112,10 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
         sched_hour=settings.sched_hour,
         sched_min=settings.sched_min,
     )
+    if data is None or isinstance(data, PendingHostDetailData):
+        moved = _redirect_to_current_certificate(request, db, cert_id)
+        if moved is not None:
+            return moved
     if data is None:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     denied = (
@@ -98,6 +134,9 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
         slack_configured=settings.webhook_kind == "slack",
         endpoint_saved=bool(request.query_params.get("endpoint_saved")),
         endpoint_error=request.query_params.get("endpoint_error", ""),
+        superseded=bool(request.query_params.get("superseded")),
+        scanned=bool(request.query_params.get("scanned")),
+        added=bool(request.query_params.get("added")),
     )
     return templates.TemplateResponse(
         request=request,
@@ -108,6 +147,10 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             "commit": __commit__,
             **get_auth_context(request),
             "active_page": "browse",
+            # Flash messages from actions that return here (tags, owner,
+            # Scan now); base.html renders them.
+            "error": request.query_params.get("error", ""),
+            "warning": request.query_params.get("warning", ""),
             **get_csrf_context(request),
         },
     )
@@ -119,7 +162,7 @@ async def delete_certificate(
 ) -> RedirectResponse:
     db = _db_path(request)
     try:
-        delete_certificate_service(
+        deleted = delete_certificate_service(
             db,
             cert_id,
             auth=acting_auth(request),
@@ -128,6 +171,13 @@ async def delete_certificate(
         )
     except ScopeDeniedError as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
+    except CertificateSupersededError as exc:
+        return superseded_redirect(exc)
+    except CertificateNotFoundError:
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
+    if not deleted:
+        # It used to land Home with no message, as if it had deleted.
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     logger.info("deleted certificate %s (cascade)", cert_id)
     return RedirectResponse(url="/", status_code=303)
 
@@ -158,6 +208,10 @@ async def update_certificate_tags(
         )
     except ResourceMetadataNotFoundError:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
+    except CertificateSupersededError as exc:
+        return superseded_redirect(exc)
+    except CertificateNotFoundError:
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     logger.info("updated tags for certificate %s", cert_id)
     return RedirectResponse(url=f"/certificates/{cert_id}", status_code=303)
 
@@ -181,6 +235,10 @@ async def update_certificate_owner(
 
     try:
         target = resolve_host_ownership_target(db, cert_id, auth=acting_auth(request))
+    except CertificateSupersededError as exc:
+        return superseded_redirect(exc)
+    except CertificateNotFoundError:
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     except ScopeDeniedError as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     except HostOwnershipTargetError as exc:
@@ -220,6 +278,14 @@ async def update_certificate_owner(
         return RedirectResponse(
             url=f"/certificates/{cert_id}?error={quote('host not found')}", status_code=303,
         )
+    except CertificateSupersededError as exc:
+        return superseded_redirect(exc)
+    except CertificateNotFoundError:
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
+    except HostOwnershipTargetError:
+        # Renewed away between resolving the target and the write, to a
+        # certificate the caller can't see: the unknown-id answer.
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     logger.info("updated owner for host %s via certificate %s", host_id, cert_id)
     return RedirectResponse(url=f"/certificates/{cert_id}", status_code=303)
 

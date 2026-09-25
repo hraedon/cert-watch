@@ -985,7 +985,10 @@ def store_scanned(
         # never network I/O." Instead, use a safe default that will be
         # evaluated lazily on the cert detail page.
         posture_eval = _posture_eval
-        conn.execute("BEGIN")
+        # IMMEDIATE: take SQLite's write lock before reading the endpoint's
+        # rows, so no other connection (another process included) can change
+        # them between the replace's reads and its writes (#115).
+        conn.execute("BEGIN IMMEDIATE")
         leaf_id, replaced_cert_id, cert_unchanged = _stage(
             "replace", _stage_replace, repo_path, entry, conn,
         )

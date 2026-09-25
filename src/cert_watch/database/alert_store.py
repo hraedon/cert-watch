@@ -587,6 +587,7 @@ class AlertStore:
                            AND NOT EXISTS (
                                SELECT 1 FROM certificates AS successor
                                WHERE successor.replaces_cert_id = current.id
+                                 AND successor.id != current.id
                            )
                      )""",
                 (alert_id,),

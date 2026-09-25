@@ -1261,7 +1261,8 @@ def test_delete_certificate_not_found(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.post(f"/certificates/{_MISSING}/delete", follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == "/"
+    # Says so (#115 review); it used to land Home as if it had deleted.
+    assert r.headers["location"] == "/?error=certificate+not+found"
 
 
 # ---------- certificate notes (removed — UI-INVENTORY V1) ----------

@@ -70,12 +70,43 @@ def test_unlisted_legacy_user_cannot_mint_any_api_key(tmp_path, monkeypatch, use
     assert _api_keys(tmp_path) == []
 
 
+_SETTINGS_REFUSED = "/?error=Settings%20are%20available%20to%20administrators%20only."
+
+
 def test_unlisted_legacy_user_cannot_reach_settings(tmp_path, monkeypatch):
     with TestClient(_app(tmp_path, monkeypatch, writers="will", admins="alan")) as client:
         _login(client, "will")  # a writer, but not in CERT_WATCH_ADMINS
         r = client.get("/settings/roles", follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == "/settings?error=admin%20required"
+    # A settings *page* refusal must leave /settings: bouncing back to it
+    # (which is admin-only too) looped forever (#113 item 2).
+    assert r.headers["location"] == _SETTINGS_REFUSED
+
+
+@pytest.mark.parametrize(
+    "path", ["/settings", "/settings?error=admin%20required", "/settings/tags"]
+)
+def test_non_admin_settings_visit_ends_on_home_with_message(tmp_path, monkeypatch, path):
+    """#113 item 2: a viewer opening /settings got an endless 303 loop."""
+    with TestClient(_app(tmp_path, monkeypatch, writers="will", admins="alan")) as client:
+        _login(client, "rita")  # a reader
+        r = client.get(path, follow_redirects=False)
+        assert r.status_code == 303
+        assert r.headers["location"] == _SETTINGS_REFUSED
+        final = client.get(r.headers["location"], follow_redirects=False)
+    assert final.status_code == 200
+    assert "Settings are available to administrators only." in final.text
+
+
+def test_non_admin_settings_post_bounce_does_not_loop(tmp_path, monkeypatch):
+    """A refused settings form still bounces to /settings (the authz matrix
+    pins that), and following it ends on Home instead of looping."""
+    with TestClient(_app(tmp_path, monkeypatch, writers="will", admins="alan")) as client:
+        _login(client, "will")
+        r = client.post("/settings/api-keys", data={"name": "k"}, follow_redirects=True)
+    assert r.status_code == 200
+    assert r.url.path == "/"
+    assert "Settings are available to administrators only." in r.text
 
 
 def test_listed_admin_reaches_settings_and_mints_a_key(tmp_path, monkeypatch):
@@ -124,7 +155,7 @@ def test_non_writer_cannot_administer_when_only_write_users_is_set(tmp_path, mon
         )
         assert r.headers["location"] == "/settings?error=admin%20required"
         r = client.get("/settings/roles", follow_redirects=False)
-        assert r.headers["location"] == "/settings?error=admin%20required"
+        assert r.headers["location"] == _SETTINGS_REFUSED
     assert _api_keys(tmp_path) == []
 
 

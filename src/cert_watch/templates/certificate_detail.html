@@ -31,6 +31,7 @@
       <div class="cw-chiprow">
         <h1 class="mono" data-testid="{{ 'cert-detail-heading' if cert else 'host-detail-heading' }}">{{ subject_cn }}</h1>
         {% if cert %}
+          {%- if scan_failed %}{{ ui.status(label='Latest scan failed', tone='t-crit', testid='cert-scan-failed-status') }}{% endif %}
           {{ ui.status(urgency) }}
           {% if posture and not chain_posture_changed %}{{ ui.grade(posture.grade) }}{% endif %}
           {% if chain_issue == 'incomplete' %}
@@ -60,6 +61,7 @@
       {% if may_write and host_id %}
         <form method="post" action="/hosts/{{ host_id }}/scan" class="cw-inline">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="return_to" value="detail">
           <button type="submit" class="cw-btn primary" data-testid="{{ 'cert-scan-btn' if cert else 'host-scan-btn' }}">{{ icons.svg_icon('refresh', 14) }}Scan now</button>
         </form>
       {% endif %}
@@ -80,14 +82,29 @@
     </div>
   </div>
 
-  {% if scan_error and not cert %}
-  <div class="cw-panel">
+  {%- if superseded and cert %}
+  <p class="cw-note" role="status" data-testid="cert-superseded-note">{{ icons.svg_icon('info', 14) }}<span>The link you followed named an earlier certificate for this endpoint. This is the certificate it serves now.</span></p>
+  {%- endif %}
+
+  {%- if added %}
+  <p class="cw-note {{ 't-warn' if scan_failed else 't-ok' }}" role="status" data-testid="host-added-note">{{ icons.svg_icon('alert' if scan_failed else 'check-circle', 14) }}<span>{% if scan_failed %}Host added. Its first scan failed; the details are below.{% elif cert %}Host added and scanned.{% else %}Host added. It will be scanned during the next cycle.{% endif %}</span></p>
+  {%- elif scanned and not scan_failed %}
+  <p class="cw-note t-ok" role="status" data-testid="scan-complete-note">{{ icons.svg_icon('check-circle', 14) }}<span>Scan complete{% if scan_at_label %} at {{ scan_at_label }}{% endif %}.</span></p>
+  {%- endif %}
+
+  {% if scan_failed and (scan_error or cert) %}
+  <div class="cw-panel" data-testid="scan-failure-panel">
     <div class="cw-panel-body">
       <div class="cw-note t-crit">
         {{ icons.svg_icon('alert', 16) }}
         <div>
-          <b>Scan failed</b>
-          <div class="mono">{{ scan_error }}</div>
+          <b>{{ 'Latest scan failed' if cert else 'Scan failed' }}</b>{% if scan_at_label %} <span class="mono">· {{ scan_at_label }}</span>{% endif %}
+          {% if scan_guidance %}
+          <div data-testid="scan-failure-cause">{{ scan_guidance.cause }}</div>
+          <div data-testid="scan-failure-next-step"><b>Next step:</b> {{ scan_guidance.next_step }}</div>
+          {% endif %}
+          {% if scan_error %}<div class="mono" data-testid="scan-failure-error">{{ scan_error }}</div>{% endif %}
+          {% if cert %}<div>The certificate, grade and expiry on this page are from the last successful scan{% if scan_evidence and scan_evidence.last_success %} ({{ scan_evidence.last_success.strftime('%Y-%m-%d %H:%M UTC') }}){% endif %}. They may no longer match what the endpoint serves.</div>{% endif %}
         </div>
       </div>
     </div>

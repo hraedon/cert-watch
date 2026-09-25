@@ -18,13 +18,15 @@ def renewal_window_sql(alias: str = "c") -> str:
     Binds ``?`` window days, ``?`` now (``_sql_now``), ``?`` window days. The one
     predicate Home's attention queue and the renewal notification share: the
     leaf's own days are within the window (not expired), no successor
-    certificate replaces it, and its host is not marked in progress. A legacy
+    certificate replaces it (a row naming itself doesn't count), and its host
+    is not marked in progress. A legacy
     ``renewed`` value is not evidence that a replacement certificate exists.
     """
     return (
         f"(? > 0 AND cw_effective_days({alias}.not_after, NULL, ?) BETWEEN 0 AND ?"
         f" AND NOT EXISTS (SELECT 1 FROM certificates succ"
-        f" WHERE succ.replaces_cert_id = {alias}.id)"
+        # A row naming itself is not replaced by anything (#115 review).
+        f" WHERE succ.replaces_cert_id = {alias}.id AND succ.id != {alias}.id)"
         f" AND COALESCE((SELECT rh.renewal_status FROM hosts rh"
         f" WHERE rh.hostname = {alias}.hostname AND rh.port = {alias}.port), '')"
         f" != 'in_progress')"

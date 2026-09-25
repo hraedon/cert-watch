@@ -67,6 +67,57 @@ def get_stored_certificate_detail_records(
     )
 
 
+@dataclass(frozen=True)
+class CurrentCertificateRef:
+    """Where an id that no longer names a certificate row now points."""
+
+    cert_id: str
+    # True when the id named an earlier certificate for the endpoint (a
+    # renewal replaced it); False when it was the endpoint's own host id.
+    superseded: bool
+
+
+def _current_leaf_for_endpoint(conn: Any, hostname: str, port: int) -> str | None:
+    row = conn.execute(
+        "SELECT id FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1 "
+        "ORDER BY created_at DESC LIMIT 1",
+        (hostname, port),
+    ).fetchone()
+    return str(row["id"]) if row is not None else None
+
+
+def resolve_current_certificate(
+    db_path: str | Path, stale_id: str
+) -> CurrentCertificateRef | None:
+    """Map an id with no certificate row to the certificate to show instead.
+
+    1. A host id (the stable address of an endpoint) opens the endpoint's
+       current certificate.
+    2. A certificate id that renewals replaced opens the certificate they
+       lead to, found by :func:`~cert_watch.database.cert_lineage.navigation_hint`
+       -- the same resolver the mutation routes use for their "renewed,
+       nothing was changed" answer, so the two never disagree. It follows
+       lineage only from the id's own issuance event, on that endpoint, one
+       unambiguous step at a time; anything else resolves to nothing.
+
+    An id whose certificate was deleted (not renewed), or whose events have
+    aged out of the event log, is not resolved. Performs no scope check: the
+    caller must authorize the returned certificate.
+    """
+    from cert_watch.database.cert_lineage import navigation_hint
+
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        host = conn.execute(
+            "SELECT hostname, port FROM hosts WHERE id = ?", (stale_id,)
+        ).fetchone()
+        if host is not None:
+            current = _current_leaf_for_endpoint(conn, host["hostname"], host["port"])
+            return CurrentCertificateRef(current, superseded=False) if current else None
+        head = navigation_hint(conn, stale_id)
+    return CurrentCertificateRef(head, superseded=True) if head is not None else None
+
+
 def get_pending_host_detail_records(
     db_path: str | Path, host_id: str
 ) -> PendingHostDetailRecords | None:
@@ -76,24 +127,29 @@ def get_pending_host_detail_records(
         host_row = conn.execute("SELECT * FROM hosts WHERE id = ?", (host_id,)).fetchone()
         if host_row is None:
             return None
+    return PendingHostDetailRecords(
+        host=SqliteHostRepository._row_to_host(host_row),
+        latest_scan=get_latest_scan_record(db_path, host_row["hostname"], host_row["port"]),
+    )
+
+
+def get_latest_scan_record(
+    db_path: str | Path, hostname: str, port: int
+) -> LatestScanRecord | None:
+    """The endpoint's most recent scan attempt, whatever its outcome."""
+    with _connect(db_path) as conn:
         scan_row = conn.execute(
             "SELECT status, scanned_at, error_message FROM scan_history "
             "WHERE hostname = ? AND port = ? "
-            "ORDER BY scanned_at DESC LIMIT 1",
-            (host_row["hostname"], host_row["port"]),
+            "ORDER BY scanned_at DESC, id DESC LIMIT 1",
+            (hostname, port),
         ).fetchone()
-    latest = (
-        LatestScanRecord(
-            status=scan_row["status"],
-            scanned_at=scan_row["scanned_at"],
-            error_message=scan_row["error_message"],
-        )
-        if scan_row is not None
-        else None
-    )
-    return PendingHostDetailRecords(
-        host=SqliteHostRepository._row_to_host(host_row),
-        latest_scan=latest,
+    if scan_row is None:
+        return None
+    return LatestScanRecord(
+        status=scan_row["status"],
+        scanned_at=scan_row["scanned_at"],
+        error_message=scan_row["error_message"],
     )
 
 
