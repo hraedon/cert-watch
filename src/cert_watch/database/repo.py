@@ -471,6 +471,7 @@ class SqliteAlertRepository(AlertRepository):
         not clear alerts outside their team scope. Empty *scope_tags* marks all.
         """
         with _connect(self.db_path) as conn:
+            begin_immediate(conn)
             if scope_tags:
                 from cert_watch.database.dashboard import _add_effective_tag_filter
 
@@ -771,6 +772,8 @@ class SqliteHostRepository:
         notes: str = "",
         expected_issuers: str = "",
         starttls_mode: str = "",
+        *,
+        conn: sqlite3.Connection | None = None,
     ) -> str:
         import sqlite3
         try:
@@ -782,30 +785,39 @@ class SqliteHostRepository:
                 "hostname must be syntactically valid before persistence"
             ) from None
         host_id = str(uuid.uuid4())
-        with _connect(self.db_path) as conn:
-            try:
-                conn.execute(
-                    "INSERT INTO hosts"
-                    " (id, hostname, port, threshold_days, tags, scan_interval_hours,"
-                    "  owner_name, owner_email, owner_slack, renewal_status,"
-                    "  renewal_method, runbook_url, notes, expected_issuers,"
-                    "  starttls_mode, added_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        host_id, hostname, port, threshold_days, tags,
-                        scan_interval_hours, owner_name, owner_email,
-                        owner_slack, renewal_status, renewal_method,
-                        runbook_url, notes, expected_issuers, starttls_mode,
-                        _iso(datetime.now(UTC)),
-                    ),
-                )
+        owned = conn is None
+        if conn is None:
+            conn = _connect(self.db_path)
+        try:
+            conn.execute(
+                "INSERT INTO hosts"
+                " (id, hostname, port, threshold_days, tags, scan_interval_hours,"
+                "  owner_name, owner_email, owner_slack, renewal_status,"
+                "  renewal_method, runbook_url, notes, expected_issuers,"
+                "  starttls_mode, added_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    host_id, hostname, port, threshold_days, tags,
+                    scan_interval_hours, owner_name, owner_email,
+                    owner_slack, renewal_status, renewal_method,
+                    runbook_url, notes, expected_issuers, starttls_mode,
+                    _iso(datetime.now(UTC)),
+                ),
+            )
+            if owned:
                 conn.commit()
-            except sqlite3.IntegrityError:
-                row = conn.execute(
-                    "SELECT id FROM hosts WHERE hostname = ? AND port = ?",
-                    (hostname, port),
-                ).fetchone()
-                return row["id"] if row else host_id
+        except sqlite3.IntegrityError:
+            if owned:
+                conn.rollback()
+            row = conn.execute(
+                "SELECT id FROM hosts WHERE hostname = ? AND port = ?",
+                (hostname, port),
+            ).fetchone()
+            return row["id"] if row else host_id
+        except Exception:
+            if owned:
+                conn.rollback()
+            raise
         return host_id
 
     def list_all(self) -> list[HostEntry]:
@@ -887,9 +899,16 @@ class SqliteHostRepository:
             return None
         return self._row_to_host(r)
 
-    def delete(self, host_id: str) -> bool:
-        """Delete the host and cascade-delete its scanned certs and alerts."""
-        with _connect(self.db_path) as conn:
+    def delete(self, host_id: str, *, conn: sqlite3.Connection | None = None) -> bool:
+        """Delete the host and cascade-delete its scanned certs and alerts.
+
+        When *conn* is supplied, the caller owns the transaction. This lets a
+        service authorize the host on the same locked snapshot as the delete.
+        """
+        owned = conn is None
+        if conn is None:
+            conn = _connect(self.db_path)
+        try:
             r = conn.execute(
                 "SELECT hostname, port FROM hosts WHERE id = ?", (host_id,)
             ).fetchone()
@@ -950,7 +969,12 @@ class SqliteHostRepository:
                 (hostname, port),
             )
             conn.execute("DELETE FROM hosts WHERE id = ?", (host_id,))
-            conn.commit()
+            if owned:
+                conn.commit()
+        except Exception:
+            if owned:
+                conn.rollback()
+            raise
         return True
 
     def update_owner(

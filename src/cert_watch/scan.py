@@ -879,6 +879,7 @@ def store_scanned(
     webhook_config: object | None = None,
     _deferred: DeferredPostCommit | None = None,
     _posture_eval: _PostureEval | None = None,
+    _guard: Callable[[sqlite3.Connection], None] | None = None,
 ) -> str:
     """
     Persist leaf + chain. Accepts a db path and wires up source/hostname/port.
@@ -989,6 +990,8 @@ def store_scanned(
         # rows, so no other connection (another process included) can change
         # them between the replace's reads and its writes (#115).
         conn.execute("BEGIN IMMEDIATE")
+        if _guard is not None:
+            _guard(conn)
         leaf_id, replaced_cert_id, cert_unchanged = _stage(
             "replace", _stage_replace, repo_path, entry, conn,
         )
@@ -1188,6 +1191,7 @@ async def store_scanned_async(
     allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
     webhook_config: object | None = None,
+    guard: Callable[[sqlite3.Connection], None] | None = None,
 ) -> str:
     """Async wrapper around store_scanned — runs the blocking DB writes in a thread.
 
@@ -1242,6 +1246,7 @@ async def store_scanned_async(
                         webhook_config=webhook_config,
                         _deferred=deferred,
                         _posture_eval=posture_eval,
+                        _guard=guard,
                     )
                 break
             except sqlite3.OperationalError as exc:

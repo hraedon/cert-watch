@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
@@ -101,6 +102,7 @@ async def _scan_and_store(
     starttls_mode: str,
     source: str,
     webhook_config: WebhookConfig | None = None,
+    scope_guard: Callable[[Any], None] | None = None,
     _store_error_types: tuple[type[BaseException], ...] = (Exception,),
 ) -> tuple[Literal["success", "scan_error", "store_error"], str | None]:
     result = await scan_host_async(
@@ -143,7 +145,10 @@ async def _scan_and_store(
             allow_private=settings.allow_private,
             allowed_subnets=settings.allowed_subnets,
             webhook_config=webhook_config,
+            guard=scope_guard,
         )
+    except ScopeDeniedError:
+        raise
     except _store_error_types as exc:
         logger.exception("store_scanned_async failed for %s:%d", hostname, port)
         record_scan_history(
@@ -555,14 +560,19 @@ async def scan_all_hosts(
             url=f"/scan-history?error={quote('rate limited: too many scan-all requests')}",
             status_code=303,
         )
-    scanned, failures = await scan_all_hosts_service(
-        _db_path(request),
-        _get_settings(request),
-        auth=acting_auth(request),
-        actor=resolve_actor(request),
-        source_ip=resolve_source_ip(request),
-        _scan_fn=_scan_and_store,
-    )
+    try:
+        scanned, failures = await scan_all_hosts_service(
+            _db_path(request),
+            _get_settings(request),
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+            _scan_fn=_scan_and_store,
+        )
+    except ScopeDeniedError as exc:
+        return RedirectResponse(
+            url=f"/scan-history?error={quote(str(exc))}", status_code=303
+        )
     logger.info("scan_all: %d scanned, %d failures", scanned, failures)
     return RedirectResponse(url="/scan-history", status_code=303)
 

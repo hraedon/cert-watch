@@ -12,14 +12,17 @@ from pathlib import Path
 from typing import Any, Literal
 
 from cert_watch.alerting import WebhookConfig
-from cert_watch.audit import record_audit
+from cert_watch.audit import export_audit, record_audit
 from cert_watch.auth.scope import (
+    ScopeDeniedError,
     ensure_new_tags_in_scope,
     ensure_write_scope,
+    ensure_write_scope_on,
     require_auth_context,
 )
 from cert_watch.config import Settings
 from cert_watch.database import HostEntry, SqliteHostRepository, get_write_lock
+from cert_watch.database.connection import _connect, begin_immediate
 from cert_watch.host_validation import canonical_hostname
 from cert_watch.scan import (
     STARTTLS_MODES,
@@ -78,20 +81,44 @@ def _scoped_tags(auth: Any, tags: str) -> str:
     return format_tags(merge_tags(tags, scope or ""))
 
 
-def _ensure_endpoint_writable(
-    repo: SqliteHostRepository, auth: Any, hostname: str, port: int
-) -> None:
-    """Refuse to add an endpoint that already exists outside the caller's scope.
+def _add_endpoints_authorized(
+    repo: SqliteHostRepository,
+    auth: Any,
+    hostname: str,
+    ports: tuple[int, ...],
+    **host_fields: Any,
+) -> list[tuple[str, int]]:
+    """Add endpoints only while every existing endpoint remains writable.
 
     ``repo.add`` is idempotent: adding a monitored ``hostname:port`` again
     returns the existing row's id, and the caller then scans it. For a scoped
     caller that would hand over another team's host id and trigger a scan of
-    it (#112 review), so the existing row is authorized like any other write
-    target before the add. The caller must hold the write lock.
+    it (#112 review). All ports are authorized before any insert, both in the
+    advisory pass and in one ``BEGIN IMMEDIATE`` transaction, so common-port
+    creation stays all-or-nothing. The caller must hold the write lock.
     """
-    existing = repo.get_by_endpoint(hostname, port)
-    if existing is not None:
-        ensure_write_scope(auth, repo.db_path, host_id=existing.id)
+    for port in ports:
+        existing = repo.get_by_endpoint(hostname, port)
+        if existing is not None:
+            ensure_write_scope(auth, repo.db_path, host_id=existing.id)
+    conn = _connect(repo.db_path)
+    try:
+        begin_immediate(conn)
+        for port in ports:
+            row = conn.execute(
+                "SELECT id FROM hosts WHERE hostname = ? AND port = ?", (hostname, port)
+            ).fetchone()
+            if row is not None:
+                ensure_write_scope_on(conn, auth, host_id=row["id"])
+        added = [
+            (repo.add(hostname, port, conn=conn, **host_fields), port)
+            for port in ports
+        ]
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return added
 
 
 async def _scan_and_store(
@@ -104,6 +131,7 @@ async def _scan_and_store(
     starttls_mode: str,
     source: str,
     webhook_config: WebhookConfig | None = None,
+    scope_guard: Callable[[Any], None] | None = None,
     _store_error_types: tuple[type[BaseException], ...] = (Exception,),
 ) -> ScanResult:
     result = await scan_host_async(
@@ -146,7 +174,10 @@ async def _scan_and_store(
             allow_private=settings.allow_private,
             allowed_subnets=settings.allowed_subnets,
             webhook_config=webhook_config,
+            guard=scope_guard,
         )
+    except ScopeDeniedError:
+        raise
     except _store_error_types as exc:
         logger.exception("store_scanned_async failed for %s:%d", hostname, port)
         message = f"store failed: {exc}"
@@ -219,21 +250,18 @@ async def create_hosts(
 
     repo = SqliteHostRepository(db_path)
     ports = COMMON_TLS_PORTS if common_ports else (port,)
-    added: list[tuple[str, int]] = []
     with get_write_lock():
-        for candidate_port in ports:
-            _ensure_endpoint_writable(repo, auth, hostname, candidate_port)
-        for candidate_port in ports:
-            host_id = repo.add(
-                hostname,
-                candidate_port,
-                threshold_days=threshold_days,
-                tags=normalized_tags,
-                scan_interval_hours=scan_interval_hours,
-                notes=notes,
-                starttls_mode=starttls_mode,
-            )
-            added.append((host_id, candidate_port))
+        added = _add_endpoints_authorized(
+            repo,
+            auth,
+            hostname,
+            ports,
+            threshold_days=threshold_days,
+            tags=normalized_tags,
+            scan_interval_hours=scan_interval_hours,
+            notes=notes,
+            starttls_mode=starttls_mode,
+        )
     for host_id, candidate_port in added:
         record_audit(
             db_path,
@@ -245,7 +273,12 @@ async def create_hosts(
             source_ip=source_ip,
         )
 
-    async def scan(candidate_port: int) -> bool:
+    async def scan(job: tuple[str, int]) -> bool:
+        host_id, candidate_port = job
+
+        def scope_guard(conn: Any) -> None:
+            ensure_write_scope_on(conn, auth, host_id=host_id)
+
         if _scan_fn is not None:
             status, _error = await _scan_fn(
                 hostname,
@@ -256,6 +289,7 @@ async def create_hosts(
                 starttls_mode=starttls_mode,
                 source="scan",
                 webhook_config=settings.build_webhook_config(),
+                scope_guard=scope_guard,
                 _store_error_types=(Exception,),
             )
             return status == "success"
@@ -268,10 +302,11 @@ async def create_hosts(
             starttls_mode=starttls_mode,
             source="scan",
             webhook_config=settings.build_webhook_config(),
+            scope_guard=scope_guard,
         )
         return result.status == "success"
 
-    scans = await asyncio.gather(*(scan(candidate_port) for _, candidate_port in added))
+    scans = await asyncio.gather(*(scan(job) for job in added))
     return HostCreateResult(tuple(host_id for host_id, _ in added), sum(scans))
 
 
@@ -294,7 +329,7 @@ async def import_hosts_csv(
         raise HostValidationError("CSV must be UTF-8 encoded") from None
     repo = SqliteHostRepository(db_path)
     errors: list[str] = []
-    jobs: list[tuple[str, int, str | None, str]] = []
+    jobs: list[tuple[str, str, int, str | None, str]] = []
     for row_number, row in enumerate(csv.DictReader(io.StringIO(text)), start=2):
         if row_number - 1 > MAX_CSV_ROWS:
             raise HostValidationError(f"CSV import limited to {MAX_CSV_ROWS} rows")
@@ -358,20 +393,21 @@ async def import_hosts_csv(
             continue
         with get_write_lock():
             try:
-                _ensure_endpoint_writable(repo, auth, hostname, port)
+                [(host_id, _)] = _add_endpoints_authorized(
+                    repo,
+                    auth,
+                    hostname,
+                    (port,),
+                    threshold_days=threshold,
+                    tags=tags,
+                    scan_interval_hours=interval,
+                    notes=(row.get("notes") or "").strip(),
+                    starttls_mode=starttls_mode,
+                )
             except PermissionError as exc:
                 errors.append(f"row {row_number}: {exc}")
                 continue
-            repo.add(
-                hostname,
-                port,
-                threshold_days=threshold,
-                tags=tags,
-                scan_interval_hours=interval,
-                notes=(row.get("notes") or "").strip(),
-                starttls_mode=starttls_mode,
-            )
-        jobs.append((hostname, port, pinned_ip, starttls_mode))
+        jobs.append((host_id, hostname, port, pinned_ip, starttls_mode))
 
     record_audit(
         db_path,
@@ -384,8 +420,12 @@ async def import_hosts_csv(
     )
     semaphore = asyncio.Semaphore(10)
 
-    async def scan(job: tuple[str, int, str | None, str]) -> None:
-        hostname, port, pinned_ip, starttls_mode = job
+    async def scan(job: tuple[str, str, int, str | None, str]) -> None:
+        host_id, hostname, port, pinned_ip, starttls_mode = job
+
+        def scope_guard(conn: Any) -> None:
+            ensure_write_scope_on(conn, auth, host_id=host_id)
+
         async with semaphore:
             if _scan_fn is not None:
                 await _scan_fn(
@@ -397,6 +437,7 @@ async def import_hosts_csv(
                     starttls_mode=starttls_mode,
                     source="scan",
                     webhook_config=settings.build_webhook_config(),
+                    scope_guard=scope_guard,
                     _store_error_types=(Exception,),
                 )
                 return
@@ -409,6 +450,7 @@ async def import_hosts_csv(
                 starttls_mode=starttls_mode,
                 source="scan",
                 webhook_config=settings.build_webhook_config(),
+                scope_guard=scope_guard,
             )
 
     await asyncio.gather(*(scan(job) for job in jobs))
@@ -441,6 +483,9 @@ async def scan_all_hosts(
     semaphore = asyncio.Semaphore(10)
 
     async def scan(host: HostEntry) -> ScanResult:
+        def scope_guard(conn: Any) -> None:
+            ensure_write_scope_on(conn, auth, host_id=host.id)
+
         async with semaphore:
             if _scan_fn is not None:
                 status, error = await _scan_fn(
@@ -452,6 +497,7 @@ async def scan_all_hosts(
                     starttls_mode=host.starttls_mode,
                     source="scan",
                     webhook_config=settings.build_webhook_config(),
+                    scope_guard=scope_guard,
                     _store_error_types=(Exception,),
                 )
                 return ScanResult(status, error)
@@ -464,6 +510,7 @@ async def scan_all_hosts(
                 starttls_mode=host.starttls_mode,
                 source="scan",
                 webhook_config=settings.build_webhook_config(),
+                scope_guard=scope_guard,
             )
 
     results = await asyncio.gather(*(scan(host) for host in hosts))
@@ -482,6 +529,7 @@ def update_host_settings(
 ) -> HostEntry:
     require_auth_context(auth)
     with get_write_lock():
+        # Advisory check preserves the route's existing response ordering.
         ensure_write_scope(auth, db_path, host_id=host_id)
         repo = SqliteHostRepository(db_path)
         host = repo.get(host_id)
@@ -499,27 +547,44 @@ def update_host_settings(
             )
         if update.renewal_status not in {"pending", "in_progress"}:
             raise HostValidationError("Choose a valid operator-reported renewal status.")
-        if not repo.update_settings(
-            host_id,
-            scan_interval_hours=update.scan_interval_hours,
-            threshold_days=update.threshold_days,
-            renewal_status=update.renewal_status,
-        ):
-            raise HostNotFoundError("host not found")
-        updated = repo.get(host_id)
-    record_audit(
-        db_path,
-        actor=actor,
-        action="host.update_settings",
-        target_type="host",
-        target_id=host_id,
-        detail={
-            "scan_interval_hours": update.scan_interval_hours,
-            "threshold_days": update.threshold_days,
-            "renewal_status": update.renewal_status,
-        },
-        source_ip=source_ip,
-    )
+        conn = _connect(db_path)
+        try:
+            begin_immediate(conn)
+            ensure_write_scope_on(conn, auth, host_id=host_id)
+            cursor = conn.execute(
+                "UPDATE hosts SET scan_interval_hours = ?, threshold_days = ?, "
+                "renewal_status = ? WHERE id = ?",
+                (
+                    update.scan_interval_hours,
+                    update.threshold_days,
+                    update.renewal_status,
+                    host_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise HostNotFoundError("host not found")
+            row = conn.execute("SELECT * FROM hosts WHERE id = ?", (host_id,)).fetchone()
+            assert row is not None
+            updated = repo._row_to_host(row)
+            audit_event = record_audit(
+                db_path,
+                actor=actor,
+                action="host.update_settings",
+                target_type="host",
+                target_id=host_id,
+                detail={
+                    "scan_interval_hours": update.scan_interval_hours,
+                    "threshold_days": update.threshold_days,
+                    "renewal_status": update.renewal_status,
+                },
+                source_ip=source_ip,
+                conn=conn,
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    export_audit(audit_event)
     assert updated is not None
     return updated
 
@@ -573,15 +638,25 @@ def delete_host(
     require_auth_context(auth)
     with get_write_lock():
         ensure_write_scope(auth, db_path, host_id=host_id)
-        deleted = SqliteHostRepository(db_path).delete(host_id)
-    record_audit(
-        db_path,
-        actor=actor,
-        action="host.delete",
-        target_type="host",
-        target_id=host_id,
-        source_ip=source_ip,
-    )
+        conn = _connect(db_path)
+        try:
+            begin_immediate(conn)
+            ensure_write_scope_on(conn, auth, host_id=host_id)
+            deleted = SqliteHostRepository(db_path).delete(host_id, conn=conn)
+            audit_event = record_audit(
+                db_path,
+                actor=actor,
+                action="host.delete",
+                target_type="host",
+                target_id=host_id,
+                source_ip=source_ip,
+                conn=conn,
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    export_audit(audit_event)
     return deleted
 
 
@@ -611,6 +686,10 @@ async def scan_host_now(
         source_ip=source_ip,
     )
     webhook_config = settings.build_webhook_config()
+
+    def scope_guard(conn: Any) -> None:
+        ensure_write_scope_on(conn, auth, host_id=host_id)
+
     if _scan_fn is not None:
         status, error = await _scan_fn(
             host.hostname,
@@ -621,6 +700,7 @@ async def scan_host_now(
             starttls_mode=host.starttls_mode,
             source="manual",
             webhook_config=webhook_config,
+            scope_guard=scope_guard,
         )
         return ScanResult(status, error)  # type: ignore[arg-type]
     return await _scan_and_store(
@@ -632,4 +712,5 @@ async def scan_host_now(
         starttls_mode=host.starttls_mode,
         source="manual",
         webhook_config=webhook_config,
+        scope_guard=scope_guard,
     )

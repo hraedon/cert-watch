@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from cert_watch.database.connection import _connect, _iso
+from cert_watch.database.connection import _connect, _iso, begin_immediate
 from cert_watch.database.schema import init_schema
 
 if TYPE_CHECKING:
@@ -353,6 +353,7 @@ class AlertStore:
             RETURNING *
         """
         with _connect(self.db_path) as conn:
+            begin_immediate(conn)
             # A condition may close while a worker owns a live lease. Once
             # that lease expires, retire the row instead of reclaiming stale
             # work. Drift is intentionally born closed because it represents
@@ -548,7 +549,7 @@ class AlertStore:
         return cursor.rowcount == 1
 
     def operator_retry(self, alert_id: str, *, auth: Any) -> bool:
-        from cert_watch.auth.scope import ensure_write_scope
+        from cert_watch.auth.scope import ensure_write_scope, ensure_write_scope_on
 
         with _connect(self.db_path) as conn:
             row = conn.execute(
@@ -557,6 +558,13 @@ class AlertStore:
             if row is None:
                 return False
             ensure_write_scope(auth, self.db_path, cert_id=row["cert_id"])
+            begin_immediate(conn)
+            row = conn.execute(
+                "SELECT cert_id FROM alerts WHERE id = ?", (alert_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            ensure_write_scope_on(conn, auth, cert_id=row["cert_id"])
             cursor = conn.execute(
                 """UPDATE alerts SET status = 'pending', failed_at = NULL, attempt_count = 0,
                        next_attempt_at = NULL, lease_owner = NULL, lease_expires_at = NULL,

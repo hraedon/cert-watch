@@ -191,13 +191,16 @@ async def api_scan_all_hosts(
     _auth: str = Depends(write_guard),
     _rl: None = Depends(rate_limit("scan_all", 3, 300)),
 ) -> JSONResponse:
-    scanned, failures = await scan_all_hosts(
-        _db_path(request),
-        _get_settings(request),
-        auth=acting_auth(request),
-        actor=resolve_actor(request),
-        source_ip=resolve_source_ip(request),
-    )
+    try:
+        scanned, failures = await scan_all_hosts(
+            _db_path(request),
+            _get_settings(request),
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+    except ScopeDeniedError as exc:
+        return _service_error(exc)
     return JSONResponse(content={"scanned": scanned, "failures": failures})
 
 
