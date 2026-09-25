@@ -165,12 +165,17 @@ def resolve_current_certificate(
         )
 
         if endpoint is None:
+            # CASE WHEN json_valid: a malformed payload is skipped instead of
+            # raising (and failing every stale link) -- #115 review.
             event = conn.execute(
-                "SELECT json_extract(payload, '$.hostname') AS hostname, "
-                "json_extract(payload, '$.port') AS port FROM event_log "
+                "SELECT CASE WHEN json_valid(payload) THEN "
+                "json_extract(payload, '$.hostname') END AS hostname, "
+                "CASE WHEN json_valid(payload) THEN "
+                "json_extract(payload, '$.port') END AS port FROM event_log "
                 "WHERE event_type IN ('cert_added', 'cert_renewed') "
-                "AND (json_extract(payload, '$.cert_id') = ? "
-                "OR json_extract(payload, '$.replaced_cert_id') = ?) "
+                "AND CASE WHEN json_valid(payload) THEN "
+                "(json_extract(payload, '$.cert_id') = ? "
+                "OR json_extract(payload, '$.replaced_cert_id') = ?) END "
                 "ORDER BY id DESC LIMIT 1",
                 (stale_id, stale_id),
             ).fetchone()

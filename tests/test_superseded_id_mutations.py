@@ -689,3 +689,223 @@ def test_a_stale_row_outside_the_callers_scope_answers_like_an_unknown_id(tmp_pa
         stale = _answers(client, a)
     assert stale == unknown
     assert SqliteCertificateRepository(db).get_tags(a) == "team-old"
+
+
+# -- round 5: endpoint-bound event hops, malformed events ---------------
+
+_OTHER = "other-endpoint.example.test"
+
+
+def _renewal_event(db: Path, replaced: str, cert_id: str, hostname: str, port: int) -> None:
+    import json
+
+    from cert_watch.database.connection import _connect
+
+    with _connect(db) as conn:
+        conn.execute(
+            "INSERT INTO event_log (event_type, timestamp, source, payload, created_at) "
+            "VALUES ('cert_renewed', '2026-09-01T00:00:00+00:00', 'scan', ?, "
+            "'2026-09-01T00:00:00+00:00')",
+            (
+                json.dumps(
+                    {
+                        "cert_id": cert_id,
+                        "replaced_cert_id": replaced,
+                        "hostname": hostname,
+                        "port": port,
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+
+
+def _cert_at(db: Path, hostname: str, port: int, tags: str = "") -> str:
+    from tests._helpers import seed_certificate
+
+    cert_id = seed_certificate(
+        db,
+        parse_certificate(_make_cert(hostname, days_valid=90).der),
+        hostname=hostname,
+        port=port,
+        source="scanned",
+    )
+    if tags:
+        SqliteCertificateRepository(db).set_tags(cert_id, tags)
+    return cert_id
+
+
+def _head(db: Path, cert_id: str) -> str | None:
+    from cert_watch.database.connection import _connect
+    from cert_watch.services.certificate_identity import current_head
+
+    return current_head(_connect(db), cert_id)
+
+
+def test_an_event_hop_to_another_endpoint_answers_like_an_unknown_id(tmp_path):
+    """Sol's round-5 probe: an event says gone id A (at old-scope:443) was
+    renewed to X, but X lives at other-endpoint:8443 (team-new). A team-new
+    caller got 409 naming X -- disclosing a cross-scope relationship and
+    pointing at an unrelated certificate."""
+    from tests.test_tag_scoped_access import _make_scoped_app, _scoped_client
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    SqliteHostRepository(db).add(_HOST, 443, tags="team-old")
+    SqliteHostRepository(db).add(_OTHER, 8443, tags="team-new")
+    unrelated = _cert_at(db, _OTHER, 8443, tags="team-new")
+    gone = "11111111-1111-4111-8111-111111111111"
+    _renewal_event(db, gone, unrelated, _HOST, 443)
+    assert _head(db, gone) is None
+    app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-new")
+    with _scoped_client(app, groups) as client:
+        unknown = _answers(client, "00000000-0000-0000-0000-000000000000")
+        forged = _answers(client, gone)
+    assert forged == unknown
+
+
+def test_an_event_hop_must_match_the_addressed_rows_endpoint(tmp_path):
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    stale = _cert_at(db, _HOST, 443)
+    elsewhere = _cert_at(db, _OTHER, 443)
+    _renewal_event(db, stale, elsewhere, _OTHER, 443)  # event agrees with X, not with A
+    assert _head(db, stale) is None
+
+
+def test_a_multi_hop_lineage_that_changes_endpoint_fails_closed(tmp_path):
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    a, b = "a" * 8 + "-0000-4000-8000-000000000001", "b" * 8 + "-0000-4000-8000-000000000002"
+    same = _cert_at(db, _HOST, 443)
+    moved = _cert_at(db, _OTHER, 443)
+    # Control: A -> B -> current, all on one endpoint, resolves.
+    _renewal_event(db, a, b, _HOST, 443)
+    _renewal_event(db, b, same, _HOST, 443)
+    assert _head(db, a) == same
+    # A second chain whose last hop switches endpoint does not.
+    c, d = "c" * 8 + "-0000-4000-8000-000000000003", "d" * 8 + "-0000-4000-8000-000000000004"
+    _renewal_event(db, c, d, _HOST, 443)
+    _renewal_event(db, d, moved, _OTHER, 443)
+    assert _head(db, c) is None
+
+
+def test_an_ambiguous_successor_fails_closed(tmp_path):
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    gone = "e" * 8 + "-0000-4000-8000-000000000005"
+    first, second = _cert_at(db, _HOST, 443), _cert_at(db, _HOST, 443)
+    _renewal_event(db, gone, first, _HOST, 443)
+    _renewal_event(db, gone, second, _HOST, 443)
+    assert _head(db, gone) is None
+    # Two stored rows both naming the same predecessor are ambiguous too.
+    from tests._helpers import seed_certificate
+
+    base = _cert_at(db, _OTHER, 443)
+    for days in (30, 60):
+        seed_certificate(
+            db,
+            parse_certificate(_make_cert(_OTHER, days_valid=days).der),
+            hostname=_OTHER,
+            port=443,
+            source="scanned",
+            replaces_cert_id=base,
+        )
+    assert _head(db, base) is None
+
+
+def test_a_malformed_event_payload_breaks_no_mutation_or_link(
+    tmp_path, reload_app, self_signed_leaf
+):
+    """Sol's round-5 probe: one event row with payload '{' made json_extract
+    raise, failing every certificate tag/delete/owner mutation (500)."""
+    from cert_watch.database.connection import _connect
+
+    db, old, new, _ = _renewed(tmp_path, self_signed_leaf)
+    with _connect(db) as conn:
+        conn.execute(
+            "INSERT INTO event_log (event_type, timestamp, source, payload, created_at) "
+            "VALUES ('cert_renewed', '2026-09-01T00:00:00+00:00', 'scan', '{', "
+            "'2026-09-01T00:00:00+00:00')"
+        )
+        conn.commit()
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        ok = client.put(f"/api/certificates/{new}/tags", json={"tags": "team-a,more"})
+        refused = client.put(f"/api/certificates/{old}/tags", json={"tags": "x"})
+        link = client.get(f"/certificates/{old}", follow_redirects=False)
+        # An id no row knows reaches the stale-link event lookup itself.
+        unknown = client.get(
+            "/certificates/00000000-0000-0000-0000-000000000000", follow_redirects=False
+        )
+    assert ok.status_code == 200, ok.text
+    _assert_conflict(refused, old, new)
+    assert link.status_code == 303
+    assert (unknown.status_code, unknown.headers["location"]) == (
+        303,
+        "/?error=certificate+not+found",
+    )
+
+
+def test_a_hop_without_an_endpoint_fails_closed(tmp_path):
+    """An event that doesn't say where the renewal happened can't be bound
+    to the addressed endpoint, so it isn't followed."""
+    import json
+
+    from cert_watch.database.connection import _connect
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    target = _cert_at(db, _HOST, 443)
+    gone = "f" * 8 + "-0000-4000-8000-000000000006"
+    middle = "9" * 8 + "-0000-4000-8000-000000000007"
+    # gone -> middle (no endpoint recorded) -> target (on _HOST:443)
+    with _connect(db) as conn:
+        conn.execute(
+            "INSERT INTO event_log (event_type, timestamp, source, payload, created_at) "
+            "VALUES ('cert_renewed', '2026-09-01T00:00:00+00:00', 'scan', ?, "
+            "'2026-09-01T00:00:00+00:00')",
+            (json.dumps({"cert_id": middle, "replaced_cert_id": gone}),),
+        )
+        conn.commit()
+    _renewal_event(db, middle, target, _HOST, 443)
+    assert _head(db, middle) == target  # control: the bound hop resolves
+    assert _head(db, gone) is None
+
+
+def test_a_lineage_cycle_fails_closed(tmp_path):
+    """X and Y each name the other: there is no current certificate to name."""
+    from cert_watch.database.connection import _connect
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    x, y = _cert_at(db, _HOST, 443), _cert_at(db, _HOST, 443)
+    with _connect(db) as conn:
+        conn.execute("UPDATE certificates SET replaces_cert_id = ? WHERE id = ?", (x, y))
+        conn.execute("UPDATE certificates SET replaces_cert_id = ? WHERE id = ?", (y, x))
+        conn.commit()
+    assert _head(db, x) is None
+
+
+def test_unassign_refuses_a_group_deleted_by_another_process_after_the_precheck(
+    tmp_path, monkeypatch, reload_app, self_signed_leaf
+):
+    """Mirror of the assign case (Fable round 5): the group is re-checked in
+    the unassign's own transaction, so a concurrent group delete answers
+    "group not found", not "not assigned"."""
+    import importlib
+
+    alerts_routes = importlib.import_module("cert_watch.routes.api.alerts")
+    db, _old, cur, group_id = _renewed(tmp_path, self_signed_leaf)
+    real_repo = alerts_routes.SqliteAlertGroupRepository
+
+    class DeletesGroupFirst(real_repo):  # type: ignore[misc, valid-type]
+        def unassign_cert(self, *args, **kwargs):
+            _delete_in_another_process(db, "DELETE FROM alert_groups WHERE id = ?", group_id)
+            return super().unassign_cert(*args, **kwargs)
+
+    monkeypatch.setattr(alerts_routes, "SqliteAlertGroupRepository", DeletesGroupFirst)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.delete(f"/api/alert-groups/{group_id}/certs/{cur}")
+    assert (r.status_code, r.json()) == (404, {"error": "group not found"})

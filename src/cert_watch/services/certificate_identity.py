@@ -75,37 +75,101 @@ def _may_read(conn: sqlite3.Connection, auth: Any, cert_id: str) -> bool:
     return bool({t.casefold() for t in parse_tags(scope_tag)} & effective)
 
 
+def _endpoint(hostname: Any, port: Any) -> tuple[str, int] | None:
+    """A canonical ``(hostname, port)``, or ``None`` when either is missing."""
+    import contextlib
+
+    from cert_watch.host_validation import canonical_hostname
+
+    if not hostname or port is None:
+        return None
+    name = str(hostname)
+    with contextlib.suppress(ValueError):
+        name = canonical_hostname(name)
+    try:
+        return name, int(port)
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_endpoint(conn: sqlite3.Connection, cert_id: str) -> tuple[str, int] | None:
+    row = conn.execute(
+        "SELECT hostname, port FROM certificates WHERE id = ?", (cert_id,)
+    ).fetchone()
+    return _endpoint(row["hostname"], row["port"]) if row is not None else None
+
+
+# Renewal events for one replaced id. A payload that isn't valid JSON is
+# skipped (json_extract on it would raise and fail every mutation), via CASE
+# so the guard can't be reordered after the extraction.
+_RENEWAL_EVENTS = (
+    "SELECT CASE WHEN json_valid(payload) THEN json_extract(payload, '$.cert_id') END"
+    " AS cert_id,"
+    " CASE WHEN json_valid(payload) THEN json_extract(payload, '$.hostname') END AS hostname,"
+    " CASE WHEN json_valid(payload) THEN json_extract(payload, '$.port') END AS port"
+    " FROM event_log WHERE event_type = 'cert_renewed'"
+    " AND CASE WHEN json_valid(payload)"
+    " THEN json_extract(payload, '$.replaced_cert_id') END = ?"
+)
+
+
 def current_head(conn: sqlite3.Connection, cert_id: str) -> str | None:
     """The current certificate renewal lineage leads to from *cert_id*, or
-    ``None`` when *cert_id* has no successor (or the lineage dead-ends in a
-    deleted row). Reads only on *conn*."""
+    ``None``. Reads only on *conn*.
+
+    Every hop is bound to one endpoint: the addressed certificate's
+    ``(hostname, port)`` when its row still exists, else the first hop's.
+    A successor row or ``cert_renewed`` event at another endpoint, a hop
+    without an endpoint, more than one candidate successor, a lineage that
+    loops, or one that dead-ends in a deleted row all fail closed: ``None``,
+    so the id is treated as not superseded (never redirected elsewhere).
+    """
+    endpoint = _row_endpoint(conn, cert_id) if _exists(conn, cert_id) else None
     seen = {cert_id}
     current = cert_id
     while True:
-        row = conn.execute(
-            "SELECT id FROM certificates WHERE replaces_cert_id = ? AND id != ? "
-            "AND is_leaf = 1 ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        rows = conn.execute(
+            "SELECT id, hostname, port FROM certificates "
+            "WHERE replaces_cert_id = ? AND id != ? AND is_leaf = 1",
             (current, current),
-        ).fetchone()
-        successor = str(row["id"]) if row is not None else None
-        if successor is None:
-            event = conn.execute(
-                "SELECT json_extract(payload, '$.cert_id') AS cert_id FROM event_log "
-                "WHERE event_type = 'cert_renewed' "
-                "AND json_extract(payload, '$.replaced_cert_id') = ? "
-                "ORDER BY id DESC LIMIT 1",
-                (current,),
-            ).fetchone()
-            if event is not None and event["cert_id"]:
-                successor = str(event["cert_id"])
-        if successor is None or successor in seen:
-            break
+        ).fetchall()
+        if len(rows) > 1:
+            return None
+        if rows:
+            successor = str(rows[0]["id"])
+            hop_endpoint = _endpoint(rows[0]["hostname"], rows[0]["port"])
+        else:
+            events = conn.execute(_RENEWAL_EVENTS, (current,)).fetchall()
+            candidates = {
+                (str(e["cert_id"]), _endpoint(e["hostname"], e["port"]))
+                for e in events
+                if e["cert_id"]
+            }
+            if not candidates:
+                break
+            if len(candidates) > 1:
+                return None
+            ((successor, hop_endpoint),) = candidates
+            if _exists(conn, successor) and _row_endpoint(conn, successor) != hop_endpoint:
+                return None
+        if hop_endpoint is None:
+            return None
+        if endpoint is None:
+            endpoint = hop_endpoint
+        elif hop_endpoint != endpoint:
+            return None
+        if successor in seen:
+            return None
         seen.add(successor)
         current = successor
-    if current == cert_id:
+    if current == cert_id or not _exists(conn, current):
         return None
-    exists = conn.execute("SELECT 1 FROM certificates WHERE id = ?", (current,)).fetchone()
-    return current if exists else None
+    return current
+
+
+def _exists(conn: sqlite3.Connection, cert_id: str) -> bool:
+    row = conn.execute("SELECT 1 FROM certificates WHERE id = ?", (cert_id,)).fetchone()
+    return row is not None
 
 
 def ensure_not_superseded(

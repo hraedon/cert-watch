@@ -50,7 +50,11 @@ All notable changes to cert-watch are documented in this file.
   the current certificate with a note. Nothing is applied to the renewed
   certificate on the sender's behalf. This holds however many renewals ago
   the id was current, and when a stale row still sits beside its
-  successor. A caller outside the current certificate's tag scope gets
+  successor. The renewal chain is only followed within one endpoint (host
+  and port); a step recorded at another endpoint, a step with no endpoint, or
+  more than one possible successor ends it, and the id is treated as
+  unknown. A malformed event-log entry no longer breaks these changes or
+  certificate links. A caller outside the current certificate's tag scope gets
   exactly the answer an unknown id gets on that route, so the refusal
   doesn't reveal that the id was real. Only a renewal counts: an id whose
   certificate was deleted is an ordinary "not found". The check and the
