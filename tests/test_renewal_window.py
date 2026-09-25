@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 from cert_watch.certificate_model import Certificate
@@ -110,14 +111,19 @@ def test_renewal_stalled_suppressed_when_in_progress(tmp_path):
     assert created == [], "in_progress renewal_status should suppress alert"
 
 
-def test_renewal_stalled_suppressed_when_renewed(tmp_path):
-    """Regression (WI-124 #11): suppress renewal_stalled when operator flagged it."""
+def test_renewal_stalled_not_suppressed_by_legacy_renewed_value(tmp_path):
+    """Only in_progress is an operator-controlled renewal-stalled suppression."""
     from cert_watch.alerting import evaluate_renewal_window
     from cert_watch.database import SqliteAlertRepository, SqliteHostRepository
 
     db = str(tmp_path / "t.sqlite3")
     _insert_cert(db, cid="stalled-rn", days_valid=20, hostname="rn.example.com")
-    SqliteHostRepository(db).add(hostname="rn.example.com", port=443, renewal_status="renewed")
+    SqliteHostRepository(db).add(hostname="rn.example.com", port=443)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE hosts SET renewal_status = 'renewed' WHERE hostname = ?",
+            ("rn.example.com",),
+        )
     alert_repo = SqliteAlertRepository(db)
     created = evaluate_renewal_window(db, alert_repo, 30)
-    assert created == [], "renewed renewal_status should suppress alert"
+    assert [alert.cert_id for alert in created] == ["stalled-rn"]

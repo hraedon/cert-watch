@@ -194,7 +194,7 @@ class TestQueueAssembly:
         assert items[0]["severity"] == "stalled"
         assert repo.list_for_cert(cert_id) == before  # Home only reads current state.
 
-    @pytest.mark.parametrize("resolution", ["in_progress", "renewed", "successor"])
+    @pytest.mark.parametrize("resolution", ["in_progress", "successor"])
     def test_handled_condition_clears_despite_pending_notification(self, db: Path, resolution):
         from cert_watch.attention import build_attention_queue
 
@@ -215,6 +215,20 @@ class TestQueueAssembly:
                 )
                 conn.commit()
         assert not any(item["kind"] == "renewal_stalled" for item in build_attention_queue(db))
+
+    def test_legacy_renewed_value_does_not_clear_home_condition(self, db: Path):
+        from cert_watch.attention import build_attention_queue
+
+        cert_id = _seed(db, "legacy", 20, renewal_method="acme")
+        with sqlite3_conn(db) as conn:
+            conn.execute(
+                "UPDATE hosts SET renewal_status = 'renewed' WHERE hostname = ?",
+                ("legacy.example.com",),
+            )
+            conn.commit()
+
+        items = [item for item in build_attention_queue(db) if item["cert_id"] == cert_id]
+        assert any(item["kind"] == "renewal_stalled" for item in items)
 
     def test_scan_failing_host_queued(self, db: Path):
         from cert_watch.attention import build_attention_queue

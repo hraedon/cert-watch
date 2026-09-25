@@ -582,12 +582,8 @@ class AlertStore:
                      AND alert_type IN ('expiry_warning', 'expired')
                      AND EXISTS (
                          SELECT 1 FROM certificates AS current
-                         LEFT JOIN hosts AS host
-                           ON host.hostname = current.hostname
-                          AND host.port = current.port
                          WHERE current.id = alerts.cert_id
                            AND current.is_leaf = 1
-                           AND COALESCE(host.renewal_status, 'pending') != 'renewed'
                            AND NOT EXISTS (
                                SELECT 1 FROM certificates AS successor
                                WHERE successor.replaces_cert_id = current.id

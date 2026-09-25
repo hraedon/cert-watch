@@ -143,6 +143,15 @@ from cert_watch.migrations.m0040_alert_failed_at import (
     MIGRATION_ID as alert_failed_at_id,
 )
 from cert_watch.migrations.m0040_alert_failed_at import upgrade as alert_failed_at_upgrade
+from cert_watch.migrations.m0041_retire_renewed_status import (
+    DESCRIPTION as retire_renewed_status_description,
+)
+from cert_watch.migrations.m0041_retire_renewed_status import (
+    MIGRATION_ID as retire_renewed_status_id,
+)
+from cert_watch.migrations.m0041_retire_renewed_status import (
+    upgrade as retire_renewed_status_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -276,3 +285,8 @@ runner.register(
     cert_chain_status_cache_upgrade,
 )
 runner.register(alert_failed_at_id, alert_failed_at_description, alert_failed_at_upgrade)
+runner.register(
+    retire_renewed_status_id,
+    retire_renewed_status_description,
+    retire_renewed_status_upgrade,
+)

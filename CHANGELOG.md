@@ -6,6 +6,12 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- An operator-reported renewal can no longer suppress expiry warnings or
+  expired alerts. This includes failed-scan scenarios where the replacement
+  certificate cannot be observed (#117).
+- Legacy failed expiry alerts are eligible for revival based on certificate
+  state alone; a stale host renewal report no longer keeps them failed.
+
 - Every page now counts the estate the same way; the definitions are in
   [docs/operations.md](docs/operations.md#what-the-numbers-mean) (#113):
   - Browse's issuer, owner and renewal-method views include uploaded files and
@@ -78,6 +84,15 @@ All notable changes to cert-watch are documented in this file.
 - Scan history no longer counts a partial scan as a success: a batch whose
   only endpoint scanned partially read "1/1, success". Partial scans show as
   incomplete (#113).
+
+### Changed
+
+- Removed the manual `renewed` host status from the detail page, form service,
+  and JSON APIs. `pending` and `in_progress` remain; `in_progress` suppresses
+  renewal-stalled notices only. Requests that send `renewed` now return a
+  validation error.
+- Migration **0041** resets stored `renewed` statuses to `pending` and records
+  one audit entry per changed host. It runs after migrations 0039 and 0040.
 
 ### Upgrade notes
 

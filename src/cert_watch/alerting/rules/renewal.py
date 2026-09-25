@@ -18,7 +18,8 @@ def renewal_window_sql(alias: str = "c") -> str:
     Binds ``?`` window days, ``?`` now (``_sql_now``), ``?`` window days. The one
     predicate Home's attention queue and the renewal notification share: the
     leaf's own days are within the window (not expired), no successor
-    certificate replaces it, and its host is not marked renewed or in progress.
+    certificate replaces it, and its host is not marked in progress. A legacy
+    ``renewed`` value is not evidence that a replacement certificate exists.
     """
     return (
         f"(? > 0 AND cw_effective_days({alias}.not_after, NULL, ?) BETWEEN 0 AND ?"
@@ -26,7 +27,7 @@ def renewal_window_sql(alias: str = "c") -> str:
         f" WHERE succ.replaces_cert_id = {alias}.id)"
         f" AND COALESCE((SELECT rh.renewal_status FROM hosts rh"
         f" WHERE rh.hostname = {alias}.hostname AND rh.port = {alias}.port), '')"
-        f" NOT IN ('renewed', 'in_progress'))"
+        f" != 'in_progress')"
     )
 
 
@@ -38,7 +39,7 @@ def renewal_window_candidates(
 
     Home and notification generation share this predicate
     (:func:`renewal_window_sql`): a leaf is inside the configured window, has
-    no successor, and its host is not marked as renewed or in progress.
+    no successor, and its host is not marked as in progress.
     Delivery success/failure does not resolve it. Each result contains the
     certificate fields, days_remaining, and owner.
     """

@@ -522,7 +522,7 @@ def test_legacy_failed_expiry_rows_revive_only_for_live_current_threshold(
 
     created = evaluate_all_certs(db, repo)
     assert [(alert.cert_id, alert.threshold_days) for alert in created] == [
-        ("live", 7), ("stage", 7),
+        ("live", 7), ("renewed", 7), ("stage", 7),
     ]
 
     rows = {alert.cert_id: alert for alert in repo.list_all() if alert.id in alert_ids.values()}
@@ -530,12 +530,14 @@ def test_legacy_failed_expiry_rows_revive_only_for_live_current_threshold(
     assert rows["live"].attempt_count == 0
     assert rows["live"].next_attempt_at is None
     assert rows["live"].failure_reason is None
-    for cert_id in ("renewed", "old", "stage", "deleted", "very-old"):
+    assert rows["renewed"].status == "pending"
+    assert rows["renewed"].failure_reason is None
+    for cert_id in ("old", "stage", "deleted", "very-old"):
         assert rows[cert_id].status == "failed"
         assert rows[cert_id].failure_reason == "legacy_failed"
 
     transport = CountingTransport()
-    assert Dispatcher(db, transports=[transport]).process_pending()["sent"] == 2
+    assert Dispatcher(db, transports=[transport]).process_pending()["sent"] == 3
     evaluate_all_certs(db, repo)
     Dispatcher(db, transports=[transport]).process_pending()
     assert transport.counts["live"] == 1

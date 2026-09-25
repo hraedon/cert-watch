@@ -334,6 +334,53 @@ def test_run_pending_nothing_pending(db_path: Path) -> None:
     assert applied == []
 
 
+def test_migration_0041_resets_renewed_hosts_with_one_audit_each_and_is_idempotent(
+    db_path: Path,
+) -> None:
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.migrations.m0041_retire_renewed_status import upgrade
+
+    init_schema(db_path)
+    hosts = SqliteHostRepository(db_path)
+    changed = [
+        hosts.add("one.example.test", 443),
+        hosts.add("two.example.test", 8443),
+    ]
+    unchanged = hosts.add("working.example.test", 443, renewal_status="in_progress")
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute(
+            "UPDATE hosts SET renewal_status = 'renewed' WHERE id IN (?, ?)",
+            changed,
+        )
+        conn.commit()
+        upgrade(conn)
+        upgrade(conn)
+        conn.commit()
+        statuses = dict(conn.execute("SELECT id, renewal_status FROM hosts"))
+        audits = conn.execute(
+            "SELECT actor, action, target_type, target_id, detail FROM audit_log "
+            "WHERE actor = 'migration:0041' ORDER BY target_id"
+        ).fetchall()
+
+    assert statuses == {changed[0]: "pending", changed[1]: "pending", unchanged: "in_progress"}
+    assert [(row[0], row[1], row[2], row[3]) for row in audits] == [
+        ("migration:0041", "host.update_settings", "host", host_id)
+        for host_id in sorted(changed)
+    ]
+    assert [json.loads(row[4]) for row in audits] == [
+        {
+            "renewal_status": "pending",
+            "previous_renewal_status": "renewed",
+            "reason": "migration 0041 retired the renewed status",
+        },
+        {
+            "renewal_status": "pending",
+            "previous_renewal_status": "renewed",
+            "reason": "migration 0041 retired the renewed status",
+        },
+    ]
+
+
 def test_concurrent_processes_serialize_migration_startup(tmp_path: Path) -> None:
     """Two app processes wait their turn and only one applies each migration."""
     db = tmp_path / "concurrent.sqlite3"
@@ -952,7 +999,9 @@ def test_migration_0033_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
             conn.execute(statement)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0037", "0038", "0039", "0040"]
+    assert run_pending_migrations(db, backup=False) == [
+        "0037", "0038", "0039", "0040", "0041"
+    ]
     with sqlite3.connect(str(db)) as conn:
         assert "deferred_since" in _table_columns(conn, "alerts")
         ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0033'").fetchall()
@@ -974,7 +1023,9 @@ def test_migration_0033_tolerates_a_column_added_by_hand_without_the_ledger(
         conn.execute(COLUMN_SQL)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0033", "0037", "0038", "0039", "0040"]
+    assert run_pending_migrations(db, backup=False) == [
+        "0033", "0037", "0038", "0039", "0040", "0041"
+    ]
 
 
 # ── 0034: alerts.trigger_cert_id (stable resolve keying, #62) ───────────────
@@ -1014,7 +1065,9 @@ def test_migration_0034_backfills_existing_alerts_with_their_trigger_row(
         )
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0034", "0037", "0038", "0039", "0040"]
+    assert run_pending_migrations(db, backup=False) == [
+        "0034", "0037", "0038", "0039", "0040", "0041"
+    ]
     with sqlite3.connect(str(db)) as conn:
         row = conn.execute(
             "SELECT trigger_cert_id FROM alerts WHERE id = 'a1'"
@@ -1044,7 +1097,9 @@ def test_migration_0034_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
             conn.execute(statement)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0037", "0038", "0039", "0040"]
+    assert run_pending_migrations(db, backup=False) == [
+        "0037", "0038", "0039", "0040", "0041"
+    ]
     with sqlite3.connect(str(db)) as conn:
         assert "trigger_cert_id" in _table_columns(conn, "alerts")
         ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0034'").fetchall()
@@ -1066,7 +1121,9 @@ def test_migration_0034_tolerates_a_column_added_by_hand_without_the_ledger(
         conn.execute(COLUMN_SQL)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0034", "0037", "0038", "0039", "0040"]
+    assert run_pending_migrations(db, backup=False) == [
+        "0034", "0037", "0038", "0039", "0040", "0041"
+    ]
 
 
 def test_migration_0035_preserves_legacy_tls_verified_values(db_path: Path) -> None:
@@ -1113,7 +1170,8 @@ def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) ->
     )
 
     assert run_pending_migrations(db, backup=False) == [
-        "0031", "0032", "0033", "0034", "0035", "0036", "0037", "0038", "0039", "0040"
+        "0031", "0032", "0033", "0034", "0035", "0036", "0037", "0038", "0039", "0040",
+        "0041",
     ]
 
     with sqlite3.connect(str(db)) as conn:
@@ -1147,7 +1205,8 @@ def test_reconciled_migrations_upgrade_old_review_feature_database(
     )
 
     assert run_pending_migrations(db, backup=False) == [
-        "0030", "0031", "0032", "0033", "0034", "0035", "0036", "0037", "0038", "0039", "0040"
+        "0030", "0031", "0032", "0033", "0034", "0035", "0036", "0037", "0038", "0039", "0040",
+        "0041",
     ]
 
     with sqlite3.connect(str(db)) as conn:
