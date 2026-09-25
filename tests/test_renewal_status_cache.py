@@ -308,3 +308,292 @@ def test_renewal_classifier_fuzz_agrees_with_browse_filters_and_counts(tmp_path)
         "in_progress": 0,
         "unknown": Counter(expected.values())["unknown"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Write-path coverage: the scan store, per-port isolation, triggers, deletes.
+# ---------------------------------------------------------------------------
+
+
+def _seed_history(
+    conn,
+    hostname: str,
+    port: int,
+    *,
+    issuer: str,
+    lifetime_days: float,
+    cadence_days: float,
+    lead_days: float,
+    periods: int,
+    last_seen: datetime,
+) -> None:
+    """Insert *periods* prior fingerprint periods ending before *last_seen*.
+
+    Raw SQL on purpose: the INSERT trigger invalidates the cache, so only a
+    later sanctioned writer can make the endpoint read as anything but unknown.
+    """
+    for index in range(periods):
+        first_seen = last_seen - timedelta(days=cadence_days * (periods - index))
+        next_seen = first_seen + timedelta(days=cadence_days)
+        not_after = next_seen + timedelta(days=lead_days)
+        conn.execute(
+            """INSERT INTO cert_history
+               (id, hostname, port, fingerprint_sha256, issuer,
+                not_before, not_after, scanned_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                f"seed-{hostname}-{port}-{index}",
+                hostname,
+                port,
+                f"fp-{port}-{index}",
+                issuer,
+                (not_after - timedelta(days=lifetime_days)).isoformat(),
+                not_after.isoformat(),
+                first_seen.isoformat(),
+            ),
+        )
+
+
+def _scan_cert(hostname: str, port: int, issuer: str, lifetime_days: float) -> Certificate:
+    now = datetime.now(UTC)
+    return Certificate(
+        subject=f"CN={hostname}",
+        issuer=issuer,
+        not_before=now - timedelta(hours=1),
+        not_after=now - timedelta(hours=1) + timedelta(days=lifetime_days),
+        fingerprint_sha256=f"fp-{port}-live",
+    )
+
+
+def _cached(db, hostname: str, port: int) -> str | None:
+    with _connect(db) as conn:
+        row = conn.execute(
+            "SELECT classification FROM endpoint_renewal_analytics "
+            "WHERE hostname = ? AND port = ?",
+            (hostname, port),
+        ).fetchone()
+    return None if row is None else str(row["classification"])
+
+
+_ACME = "CN=R3, O=Let's Encrypt"
+_PRIVATE = "CN=Example Test CA"
+
+
+def _seed_acme(conn, hostname: str, port: int) -> None:
+    _seed_history(
+        conn, hostname, port, issuer=_ACME, lifetime_days=90, cadence_days=60,
+        lead_days=30, periods=3, last_seen=datetime.now(UTC),
+    )
+
+
+def _seed_manual(conn, hostname: str, port: int) -> None:
+    _seed_history(
+        conn, hostname, port, issuer=_PRIVATE, lifetime_days=365, cadence_days=365,
+        lead_days=0, periods=3, last_seen=datetime.now(UTC),
+    )
+
+
+def test_real_scan_store_refreshes_classification_for_browse_filter_and_counts(tmp_path):
+    """store_scanned stages history on the caller connection (conn= branch)."""
+    from cert_watch.scan import ScannedEntry, store_scanned
+
+    db = tmp_path / "scan-store.sqlite3"
+    init_schema(db)
+    hostname = "scanned.example.test"
+    SqliteHostRepository(db).add(hostname, 443)
+    with _connect(db) as conn:
+        _seed_acme(conn, hostname, 443)
+        conn.commit()
+    assert _cached(db, hostname, 443) is None
+
+    store_scanned(
+        ScannedEntry(
+            host=hostname, port=443, leaf=_scan_cert(hostname, 443, _ACME, 90)
+        ),
+        db,
+    )
+
+    python = compute_endpoint_analytics(db, ((hostname, 443),))[0]
+    assert python.automation_classification == "likely-automated"
+    assert _cached(db, hostname, 443) == "likely-automated"
+
+    now = datetime.now(UTC)
+    rows, total = list_dashboard_page(db, per_page=0, now=now)
+    assert total == 1
+    assert rows[0]["renewal"] == "automation_configured"
+    filtered, filtered_total = list_dashboard_page(
+        db, renewal="automation_configured", per_page=0, now=now
+    )
+    assert filtered_total == 1
+    assert [row["hostname"] for row in filtered] == [hostname]
+    assert list_dashboard_page(db, renewal="unknown", per_page=0, now=now)[1] == 0
+    stats = dashboard_axis_stats(db)["renewal"]
+    assert stats["automation_configured"] == 1
+    assert stats["unknown"] == 0
+
+
+def test_refresh_classifies_each_port_from_its_own_history(tmp_path):
+    from cert_watch.scan import ScannedEntry, store_scanned
+
+    db = tmp_path / "ports.sqlite3"
+    init_schema(db)
+    hostname = "multiport.example.test"
+    hosts = SqliteHostRepository(db)
+    hosts.add(hostname, 443)
+    hosts.add(hostname, 8443)
+    with _connect(db) as conn:
+        _seed_acme(conn, hostname, 443)
+        _seed_manual(conn, hostname, 8443)
+        conn.commit()
+
+    store_scanned(
+        ScannedEntry(host=hostname, port=443, leaf=_scan_cert(hostname, 443, _ACME, 90)),
+        db,
+    )
+    store_scanned(
+        ScannedEntry(
+            host=hostname, port=8443, leaf=_scan_cert(hostname, 8443, _PRIVATE, 365)
+        ),
+        db,
+    )
+
+    python = {
+        item.port: item.automation_classification
+        for item in compute_endpoint_analytics(db, ((hostname, 443), (hostname, 8443)))
+    }
+    assert python == {443: "likely-automated", 8443: "manual"}
+    assert _cached(db, hostname, 443) == "likely-automated"
+    assert _cached(db, hostname, 8443) == "manual"
+
+    rows, _total = list_dashboard_page(db, per_page=0, now=datetime.now(UTC))
+    assert {int(row["port"]): row["renewal"] for row in rows} == {
+        443: "automation_configured",
+        8443: "manual",
+    }
+
+
+def test_raw_history_delete_invalidates_only_that_endpoint(tmp_path):
+    db = tmp_path / "trigger-delete.sqlite3"
+    init_schema(db)
+    hostname = "trigger-delete.example.test"
+    with _connect(db) as conn:
+        _seed_acme(conn, hostname, 443)
+        _seed_acme(conn, hostname, 8443)
+        refresh_endpoint_analytics(conn, hostname, 443)
+        refresh_endpoint_analytics(conn, hostname, 8443)
+        conn.commit()
+    assert _cached(db, hostname, 443) is not None
+
+    with _connect(db) as conn:
+        conn.execute(
+            "DELETE FROM cert_history WHERE id = ?", (f"seed-{hostname}-443-0",)
+        )
+        conn.commit()
+
+    assert _cached(db, hostname, 443) is None
+    assert _cached(db, hostname, 8443) == "likely-automated"
+
+
+def test_raw_history_update_invalidates_old_and_new_endpoints(tmp_path):
+    db = tmp_path / "trigger-update.sqlite3"
+    init_schema(db)
+    old_host = "trigger-old.example.test"
+    new_host = "trigger-new.example.test"
+    bystander = "trigger-bystander.example.test"
+    with _connect(db) as conn:
+        for hostname in (old_host, new_host, bystander):
+            _seed_acme(conn, hostname, 443)
+            refresh_endpoint_analytics(conn, hostname, 443)
+        conn.commit()
+
+    # Moving a row changes both endpoints' histories.
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE cert_history SET hostname = ? WHERE id = ?",
+            (new_host, f"seed-{old_host}-443-0"),
+        )
+        conn.commit()
+    assert _cached(db, old_host, 443) is None
+    assert _cached(db, new_host, 443) is None
+    assert _cached(db, bystander, 443) == "likely-automated"
+
+    # An in-place edit invalidates the endpoint it belongs to.
+    with _connect(db) as conn:
+        refresh_endpoint_analytics(conn, bystander, 443)
+        conn.execute(
+            "UPDATE cert_history SET issuer = ? WHERE id = ?",
+            (_PRIVATE, f"seed-{bystander}-443-1"),
+        )
+        conn.commit()
+    assert _cached(db, bystander, 443) is None
+
+
+def test_certificate_delete_cascade_refreshes_from_remaining_history(tmp_path):
+    from cert_watch.database import delete_certificate_cascade
+    from cert_watch.scan import ScannedEntry, store_scanned
+
+    db = tmp_path / "cascade.sqlite3"
+    init_schema(db)
+    hostname = "cascade.example.test"
+    SqliteHostRepository(db).add(hostname, 443)
+    with _connect(db) as conn:
+        _seed_acme(conn, hostname, 443)
+        conn.commit()
+    leaf_id = store_scanned(
+        ScannedEntry(host=hostname, port=443, leaf=_scan_cert(hostname, 443, _ACME, 90)),
+        db,
+    )
+    assert _cached(db, hostname, 443) == "likely-automated"
+
+    assert delete_certificate_cascade(db, leaf_id)
+
+    with _connect(db) as conn:
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM cert_history WHERE hostname = ? AND port = 443",
+            (hostname,),
+        ).fetchone()[0]
+        cached = conn.execute(
+            """SELECT classification, basis_history_count, basis_latest_fingerprint
+               FROM endpoint_renewal_analytics WHERE hostname = ? AND port = 443""",
+            (hostname,),
+        ).fetchone()
+    assert remaining == 3
+    assert cached is not None
+    python = compute_endpoint_analytics(db, ((hostname, 443),))[0]
+    assert tuple(cached) == (python.automation_classification, 3, "fp-443-2")
+    assert python.automation_classification == "likely-automated"
+
+
+def test_purge_refreshes_exactly_the_endpoints_it_purged(tmp_path):
+    """A purged endpoint gets a recomputed row; the cutoff selects old rows.
+
+    For an endpoint whose history is fully purged the recomputed row reads
+    unknown, the same as a missing row, so this pins the refresh contract at
+    the cache-row level rather than through Browse.
+    """
+    db = tmp_path / "purge.sqlite3"
+    init_schema(db)
+    old_host = "purge-old.example.test"
+    fresh_host = "purge-fresh.example.test"
+    now = datetime.now(UTC)
+    with _connect(db) as conn:
+        _seed_history(
+            conn, old_host, 443, issuer=_ACME, lifetime_days=90, cadence_days=60,
+            lead_days=30, periods=3, last_seen=now - timedelta(days=200),
+        )
+        _seed_acme(conn, fresh_host, 443)
+        refresh_endpoint_analytics(conn, old_host, 443)
+        refresh_endpoint_analytics(conn, fresh_host, 443)
+        conn.commit()
+
+    assert purge_old_history(db, retention_days=190) == 3
+
+    with _connect(db) as conn:
+        purged = conn.execute(
+            """SELECT classification, basis_history_count
+               FROM endpoint_renewal_analytics WHERE hostname = ? AND port = 443""",
+            (old_host,),
+        ).fetchone()
+    assert purged is not None
+    assert tuple(purged) == ("unknown", 0)
+    assert _cached(db, fresh_host, 443) == "likely-automated"

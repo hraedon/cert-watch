@@ -226,45 +226,6 @@ def prepare_status_model_context(
     )
 
 
-def load_renewal_analytics(
-    db_path: str | Path,
-    endpoints: tuple[tuple[str, int], ...],
-    context: StatusModelContext,
-) -> None:
-    """Load persisted renewal classifications for selected endpoints only.
-
-    A missing row is deliberately ``unknown``.  History-mutation triggers
-    remove stale rows, while sanctioned writers replace them in the same
-    transaction with a result from the canonical Python classifier.
-    """
-    missing = tuple(
-        dict.fromkeys(
-            endpoint for endpoint in endpoints
-            if endpoint[0] and endpoint not in context.renewal_analytics
-        )
-    )
-    if not missing:
-        return
-    found: dict[tuple[str, int], str] = {}
-    with _connect(db_path) as conn:
-        for start in range(0, len(missing), 350):
-            chunk = missing[start : start + 350]
-            where = " OR ".join("(hostname = ? AND port = ?)" for _ in chunk)
-            rows = conn.execute(
-                "SELECT hostname, port, classification "
-                "FROM endpoint_renewal_analytics WHERE " + where,
-                [value for endpoint in chunk for value in endpoint],
-            ).fetchall()
-            found.update(
-                {
-                    (str(row["hostname"]), int(row["port"])): str(row["classification"])
-                    for row in rows
-                }
-            )
-    for endpoint in missing:
-        context.renewal_analytics[endpoint] = found.get(endpoint, "unknown")
-
-
 def renewal_state_for_row(
     *,
     hostname: str | None,
