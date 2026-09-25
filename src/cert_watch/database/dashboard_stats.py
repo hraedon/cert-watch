@@ -22,16 +22,20 @@ def _empty_stats() -> dict[str, int]:
 
 
 def pivot_urgency_stats(
-    db_path: str | Path, scope_tags: list[str] | tuple[str, ...] | None = None
+    db_path: str | Path,
+    scope_tags: list[str] | tuple[str, ...] | None = None,
+    *,
+    status: StatusContext | None = None,
 ) -> dict[str, int]:
     """Chain-aware urgency counts matching the pivot rows.
 
     The pivots group every inventory row, uploaded files included, so their
     cards are the unfiltered inventory's cards. Counting only scanned rows here
     made the owner view report fewer tracked and warning rows than Browse for
-    the same estate (#113).
+    the same estate (#113). Pass the render's *status* so the cards and the
+    groups are judged at one instant with one trust snapshot.
     """
-    return dashboard_urgency_stats(db_path, scope_tags=scope_tags)
+    return dashboard_urgency_stats(db_path, scope_tags=scope_tags, status=status)
 
 
 def dashboard_urgency_stats(

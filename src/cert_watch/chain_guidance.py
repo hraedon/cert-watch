@@ -29,6 +29,14 @@ def describe_chain(leaf: Certificate, chain: list[Certificate], status: str) -> 
             f"The stored chain verifies to a trusted {status} root. "
             "The root does not need to be sent by the TLS server.",
         )
+    if status == "unverified":
+        return ChainGuidance(
+            "unverified", "Chain not verified",
+            "The stored chain could not be checked just now, so it is treated as "
+            "unverified until it is.",
+            "Reload the page. If this persists, check the logs for the chain "
+            "verification error.",
+        )
     if status == "self-signed":
         return ChainGuidance(
             "self_signed", "Self-signed certificate",

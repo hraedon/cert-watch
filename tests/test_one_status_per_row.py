@@ -258,3 +258,54 @@ def test_alert_group_preview_parses_tags_like_scope(tmp_path):
     assert count == 1
     assert sample[0]["hostname"] == "edge.example.test"
     assert _match_preview(Path(db), ["edg"])[0] == 0
+
+
+def test_group_view_cards_and_groups_share_one_instant(tmp_path, monkeypatch):
+    """The clock ticks a second per read across an exact 7-day boundary; one
+    Browse render must still judge its groups and its cards alike."""
+    from freezegun import freeze_time
+
+    from cert_watch.database import SqliteHostRepository, init_schema, replace_scanned
+    from cert_watch.services.browse_page import load_browse_page
+
+    monkeypatch.setattr("cert_watch.cert_chain.chain_status", lambda *a: "public")
+    ref = dt.datetime(2035, 1, 1, 12, 0, tzinfo=dt.UTC)
+    db = tmp_path / "boundary.sqlite3"
+    init_schema(db)
+    SqliteHostRepository(db).add("boundary.example.test", 443, owner_name="Team B")
+    replace_scanned(db, "boundary.example.test", 443, Certificate(
+        subject="CN=boundary.example.test", issuer="CN=CA",
+        not_before=ref - dt.timedelta(days=1), not_after=ref + dt.timedelta(days=7),
+        fingerprint_sha256="boundary",
+    ), [], True)
+    for view in ("owner", "issuer", "renewal_method"):
+        with freeze_time(ref - dt.timedelta(milliseconds=500), auto_tick_seconds=1):
+            data = load_browse_page(
+                db, q=None, urgency=None, source=None, sort_by="days", sort_order="asc",
+                page=1, grouped=0, view=view, scope_tags=(), sched_hour=6, sched_min=0,
+            )
+        (group,) = data.pivot_groups or []
+        worst = group["worst_urgency"]
+        assert data.pivot_stats[worst] == 1, (view, worst, data.pivot_stats)
+
+
+def test_certificate_detail_fails_closed_when_verification_errors(
+    tmp_path, reload_app, monkeypatch,
+):
+    from fastapi.testclient import TestClient
+
+    from cert_watch.upload import UploadedEntry, store_uploaded
+
+    app_mod = reload_app()
+    leaf, _ = _issue("detail.example.test", 200, None, ca=False)
+    cert_id = store_uploaded(UploadedEntry("detail.pem", leaf), tmp_path / "cert-watch.sqlite3")
+
+    def broken(*_args):
+        raise ValueError("verifier exploded")
+
+    monkeypatch.setattr("cert_watch.services.certificate_detail.chain_status", broken)
+    monkeypatch.setattr("cert_watch.cert_chain.chain_status", broken)
+    with TestClient(app_mod.app) as client:
+        response = client.get(f"/certificates/{cert_id}")
+    assert response.status_code == 200
+    assert "Chain not verified" in response.text  # the chain guidance, not an error page

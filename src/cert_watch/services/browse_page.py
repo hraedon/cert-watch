@@ -86,7 +86,7 @@ def load_browse_page(
     elif pivot_groups is not None:
         total = sum(int(group["count"]) for group in pivot_groups)
         total_pages = 1
-        pivot_stats = pivot_urgency_stats(db_path, scope_tags=scope_tags)
+        pivot_stats = pivot_urgency_stats(db_path, scope_tags=scope_tags, status=status)
     elif grouped:
         entries, total = list_dashboard_grouped_page(
             db_path,

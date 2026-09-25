@@ -53,7 +53,8 @@ All notable changes to cert-watch are documented in this file.
     while the status cache can't be written) is "chain not verified" and
     Warning everywhere, instead of Warning in the counts and Healthy in the
     rows, and Home no longer says "Nothing needs attention" while counting
-    it.
+    it. A certificate's own page shows "Chain not verified" (Warning) if
+    verifying its chain fails, instead of an error page.
 - The compliance report no longer doubles non-443 ports (`host:636:636`) or
   shows uploaded files as `(uploaded):0`. Its Urgency column uses the same
   status rule as Browse, so a certificate with an unverifiable chain is
