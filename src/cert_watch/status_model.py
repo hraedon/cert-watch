@@ -259,6 +259,7 @@ def renewal_state_for_row(
     not_after: str | None,
     has_successor: bool,
     context: StatusModelContext,
+    analytics: str | None = None,
 ) -> tuple[str, str]:
     """Classify one selected row from its stored and bounded history evidence."""
     stalled = False
@@ -276,8 +277,32 @@ def renewal_state_for_row(
         renewal_method,
         operator_status,
         stalled,
-        context.renewal_analytics.get((hostname or "", int(port or 0))),
+        analytics
+        if analytics is not None
+        else context.renewal_analytics.get((hostname or "", int(port or 0))),
     )
+
+
+def delivery_state(
+    has_route: object,
+    smtp_configured: object,
+    smtp_can_deliver: object,
+    webhook_configured: object,
+    webhook_can_deliver: object,
+    smtp_outcome: object,
+    webhook_outcome: object,
+) -> str:
+    """Classify routing and latest per-channel evidence for SQL and display rows."""
+    if not bool(has_route):
+        return "unrouted"
+    if not (bool(smtp_can_deliver) or bool(webhook_can_deliver)):
+        return "failing"
+    failed = {"failed", "partial", "unknown"}
+    if bool(smtp_configured) and smtp_outcome in failed:
+        return "failing"
+    if bool(webhook_configured) and webhook_outcome in failed:
+        return "failing"
+    return "ok"
 
 
 def register_status_model_functions(
@@ -316,6 +341,7 @@ def register_status_model_functions(
         operator: object,
         not_after: object,
         has_successor: object,
+        analytics: object,
     ) -> str:
         state, _source = renewal_state_for_row(
             hostname=str(hostname or ""),
@@ -325,15 +351,15 @@ def register_status_model_functions(
             not_after=str(not_after) if not_after else None,
             has_successor=bool(has_successor),
             context=context,
+            analytics=str(analytics or "unknown"),
         )
         return state
 
-    conn.create_function("cw_renewal_state", 6, sql_renewal)
-    conn.create_function(
-        "cw_delivery_state",
-        1,
-        lambda cert_id: context.delivery.get(str(cert_id), {}).get("state", "unrouted"),
-    )
+    conn.create_function("cw_renewal_state", 7, sql_renewal)
+    from cert_watch.alerting.model import normalize_channel
+
+    conn.create_function("cw_normalize_channel", 1, lambda value: normalize_channel(str(value)))
+    conn.create_function("cw_delivery_state", 7, delivery_state)
 
 
 def delivery_state_sql(
@@ -378,28 +404,23 @@ def delivery_state_sql(
     )
     any_route = f"({global_recips} OR {global_webhook} OR {owner_route} OR {group_match})"
 
-    def latest_outcome(channel_sql: str) -> str:
+    def latest_outcome(channel: str) -> str:
+        channel_literal = channel.replace("'", "''")
         return (
             "COALESCE((SELECT CASE "
             "WHEN json_extract(e.details, '$.outcome') IN ('accepted', 'partial', 'failed') "
             "THEN json_extract(e.details, '$.outcome') ELSE 'unknown' END "
             "FROM alert_delivery_events e JOIN alerts a ON a.id = e.alert_id "
             f"WHERE a.cert_id = {cert_id} AND e.event_kind = 'completed' "
-            f"AND {channel_sql} ORDER BY e.id DESC LIMIT 1), '')"
+            f"AND cw_normalize_channel(e.channel) = '{channel_literal}' "
+            "ORDER BY e.id DESC LIMIT 1), '')"
         )
 
-    smtp_failed = (
-        f"({int(settings.smtp_configured)} AND {latest_outcome("e.channel = 'smtp'")} "
-        "IN ('failed', 'partial', 'unknown'))"
-    )
-    webhook_failed = (
-        f"({global_webhook} AND {latest_outcome("e.channel != 'smtp'")} "
-        "IN ('failed', 'partial', 'unknown'))"
-    )
+    webhook_channel = f"webhook:{settings.webhook_kind}"
     return (
-        f"CASE WHEN NOT {any_route} THEN 'unrouted' "
-        f"WHEN NOT ({smtp_can} OR {global_webhook}) OR {smtp_failed} OR {webhook_failed} "
-        "THEN 'failing' ELSE 'ok' END"
+        f"cw_delivery_state({any_route}, {int(settings.smtp_configured)}, {smtp_can}, "
+        f"{global_webhook}, {global_webhook}, {latest_outcome('smtp')}, "
+        f"{latest_outcome(webhook_channel)})"
     )
 
 
@@ -409,19 +430,28 @@ def _latest_channel_outcomes(
     if not cert_ids:
         return {}
     result: dict[str, dict[str, str]] = {}
+    from cert_watch.alerting.model import normalize_channel
+
     with _connect(db_path) as conn:
+        conn.create_function(
+            "cw_normalize_channel", 1, lambda value: normalize_channel(str(value))
+        )
         for start in range(0, len(cert_ids), 350):
             chunk = cert_ids[start : start + 350]
             placeholders = ",".join("?" for _ in chunk)
             rows = conn.execute(
-                f"""WITH completed AS (
-                    SELECT a.cert_id, e.channel, e.details, e.id,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY a.cert_id, e.channel ORDER BY e.id DESC
-                           ) AS n
+                f"""WITH normalized AS (
+                    SELECT a.cert_id, cw_normalize_channel(e.channel) AS channel,
+                           e.details, e.id
                     FROM alert_delivery_events e
                     JOIN alerts a ON a.id = e.alert_id
                     WHERE e.event_kind = 'completed' AND a.cert_id IN ({placeholders})
+                ), completed AS (
+                    SELECT cert_id, channel, details, id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY cert_id, channel ORDER BY id DESC
+                           ) AS n
+                    FROM normalized
                 )
                 SELECT cert_id, channel, json_extract(details, '$.outcome') AS outcome
                 FROM completed WHERE n = 1""",
@@ -429,9 +459,8 @@ def _latest_channel_outcomes(
             ).fetchall()
             for row in rows:
                 channel = str(row["channel"])
-                family = "smtp" if channel == "smtp" else "webhook"
                 outcome = row["outcome"]
-                result.setdefault(row["cert_id"], {})[family] = (
+                result.setdefault(row["cert_id"], {})[channel] = (
                     outcome if outcome in {"accepted", "partial", "failed"} else "unknown"
                 )
     return result
@@ -453,7 +482,11 @@ def load_delivery_statuses(
     cfg = context.settings
     for cert_id in missing:
         snapshot = routing.get(cert_id, {"recipients": [], "groups": []})
-        specific = tuple(str(value) for value in snapshot.get("recipients", []))
+        specific = tuple(
+            str(value).strip()
+            for value in snapshot.get("recipients", [])
+            if str(value).strip()
+        )
         groups = tuple(
             str(group.get("name") or group.get("id") or "")
             for group in snapshot.get("groups", [])
@@ -476,26 +509,18 @@ def load_delivery_statuses(
                 "recipients": list(groups),
                 "configured": cfg.webhook_configured,
                 "can_deliver": webhook_ok,
-                "last_outcome": latest.get("webhook"),
+                "last_outcome": latest.get(f"webhook:{cfg.webhook_kind}"),
             },
         )
-        unrouted = (
-            not specific
-            and not groups
-            and not cfg.global_recipients
-            and not cfg.webhook_configured
+        state = delivery_state(
+            bool(specific or groups or cfg.global_recipients or cfg.webhook_configured),
+            cfg.smtp_configured,
+            smtp_ok,
+            cfg.webhook_configured,
+            webhook_ok,
+            latest.get("smtp"),
+            latest.get(f"webhook:{cfg.webhook_kind}"),
         )
-        failed_outcome = any(
-            channel["last_outcome"] in {"failed", "partial", "unknown"}
-            for channel in channels
-            if channel["configured"] and channel["last_outcome"] is not None
-        )
-        if unrouted:
-            state = "unrouted"
-        elif not any(channel["can_deliver"] for channel in channels) or failed_outcome:
-            state = "failing"
-        else:
-            state = "ok"
         context.delivery[cert_id] = {
             "state": state,
             "recipients": list(specific),

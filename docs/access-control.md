@@ -135,6 +135,12 @@ so an API key can't mint more keys, not even an `admin` key. A key keeps
 working after the person who created it loses administrator access, so review
 keys when access changes.
 
+Routing identities are administrator-only. Certificate status responses and
+`GET /api/certificates/{id}/alert-routing` expose delivery state, channel types
+and anonymous recipient/group route counts to viewers, operators, and `read`
+or `write` API keys. Only administrators and `admin` API keys receive recipient
+addresses and matched alert-group names.
+
 `/metrics` is separate from all of this. It accepts its own bearer token
 (`CERT_WATCH_METRICS_TOKEN`) or an administrator's browser session, and
 nothing else.

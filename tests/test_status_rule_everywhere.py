@@ -19,6 +19,7 @@ for at most the rows shown, never for the estate.
 from __future__ import annotations
 
 import datetime as dt
+import uuid
 from collections import Counter
 from pathlib import Path
 from urllib.parse import quote
@@ -335,6 +336,7 @@ def test_request_routing_and_analytics_work_is_bounded_to_returned_rows(
     from fastapi.testclient import TestClient
 
     from cert_watch.database import SqliteHostRepository, init_schema, replace_scanned
+    from cert_watch.database.connection import _connect
 
     db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)
@@ -345,6 +347,40 @@ def test_request_routing_and_analytics_work_is_bounded_to_returned_rows(
         hosts.add(hostname, 443)
         cert, _ = _issue(hostname, 90, None, ca=False)
         cert_id, _, _ = replace_scanned(db, hostname, 443, cert, [], True)
+
+    # Exercise real history-derived renewal evidence in the scaling guard.
+    # Each endpoint has two observed renewals; alternating long-lived/manual
+    # and regular ACME-like short-lived histories prevent an empty-history
+    # shortcut from satisfying the work bound.
+    history_rows = []
+    for index in range(80):
+        hostname = f"scale-{index:03d}.example.test"
+        lifetime = 90 if index % 2 == 0 else 365
+        issuer = "CN=Let's Encrypt Test CA" if index % 2 == 0 else "CN=Example Test CA"
+        offsets = (180, 120, 60) if index % 2 == 0 else (240, 160, 80)
+        for period, days_ago in enumerate(offsets):
+            scanned_at = NOW - dt.timedelta(days=days_ago)
+            not_before = scanned_at - dt.timedelta(days=1)
+            history_rows.append(
+                (
+                    str(uuid.uuid4()),
+                    hostname,
+                    443,
+                    f"history-{index}-{period}",
+                    issuer,
+                    (not_before + dt.timedelta(days=lifetime)).isoformat(),
+                    scanned_at.isoformat(),
+                    not_before.isoformat(),
+                )
+            )
+    with _connect(db) as conn:
+        conn.executemany(
+            """INSERT INTO cert_history
+               (id, hostname, port, fingerprint_sha256, issuer, not_after,
+                scanned_at, not_before) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            history_rows,
+        )
+        conn.commit()
 
     import cert_watch.alerting.routing as routing
     import cert_watch.database.dashboard_axes as dashboard_axes

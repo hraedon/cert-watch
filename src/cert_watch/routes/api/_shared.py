@@ -45,15 +45,13 @@ def delivery_details_allowed(request: Request) -> bool:
     return auth is None or bool(getattr(auth, "is_admin", False))
 
 
-def status_for_api(model: dict[str, Any], *, reveal_delivery_details: bool) -> dict[str, Any]:
-    """Copy a status model, reducing delivery to anonymous counts when needed."""
-    result = dict(model)
-    raw = model.get("delivery")
-    if reveal_delivery_details or not isinstance(raw, dict):
-        return result
+def delivery_for_api(raw: dict[str, Any], *, reveal_details: bool) -> dict[str, Any]:
+    """Return full routing detail for admins and anonymous counts otherwise."""
+    if reveal_details:
+        return dict(raw)
     raw_channels = raw.get("channels")
     channels: list[Any] = raw_channels if isinstance(raw_channels, list) else []
-    result["delivery"] = {
+    return {
         "state": raw.get("state", "unrouted"),
         "recipient_count": len(raw.get("recipients") or []),
         "matching_group_count": len(raw.get("matching_groups") or []),
@@ -66,6 +64,17 @@ def status_for_api(model: dict[str, Any], *, reveal_delivery_details: bool) -> d
             if isinstance(channel, dict)
         ],
     }
+
+
+def status_for_api(model: dict[str, Any], *, reveal_delivery_details: bool) -> dict[str, Any]:
+    """Copy a status model, reducing delivery to anonymous counts when needed."""
+    result = dict(model)
+    raw = model.get("delivery")
+    if not isinstance(raw, dict):
+        return result
+    result["delivery"] = delivery_for_api(
+        raw, reveal_details=reveal_delivery_details
+    )
     return result
 
 

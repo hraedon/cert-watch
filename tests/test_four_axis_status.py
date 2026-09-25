@@ -1,12 +1,15 @@
 """The #126 S1 four-axis model agrees between Python, SQL filters and scope."""
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.config import Settings
 from cert_watch.database import SqliteAlertGroupRepository, SqliteHostRepository, init_schema
-from cert_watch.database.chain_status_cache import StatusContext
+from cert_watch.database.chain_status_cache import StatusContext, prepare_status
 from cert_watch.database.connection import _connect
 from cert_watch.database.dashboard_page import list_dashboard_page
 from cert_watch.scheduler import ScanHistory, record_scan_history
@@ -47,6 +50,8 @@ def _seed(tmp_path, db_name: str = "four-axis.sqlite3"):
         ("stalled.example.test", "team-a", 4, "acme", "pending"),
         ("auto.example.test", "team-b", 31, "cert-manager", "pending"),
         ("progress.example.test", "team-b", None, "", "in_progress"),
+        ("history-manual.example.test", "team-b", 200, "", "pending"),
+        ("history-auto.example.test", "team-b", 200, "", "pending"),
     )
     ids: dict[str, str] = {}
     for index, (host, tag, days, method, operator) in enumerate(specs):
@@ -59,7 +64,13 @@ def _seed(tmp_path, db_name: str = "four-axis.sqlite3"):
         if days is not None:
             replace_scanned(db, host, 443, _cert(host, days, f"fp-{index}"), [], True)
 
-    for host in ("manual.example.test", "stalled.example.test", "auto.example.test"):
+    for host in (
+        "manual.example.test",
+        "stalled.example.test",
+        "auto.example.test",
+        "history-manual.example.test",
+        "history-auto.example.test",
+    ):
         record_scan_history(
             db,
             ScanHistory(
@@ -69,6 +80,45 @@ def _seed(tmp_path, db_name: str = "four-axis.sqlite3"):
                 scanned_at=NOW - timedelta(hours=1),
             ),
         )
+
+    # Three contiguous deployment periods are two observed renewals.  Keep
+    # this history in the independent SQL/row agreement fixture: long-lived
+    # certificates classify as manual, while regular ACME-like short-lived
+    # periods classify as likely automated.
+    with _connect(db) as conn:
+        for host, issuer, lifetime, offsets, current_fp in (
+            (
+                "history-manual.example.test",
+                "CN=Example Test CA",
+                365,
+                (800, 450, 100),
+                "fp-5",
+            ),
+            (
+                "history-auto.example.test",
+                "CN=Let's Encrypt Test CA",
+                90,
+                (180, 120, 60),
+                "fp-6",
+            ),
+        ):
+            for period, days_ago in enumerate(offsets):
+                first_seen = NOW - timedelta(days=days_ago)
+                not_before = first_seen - timedelta(days=1)
+                not_after = not_before + timedelta(days=lifetime)
+                fingerprint = current_fp if period == 2 else f"{host}-old-{period}"
+                conn.execute(
+                    """INSERT INTO cert_history
+                       (id, hostname, port, fingerprint_sha256, issuer,
+                        not_after, scanned_at, not_before)
+                       VALUES (?, ?, 443, ?, ?, ?, ?, ?)""",
+                    (
+                        str(uuid.uuid4()), host, fingerprint, issuer,
+                        not_after.isoformat(), first_seen.isoformat(),
+                        not_before.isoformat(),
+                    ),
+                )
+        conn.commit()
     record_scan_history(
         db,
         ScanHistory(
@@ -124,6 +174,10 @@ def test_each_axis_uses_the_documented_mapping(tmp_path):
     assert got["manual.example.test"]["renewal"] == "manual"
     assert got["stalled.example.test"]["renewal"] == "stalled"
     assert got["auto.example.test"]["renewal"] == "automation_configured"
+    assert got["history-auto.example.test"]["renewal"] == "automation_configured"
+    assert got["history-auto.example.test"]["renewal_source"] == "renewal_analytics"
+    assert got["history-manual.example.test"]["renewal"] == "manual"
+    assert got["history-manual.example.test"]["renewal_source"] == "renewal_analytics"
     assert got["progress.example.test"]["renewal"] == "in_progress"
     assert got["manual.example.test"]["delivery"] == "ok"
     assert got["auto.example.test"]["delivery"] == "unrouted"
@@ -137,18 +191,24 @@ def test_sql_filters_agree_with_every_built_row_and_respect_scope(tmp_path):
     oracle = {
         "condition": {
             "le7": {"manual.example.test", "stalled.example.test"},
-            "ok": {"failing.example.test", "auto.example.test"},
+            "ok": {
+                "failing.example.test", "auto.example.test",
+                "history-manual.example.test", "history-auto.example.test",
+            },
         },
         "monitoring": {
             "current": {
-                "manual.example.test", "stalled.example.test", "auto.example.test"
+                "manual.example.test", "stalled.example.test", "auto.example.test",
+                "history-manual.example.test", "history-auto.example.test",
             },
             "failing": {"failing.example.test"},
             "never_scanned": {"progress.example.test"},
         },
         "renewal": {
-            "automation_configured": {"auto.example.test"},
-            "manual": {"manual.example.test"},
+            "automation_configured": {
+                "auto.example.test", "history-auto.example.test",
+            },
+            "manual": {"manual.example.test", "history-manual.example.test"},
             "stalled": {"stalled.example.test"},
             "in_progress": {"progress.example.test"},
             "unknown": {"failing.example.test"},
@@ -157,7 +217,10 @@ def test_sql_filters_agree_with_every_built_row_and_respect_scope(tmp_path):
             "ok": {
                 "failing.example.test", "manual.example.test", "stalled.example.test"
             },
-            "unrouted": {"auto.example.test", "progress.example.test"},
+            "unrouted": {
+                "auto.example.test", "progress.example.test",
+                "history-manual.example.test", "history-auto.example.test",
+            },
         },
     }
     all_states = {
@@ -360,6 +423,147 @@ def test_delivery_filter_uses_last_channel_outcome(tmp_path):
     assert failing[0]["id"] == cert_id
     assert failing[0]["delivery"] == "failing"
     assert failing[0]["status"]["delivery"]["channels"][0]["last_outcome"] == "unknown"
+
+
+def test_delivery_uses_latest_outcome_per_normalized_channel(tmp_path):
+    """A failure on another webhook kind must not poison the configured route."""
+    from cert_watch.database import Alert, AlertStore
+    from cert_watch.database.dashboard_axes import dashboard_axis_stats
+    from cert_watch.database.delivery_evidence import begin_attempt, complete_attempt
+
+    db, _settings = _seed(tmp_path)
+    settings = AxisSettings(webhook_configured=True, webhook_kind="generic")
+    rows, _ = list_dashboard_page(db, per_page=0, now=NOW, axis_settings=settings)
+    cert_id = _by_host(rows)["history-manual.example.test"]["id"]
+    alert_id = AlertStore(db).enqueue(
+        Alert(
+            cert_id=cert_id,
+            alert_type="expiry_warning",
+            status="pending",
+            message="normalized channel evidence",
+        )
+    )
+    assert alert_id is not None
+
+    old_slack = begin_attempt(db, alert_id, "webhook:slack", {})
+    complete_attempt(db, old_slack, {"outcome": "failed"})
+    current_generic = begin_attempt(db, alert_id, "webhook:generic", {})
+    complete_attempt(db, current_generic, {"outcome": "accepted"})
+
+    rows, _ = list_dashboard_page(db, per_page=0, now=NOW, axis_settings=settings)
+    row = next(item for item in rows if item["id"] == cert_id)
+    generic = next(
+        channel for channel in row["status"]["delivery"]["channels"]
+        if channel["channel"] == "webhook:generic"
+    )
+    assert row["delivery"] == "ok"
+    assert generic["last_outcome"] == "accepted"
+    assert list_dashboard_page(
+        db, delivery="ok", per_page=0, now=NOW, axis_settings=settings
+    )[1] == len([item for item in rows if item.get("kind") != "pending"])
+    assert dashboard_axis_stats(
+        db, status=prepare_status(db, NOW), axis_settings=settings
+    )["delivery"]["ok"] == len([item for item in rows if item.get("kind") != "pending"])
+
+    # Legacy ``generic`` and unified ``webhook:generic`` are one channel; the
+    # later legacy failure must win in both the row and SQL count/filter path.
+    legacy_generic = begin_attempt(db, alert_id, "generic", {})
+    complete_attempt(db, legacy_generic, {"outcome": "failed"})
+    failing, total = list_dashboard_page(
+        db, delivery="failing", per_page=0, now=NOW, axis_settings=settings
+    )
+    assert total == 1
+    assert failing[0]["id"] == cert_id
+    assert failing[0]["status"]["delivery"]["channels"][1]["last_outcome"] == "failed"
+    assert dashboard_axis_stats(
+        db, status=prepare_status(db, NOW), axis_settings=settings
+    )["delivery"]["failing"] == 1
+
+
+@pytest.mark.parametrize(
+    ("case", "settings", "owner", "tag", "group", "role", "expected"),
+    [
+        ("owner-no-smtp", AxisSettings(), "owner@example.test", "owner", None, None, "failing"),
+        ("blank-owner", AxisSettings(smtp_configured=True), "   ", "blank", None, None, "unrouted"),
+        (
+            "role-linked",
+            AxisSettings(smtp_configured=True),
+            "",
+            "role",
+            ("Role route", ["role@example.test"], []),
+            ("role-viewers", "role"),
+            "ok",
+        ),
+        (
+            "empty-group",
+            AxisSettings(smtp_configured=True),
+            "",
+            "empty",
+            ("Empty route", [], ["empty"]),
+            None,
+            "failing",
+        ),
+        (
+            "webhook-only",
+            AxisSettings(webhook_configured=True),
+            "",
+            "webhook",
+            None,
+            None,
+            "ok",
+        ),
+    ],
+)
+def test_delivery_route_shapes_agree_between_row_filter_and_count(
+    tmp_path, case, settings, owner, tag, group, role, expected
+):
+    from cert_watch.database import (
+        Role,
+        SqliteRoleRepository,
+        replace_scanned,
+    )
+    from cert_watch.database.dashboard_axes import dashboard_axis_stats
+
+    db = tmp_path / f"{case}.sqlite3"
+    init_schema(db)
+    host = f"{case}.example.test"
+    host_id = SqliteHostRepository(db).add(host, 443, tags=tag)
+    with _connect(db) as conn:
+        conn.execute("UPDATE hosts SET owner_email = ? WHERE id = ?", (owner, host_id))
+        conn.commit()
+    replace_scanned(db, host, 443, _cert(host, 200, f"fp-{case}"), [], True)
+    record_scan_history(
+        db,
+        ScanHistory(
+            hostname=host,
+            port=443,
+            status="success",
+            scanned_at=NOW - timedelta(hours=1),
+        ),
+    )
+    if group is not None:
+        group_id = SqliteAlertGroupRepository(db).create(
+            name=group[0], recipients=group[1], match_tags=group[2]
+        )
+        if role is not None:
+            SqliteRoleRepository(db).add(
+                Role(
+                    name=role[0], permission_tier="viewer",
+                    scope_tag=role[1], alert_group_id=group_id,
+                )
+            )
+
+    rows, _ = list_dashboard_page(db, per_page=0, now=NOW, axis_settings=settings)
+    assert rows[0]["delivery"] == expected
+    filtered, total = list_dashboard_page(
+        db, delivery=expected, per_page=0, now=NOW, axis_settings=settings
+    )
+    assert total == 1
+    assert filtered[0]["delivery"] == expected
+    stats = dashboard_axis_stats(
+        db, status=prepare_status(db, NOW), axis_settings=settings
+    )["delivery"]
+    assert stats[expected] == 1
 
 
 def test_delivery_requires_a_working_channel_and_accepts_global_routes(tmp_path):
@@ -734,6 +938,7 @@ def test_delivery_identities_are_admin_only_across_read_apis(
         User,
         kv_set,
     )
+    from cert_watch.database.api_keys import SqliteApiKeyRepository
 
     db, _ = _seed(tmp_path, "cert-watch.sqlite3")
     password = "example-password"
@@ -779,6 +984,11 @@ def test_delivery_identities_are_admin_only_across_read_apis(
     monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", lambda self: None)
     monkeypatch.setattr("cert_watch.scheduler.Scheduler.stop", lambda self: None)
     app_mod = reload_app()
+    key_repo = SqliteApiKeyRepository(db)
+    api_keys = {
+        scope: key_repo.create_key(f"status-{scope}", scope)[1]
+        for scope in ("read", "write", "admin")
+    }
 
     secrets = {
         "Team A operators", "team-a@example.test", "global@example.test",
@@ -809,6 +1019,7 @@ def test_delivery_identities_are_admin_only_across_read_apis(
             "/api/hosts?limit=50",
             "/api/export/certificates.json",
             f"/api/certificates/{cert_id}",
+            f"/api/certificates/{cert_id}/alert-routing",
         )
         admin_bodies = [client.get(path).json() for path in paths]
         for username in ("viewer", "operator"):
@@ -831,6 +1042,8 @@ def test_delivery_identities_are_admin_only_across_read_apis(
                             collect(child, blocks)
 
                 collect(response.json(), delivery_blocks)
+                if path.endswith("/alert-routing"):
+                    delivery_blocks.append(response.json()["delivery"])
                 assert delivery_blocks
                 for delivery in delivery_blocks:
                     assert "recipients" not in delivery
@@ -840,6 +1053,31 @@ def test_delivery_identities_are_admin_only_across_read_apis(
                     }
                     assert all(set(channel) == {"channel", "route_count"}
                                for channel in delivery["channels"])
+
+        for scope in ("read", "write"):
+            client.cookies.delete(SESSION_COOKIE)
+            response = client.get(
+                f"/api/certificates/{cert_id}/alert-routing",
+                headers={"Authorization": f"Bearer {api_keys[scope]}"},
+            )
+            assert response.status_code == 200
+            serialized = json.dumps(response.json(), sort_keys=True)
+            assert all(secret not in serialized for secret in secrets)
+            delivery = response.json()["delivery"]
+            assert set(delivery) == {
+                "state", "recipient_count", "matching_group_count", "channels"
+            }
+            assert all(
+                set(channel) == {"channel", "route_count"}
+                for channel in delivery["channels"]
+            )
+
+        response = client.get(
+            f"/api/certificates/{cert_id}/alert-routing",
+            headers={"Authorization": f"Bearer {api_keys['admin']}"},
+        )
+        assert response.status_code == 200
+        admin_bodies.append(response.json())
 
     admin_text = json.dumps(admin_bodies, sort_keys=True)
     assert secrets <= {secret for secret in secrets if secret in admin_text}
