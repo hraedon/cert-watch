@@ -19,6 +19,7 @@ from cert_watch.auth.scope import (
     ensure_write_scope,
     ensure_write_scope_on,
     require_auth_context,
+    writable_scope_tags,
 )
 from cert_watch.config import Settings
 from cert_watch.database import HostEntry, SqliteHostRepository, get_write_lock
@@ -33,13 +34,13 @@ from cert_watch.scan import (
 )
 from cert_watch.scan_freshness import scan_interval_out_of_range
 from cert_watch.scheduler import ScanHistory, record_scan_history
-from cert_watch.tags import format_tags, merge_tags, parse_tags
+from cert_watch.tags import format_tags, merge_tags
 
 logger = logging.getLogger("cert_watch.services.host_management")
 
 COMMON_TLS_PORTS = (443, 8443, 993, 995, 465, 636, 5061, 6443)
 MAX_CSV_ROWS = 500
-ScanStatus = Literal["success", "scan_error", "store_error"]
+ScanStatus = Literal["success", "scan_error", "store_error", "refused"]
 RouteScan = Callable[..., Awaitable[tuple[ScanStatus, str | None]]]
 
 
@@ -68,12 +69,75 @@ class ScanResult:
 class HostCreateResult:
     host_ids: tuple[str, ...]
     scanned: int
+    refused: int
 
 
 @dataclass(frozen=True)
 class HostImportResult:
     imported: int
     errors: tuple[str, ...]
+
+
+def _record_scan_failure(
+    db_path: str | Path,
+    *,
+    hostname: str,
+    port: int,
+    error_message: str,
+    source: str,
+    scope_guard: Callable[[Any], None] | None,
+) -> None:
+    """Authorize and persist failed-scan bookkeeping in one transaction."""
+    from cert_watch.events import EventStreamConfig, emit_scan_failed, load_event_config
+
+    try:
+        event_config = load_event_config(db_path)
+    except Exception:
+        logger.debug("load_event_config failed for %s:%d", hostname, port, exc_info=True)
+        event_config = EventStreamConfig()
+    pending: list[tuple[Any, Any, int]] = []
+    with get_write_lock():
+        conn = _connect(db_path)
+        try:
+            begin_immediate(conn)
+            if scope_guard is not None:
+                scope_guard(conn)
+            record_scan_history(
+                db_path,
+                ScanHistory(
+                    hostname=hostname,
+                    port=port,
+                    status="failure",
+                    error_message=error_message,
+                ),
+                conn=conn,
+            )
+            try:
+                emit_scan_failed(
+                    db_path,
+                    hostname,
+                    port,
+                    error_message,
+                    source=source,
+                    config=event_config,
+                    conn=conn,
+                    deferred=pending,
+                )
+            except Exception:
+                logger.debug(
+                    "emit_scan_failed suppressed for %s:%d", hostname, port, exc_info=True
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    for event, config, row_id in pending:
+        try:
+            from cert_watch.events import _deliver_webhook, _get_pool
+
+            _get_pool().submit(_deliver_webhook, event, config, str(db_path), row_id)
+        except Exception:
+            logger.warning("deferred scan-failure webhook submit failed", exc_info=True)
 
 
 def _scoped_tags(auth: Any, tags: str) -> str:
@@ -149,21 +213,14 @@ async def _scan_and_store(
         starttls_mode=starttls_mode,
     )
     if isinstance(result, ScanError):
-        record_scan_history(
+        _record_scan_failure(
             db_path,
-            ScanHistory(
-                hostname=hostname,
-                port=port,
-                status="failure",
-                error_message=result.error_message,
-            ),
+            hostname=hostname,
+            port=port,
+            error_message=result.error_message,
+            source=source,
+            scope_guard=scope_guard,
         )
-        try:
-            from cert_watch.events import emit_scan_failed
-
-            emit_scan_failed(db_path, hostname, port, result.error_message, source=source)
-        except Exception:
-            logger.debug("emit_scan_failed suppressed for %s:%d", hostname, port, exc_info=True)
         return ScanResult("scan_error", result.error_message)
     try:
         leaf_id = await store_scanned_async(
@@ -273,14 +330,28 @@ async def create_hosts(
             source_ip=source_ip,
         )
 
-    async def scan(job: tuple[str, int]) -> bool:
+    async def scan(job: tuple[str, int]) -> ScanResult:
         host_id, candidate_port = job
 
         def scope_guard(conn: Any) -> None:
             ensure_write_scope_on(conn, auth, host_id=host_id)
 
-        if _scan_fn is not None:
-            status, _error = await _scan_fn(
+        try:
+            if _scan_fn is not None:
+                status, error = await _scan_fn(
+                    hostname,
+                    candidate_port,
+                    db_path,
+                    settings,
+                    pinned_ip=pinned_ip,
+                    starttls_mode=starttls_mode,
+                    source="scan",
+                    webhook_config=settings.build_webhook_config(),
+                    scope_guard=scope_guard,
+                    _store_error_types=(Exception,),
+                )
+                return ScanResult(status, error)
+            return await _scan_and_store(
                 hostname,
                 candidate_port,
                 db_path,
@@ -290,24 +361,16 @@ async def create_hosts(
                 source="scan",
                 webhook_config=settings.build_webhook_config(),
                 scope_guard=scope_guard,
-                _store_error_types=(Exception,),
             )
-            return status == "success"
-        result = await _scan_and_store(
-            hostname,
-            candidate_port,
-            db_path,
-            settings,
-            pinned_ip=pinned_ip,
-            starttls_mode=starttls_mode,
-            source="scan",
-            webhook_config=settings.build_webhook_config(),
-            scope_guard=scope_guard,
-        )
-        return result.status == "success"
+        except ScopeDeniedError as exc:
+            return ScanResult("refused", str(exc))
 
     scans = await asyncio.gather(*(scan(job) for job in added))
-    return HostCreateResult(tuple(host_id for host_id, _ in added), sum(scans))
+    return HostCreateResult(
+        tuple(host_id for host_id, _ in added),
+        sum(result.status == "success" for result in scans),
+        sum(result.status == "refused" for result in scans),
+    )
 
 
 async def import_hosts_csv(
@@ -329,7 +392,7 @@ async def import_hosts_csv(
         raise HostValidationError("CSV must be UTF-8 encoded") from None
     repo = SqliteHostRepository(db_path)
     errors: list[str] = []
-    jobs: list[tuple[str, str, int, str | None, str]] = []
+    jobs: list[tuple[int, str, str, int, str | None, str]] = []
     for row_number, row in enumerate(csv.DictReader(io.StringIO(text)), start=2):
         if row_number - 1 > MAX_CSV_ROWS:
             raise HostValidationError(f"CSV import limited to {MAX_CSV_ROWS} rows")
@@ -407,7 +470,7 @@ async def import_hosts_csv(
             except PermissionError as exc:
                 errors.append(f"row {row_number}: {exc}")
                 continue
-        jobs.append((host_id, hostname, port, pinned_ip, starttls_mode))
+        jobs.append((row_number, host_id, hostname, port, pinned_ip, starttls_mode))
 
     record_audit(
         db_path,
@@ -420,15 +483,29 @@ async def import_hosts_csv(
     )
     semaphore = asyncio.Semaphore(10)
 
-    async def scan(job: tuple[str, str, int, str | None, str]) -> None:
-        host_id, hostname, port, pinned_ip, starttls_mode = job
+    async def scan(job: tuple[int, str, str, int, str | None, str]) -> str | None:
+        row_number, host_id, hostname, port, pinned_ip, starttls_mode = job
 
         def scope_guard(conn: Any) -> None:
             ensure_write_scope_on(conn, auth, host_id=host_id)
 
         async with semaphore:
-            if _scan_fn is not None:
-                await _scan_fn(
+            try:
+                if _scan_fn is not None:
+                    await _scan_fn(
+                        hostname,
+                        port,
+                        db_path,
+                        settings,
+                        pinned_ip=pinned_ip,
+                        starttls_mode=starttls_mode,
+                        source="scan",
+                        webhook_config=settings.build_webhook_config(),
+                        scope_guard=scope_guard,
+                        _store_error_types=(Exception,),
+                    )
+                    return None
+                await _scan_and_store(
                     hostname,
                     port,
                     db_path,
@@ -438,22 +515,13 @@ async def import_hosts_csv(
                     source="scan",
                     webhook_config=settings.build_webhook_config(),
                     scope_guard=scope_guard,
-                    _store_error_types=(Exception,),
                 )
-                return
-            await _scan_and_store(
-                hostname,
-                port,
-                db_path,
-                settings,
-                pinned_ip=pinned_ip,
-                starttls_mode=starttls_mode,
-                source="scan",
-                webhook_config=settings.build_webhook_config(),
-                scope_guard=scope_guard,
-            )
+            except ScopeDeniedError as exc:
+                return f"row {row_number}: follow-up scan refused: {exc}"
+            return None
 
-    await asyncio.gather(*(scan(job) for job in jobs))
+    scan_errors = await asyncio.gather(*(scan(job) for job in jobs))
+    errors.extend(error for error in scan_errors if error is not None)
     return HostImportResult(len(jobs), tuple(errors))
 
 
@@ -465,11 +533,9 @@ async def scan_all_hosts(
     actor: str,
     source_ip: str | None,
     _scan_fn: RouteScan | None = None,
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     require_auth_context(auth)
-    scope_tags: tuple[str, ...] = ()
-    if auth is not None and not getattr(auth, "is_admin", False):
-        scope_tags = tuple(parse_tags(getattr(auth, "scope_tag", "") or ""))
+    scope_tags = writable_scope_tags(auth)
     hosts = SqliteHostRepository(db_path).list_scoped(scope_tags)
     if hosts:
         record_audit(
@@ -487,8 +553,22 @@ async def scan_all_hosts(
             ensure_write_scope_on(conn, auth, host_id=host.id)
 
         async with semaphore:
-            if _scan_fn is not None:
-                status, error = await _scan_fn(
+            try:
+                if _scan_fn is not None:
+                    status, error = await _scan_fn(
+                        host.hostname,
+                        host.port,
+                        db_path,
+                        settings,
+                        pinned_ip=None,
+                        starttls_mode=host.starttls_mode,
+                        source="scan",
+                        webhook_config=settings.build_webhook_config(),
+                        scope_guard=scope_guard,
+                        _store_error_types=(Exception,),
+                    )
+                    return ScanResult(status, error)
+                return await _scan_and_store(
                     host.hostname,
                     host.port,
                     db_path,
@@ -498,24 +578,14 @@ async def scan_all_hosts(
                     source="scan",
                     webhook_config=settings.build_webhook_config(),
                     scope_guard=scope_guard,
-                    _store_error_types=(Exception,),
                 )
-                return ScanResult(status, error)
-            return await _scan_and_store(
-                host.hostname,
-                host.port,
-                db_path,
-                settings,
-                pinned_ip=None,
-                starttls_mode=host.starttls_mode,
-                source="scan",
-                webhook_config=settings.build_webhook_config(),
-                scope_guard=scope_guard,
-            )
+            except ScopeDeniedError as exc:
+                return ScanResult("refused", str(exc))
 
     results = await asyncio.gather(*(scan(host) for host in hosts))
     successes = sum(result.status == "success" for result in results)
-    return successes, len(results) - successes
+    refused = sum(result.status == "refused" for result in results)
+    return successes, len(results) - successes - refused, refused
 
 
 def update_host_settings(

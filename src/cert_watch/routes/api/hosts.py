@@ -149,7 +149,11 @@ async def api_create_host(
         return _service_error(exc)
     return JSONResponse(
         status_code=201,
-        content={"ids": list(result.host_ids), "scanned": result.scanned},
+        content={
+            "ids": list(result.host_ids),
+            "scanned": result.scanned,
+            "refused": result.refused,
+        },
     )
 
 
@@ -192,7 +196,7 @@ async def api_scan_all_hosts(
     _rl: None = Depends(rate_limit("scan_all", 3, 300)),
 ) -> JSONResponse:
     try:
-        scanned, failures = await scan_all_hosts(
+        scanned, failures, refused = await scan_all_hosts(
             _db_path(request),
             _get_settings(request),
             auth=acting_auth(request),
@@ -201,7 +205,9 @@ async def api_scan_all_hosts(
         )
     except ScopeDeniedError as exc:
         return _service_error(exc)
-    return JSONResponse(content={"scanned": scanned, "failures": failures})
+    return JSONResponse(
+        content={"scanned": scanned, "failures": failures, "refused": refused}
+    )
 
 
 @router.get("/api/hosts")

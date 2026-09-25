@@ -36,10 +36,16 @@ class ScanHistory:
     error_message: str | None = None
 
 
-def record_scan_history(db_path: str | Path, entry: ScanHistory) -> str:
+def record_scan_history(
+    db_path: str | Path,
+    entry: ScanHistory,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> str:
     entry_id = entry.id or str(uuid.uuid4())
     from cert_watch.database import _connect
-    with _connect(db_path) as conn:
+
+    if conn is not None:
         conn.execute(
             """INSERT INTO scan_history
                (id, hostname, port, status, scanned_at, error_message)
@@ -53,7 +59,22 @@ def record_scan_history(db_path: str | Path, entry: ScanHistory) -> str:
                 entry.error_message,
             ),
         )
-        conn.commit()
+        return entry_id
+    with _connect(db_path) as owned_conn:
+        owned_conn.execute(
+            """INSERT INTO scan_history
+               (id, hostname, port, status, scanned_at, error_message)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                entry_id,
+                entry.hostname,
+                entry.port,
+                entry.status,
+                entry.scanned_at.isoformat(),
+                entry.error_message,
+            ),
+        )
+        owned_conn.commit()
     return entry_id
 
 

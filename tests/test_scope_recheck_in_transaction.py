@@ -337,7 +337,10 @@ def test_scan_all_rechecks_each_host_inside_its_store_transaction(tmp_path, monk
     with _team_a_client(db, tmp_path) as client:
         r = client.post("/api/hosts/scan")
     assert moved == ["moved"]
-    assert (r.status_code, r.json()) == (403, _REFUSED)
+    assert (r.status_code, r.json()) == (
+        200,
+        {"scanned": 0, "failures": 0, "refused": 1},
+    )
     assert SqliteCertificateRepository(db).get_by_id(cert_id) == original
 
 

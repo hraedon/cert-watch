@@ -43,6 +43,7 @@ from cert_watch.services.host_management import (
 from cert_watch.services.host_management import (
     HostSettingsUpdate,
     HostValidationError,
+    _record_scan_failure,
     create_hosts,
 )
 from cert_watch.services.host_management import (
@@ -120,21 +121,14 @@ async def _scan_and_store(
         starttls_mode=starttls_mode,
     )
     if isinstance(result, ScanError):
-        record_scan_history(
+        _record_scan_failure(
             db,
-            ScanHistory(
-                hostname=hostname,
-                port=port,
-                status="failure",
-                error_message=result.error_message,
-            ),
+            hostname=hostname,
+            port=port,
+            error_message=result.error_message,
+            source=source,
+            scope_guard=scope_guard,
         )
-        try:
-            from cert_watch.events import emit_scan_failed
-
-            emit_scan_failed(db, hostname, port, result.error_message, source=source)
-        except Exception:
-            logger.debug("emit_scan_failed suppressed for %s:%d", hostname, port, exc_info=True)
         return "scan_error", result.error_message
     try:
         leaf_id = await store_scanned_async(
@@ -379,12 +373,18 @@ async def add_host(
     # id, which resolves to the certificate the first scan stored. Several
     # (common ports): Browse, filtered to the host name.
     if len(created.host_ids) == 1:
+        query = "added=1"
+        if created.refused:
+            warning = "Host added; its follow-up scan was refused after access changed."
+            query += f"&warning={quote(warning)}"
         return RedirectResponse(
-            url=f"/certificates/{created.host_ids[0]}?added=1", status_code=303
+            url=f"/certificates/{created.host_ids[0]}?{query}", status_code=303
         )
     notice = f"Added {len(created.host_ids)} endpoints for {hostname.strip()}"
     if created.scanned:
         notice += f"; {created.scanned} scanned successfully"
+    if created.refused:
+        notice += f"; {created.refused} follow-up scan(s) refused after access changed"
     return RedirectResponse(
         url=f"/browse?q={quote(hostname.strip())}&grouped=0&notice={quote(notice + '.')}",
         status_code=303,
@@ -561,7 +561,7 @@ async def scan_all_hosts(
             status_code=303,
         )
     try:
-        scanned, failures = await scan_all_hosts_service(
+        scanned, failures, refused = await scan_all_hosts_service(
             _db_path(request),
             _get_settings(request),
             auth=acting_auth(request),
@@ -573,8 +573,17 @@ async def scan_all_hosts(
         return RedirectResponse(
             url=f"/scan-history?error={quote(str(exc))}", status_code=303
         )
-    logger.info("scan_all: %d scanned, %d failures", scanned, failures)
-    return RedirectResponse(url="/scan-history", status_code=303)
+    logger.info(
+        "scan_all: %d scanned, %d failures, %d refused", scanned, failures, refused
+    )
+    summary = f"Scan complete: {scanned} succeeded, {failures} failed, {refused} refused."
+    return RedirectResponse(
+        url=(
+            f"/scan-history?scanned={scanned}&failures={failures}&refused={refused}"
+            f"&notice={quote(summary)}"
+        ),
+        status_code=303,
+    )
 
 
 @router.post("/hosts/{host_id}/scan")

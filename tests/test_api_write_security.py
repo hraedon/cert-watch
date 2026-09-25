@@ -26,7 +26,7 @@ def _patch_action_services(monkeypatch: pytest.MonkeyPatch, action: str) -> None
     )
 
     async def create(*_args: Any, **_kwargs: Any) -> HostCreateResult:
-        return HostCreateResult(("00000000-0000-4000-8000-000000000001",), 0)
+        return HostCreateResult(("00000000-0000-4000-8000-000000000001",), 0, 0)
 
     async def imported(*_args: Any, **_kwargs: Any) -> HostImportResult:
         return HostImportResult(1, ())
@@ -256,7 +256,7 @@ def test_invalid_api_add_host_consumes_action_budget(
     from cert_watch.services.host_management import HostCreateResult
 
     async def created(*_args: Any, **_kwargs: Any) -> HostCreateResult:
-        return HostCreateResult(("00000000-0000-4000-8000-000000000001",), 0)
+        return HostCreateResult(("00000000-0000-4000-8000-000000000001",), 0, 0)
 
     monkeypatch.setattr(api_hosts, "create_hosts", created)
     with TestClient(reload_app().app) as client:
@@ -345,5 +345,5 @@ async def test_scan_all_with_no_hosts_does_not_create_audit_noise(tmp_path) -> N
         actor="scheduler",
         source_ip=None,
     )
-    assert result == (0, 0)
+    assert result == (0, 0, 0)
     assert list_audit(db) == []

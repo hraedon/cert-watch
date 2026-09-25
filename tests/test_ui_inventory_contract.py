@@ -90,7 +90,7 @@ def _result(service: str, resource_id: str) -> Any:
     if service.endswith("create_hosts"):
         from cert_watch.services.host_management import HostCreateResult
 
-        return HostCreateResult((resource_id,), 1)
+        return HostCreateResult((resource_id,), 1, 0)
     if service.endswith("import_hosts_csv"):
         from cert_watch.services.host_management import HostImportResult
 

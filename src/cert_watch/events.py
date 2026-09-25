@@ -487,16 +487,31 @@ def emit_scan_failed(
     port: int,
     error_message: str,
     source: str = "scan",
+    *,
+    config: EventStreamConfig | None = None,
+    conn: sqlite3.Connection | None = None,
+    deferred: list[tuple[Event, EventStreamConfig, int]] | None = None,
 ) -> int | None:
-    return emit_event(
-        Event(
-            event_type="scan_failed",
-            timestamp=datetime.now(UTC),
-            payload={"hostname": hostname, "port": port, "error_message": error_message},
-            source=source,
-        ),
-        db_path,
+    event = Event(
+        event_type="scan_failed",
+        timestamp=datetime.now(UTC),
+        payload={"hostname": hostname, "port": port, "error_message": error_message},
+        source=source,
     )
+    row_id = emit_event(
+        event,
+        db_path,
+        config=config,
+        conn=conn,
+        _defer_webhook=deferred is not None,
+    )
+    if deferred is not None and config is not None and conn is not None and row_id is not None:
+        row = conn.execute(
+            "SELECT delivery_status FROM event_log WHERE id = ?", (row_id,)
+        ).fetchone()
+        if row is not None and row["delivery_status"] == "pending":
+            deferred.append((event, config, row_id))
+    return row_id
 
 
 def purge_old_events(db_path: str | Path, retention_days: int) -> int:

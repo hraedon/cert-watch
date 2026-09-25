@@ -353,6 +353,68 @@ class TestScopedRepoMethods:
             }
         assert cleared == flushable == {"alert-a"}
 
+    def test_mixed_tier_bulk_actions_match_single_item_write_scope(self, db: Path):
+        """Read visibility does not become write authority in either bulk path.
+
+        Uploaded certificates have no host row, so their own tags are the
+        complete effective-tag set and must participate in both operations.
+        """
+        from datetime import UTC, datetime, timedelta
+
+        from cert_watch.database.alert_store import AlertStore
+        from cert_watch.services.alert_state import mark_all_alerts_read
+
+        _seed_two_teams(db)
+        now = datetime.now(UTC)
+        with _connect(db) as conn:
+            _insert_cert(
+                conn,
+                "upload-a",
+                "upload-a.example.test",
+                tags="team-a",
+                source="uploaded",
+            )
+            _insert_cert(
+                conn,
+                "upload-b",
+                "upload-b.example.test",
+                tags="team-b",
+                source="uploaded",
+            )
+            _insert_alert(conn, "alert-upload-a", "upload-a")
+            _insert_alert(conn, "alert-upload-b", "upload-b")
+            conn.commit()
+        auth = AuthContext(
+            username="mixed",
+            roles=["viewer"],
+            tier="viewer",
+            scope_tag="team-a,team-b",
+            tag_tiers={"team-a": "operator", "team-b": "viewer"},
+        )
+
+        count = mark_all_alerts_read(
+            db, auth=auth, actor="mixed", source_ip=None
+        )
+        with _connect(db) as conn:
+            read_ids = {
+                row["id"]
+                for row in conn.execute("SELECT id FROM alerts WHERE read = 1")
+            }
+            conn.execute("UPDATE alerts SET read = 0")
+            conn.commit()
+
+        assert count == 2
+        assert read_ids == {"alert-a", "alert-upload-a"}
+
+        claimed = AlertStore(db).claim(
+            lease_owner="mixed",
+            lease_expires_at=now + timedelta(minutes=5),
+            now=now,
+            scope_tags=("team-a",),
+            ignore_backoff=True,
+        )
+        assert {alert.id for alert in claimed} == {"alert-a", "alert-upload-a"}
+
 
     def test_effective_tags_union_matches_host_or_cert_tag(self, db: Path):
         """The scope filter matches on cert ∪ host tags: an alert is in scope
@@ -499,6 +561,28 @@ def _make_scoped_app(db: Path, tmp_path: Path, *, scope_tag: str):
     return create_app(auth_provider=_Provider(), settings=s), groups
 
 
+def _make_mixed_tier_app(db: Path, tmp_path: Path):
+    """A caller who writes team-a and may only read team-b."""
+    from cert_watch.app import create_app
+    from cert_watch.config import Settings
+
+    role_repo = SqliteRoleRepository(db)
+    role_id = role_repo.add(
+        Role(name="mixed-role", permission_tier="viewer", scope_tag="team-a,team-b")
+    )
+    role_repo.set_tag_tiers(role_id, {"team-a": "operator", "team-b": "viewer"})
+    settings = Settings(
+        db_path=db,
+        data_dir=tmp_path,
+        role_map={"mixed-role": {"groups": ["mixed-grp"]}},
+    )
+
+    class _Provider:
+        provider_name = "mock"
+
+    return create_app(auth_provider=_Provider(), settings=settings), ["mixed-grp"]
+
+
 def _scoped_client(app, groups):
     from fastapi.testclient import TestClient
 
@@ -591,6 +675,16 @@ class TestMarkAllAlertsReadRoute:
         reads = self._run(db, tmp_path, monkeypatch, scope_tag="")
         assert reads == {"alert-a": 1, "alert-b": 1}
 
+    def test_mixed_tier_caller_clears_only_writable_alerts(self, db, tmp_path):
+        _seed_two_teams(db)
+        app, groups = _make_mixed_tier_app(db, tmp_path)
+        with _scoped_client(app, groups) as client:
+            response = client.post("/alerts/mark-all-read", follow_redirects=False)
+        assert response.status_code == 303
+        with _connect(db) as conn:
+            reads = dict(conn.execute("SELECT id, read FROM alerts").fetchall())
+        assert reads == {"alert-a": 1, "alert-b": 0}
+
 
 class TestRetryAlertScopePrivacy:
     """Missing and out-of-scope alerts are indistinguishable to team users."""
@@ -665,6 +759,25 @@ class TestFlushAlertQueueRoute:
     def test_unscoped_operator_flushes_all_alerts(self, db, tmp_path, monkeypatch):
         seen = self._run(db, tmp_path, monkeypatch, scope_tag="")
         assert set(seen) == {"alert-a", "alert-b"}
+
+    def test_mixed_tier_caller_passes_only_writable_tags_to_claim(
+        self, db, tmp_path, monkeypatch
+    ):
+        _seed_two_teams(db)
+        seen_scope: list[tuple[str, ...]] = []
+
+        def _fake_process(dispatcher):
+            seen_scope.append(dispatcher.scope_tags)
+            return {"sent": 0, "failed": 0}
+
+        monkeypatch.setattr(
+            "cert_watch.alerting.dispatch.Dispatcher.process_pending", _fake_process
+        )
+        app, groups = _make_mixed_tier_app(db, tmp_path)
+        with _scoped_client(app, groups) as client:
+            response = client.post("/alerts/flush", follow_redirects=False)
+        assert response.status_code == 303
+        assert seen_scope == [("team-a",)]
 
 
 class TestScopedFlushFullContract:

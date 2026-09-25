@@ -482,7 +482,7 @@ class SqliteAlertRepository(AlertRepository):
                 # so a scoped user can clear any in-scope alert they can flush.
                 inner_sql = """
                     SELECT c.id FROM certificates c
-                    JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
+                    LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
                     WHERE 1=1
                 """
                 inner_sql, params = _add_effective_tag_filter(

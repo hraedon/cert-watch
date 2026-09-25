@@ -10,10 +10,10 @@ from cert_watch.auth.scope import (
     ensure_write_scope,
     ensure_write_scope_on,
     require_auth_context,
+    writable_scope_tags,
 )
 from cert_watch.database import SqliteAlertRepository, get_write_lock
 from cert_watch.database.connection import _connect, begin_immediate
-from cert_watch.tags import parse_tags
 
 
 class AlertNotFoundError(LookupError):
@@ -46,9 +46,7 @@ def mark_all_alerts_read(
     source_ip: str | None,
 ) -> int:
     require_auth_context(auth)
-    scope_tags: tuple[str, ...] = ()
-    if auth is not None and not getattr(auth, "is_admin", False):
-        scope_tags = tuple(parse_tags(getattr(auth, "scope_tag", "") or ""))
+    scope_tags = writable_scope_tags(auth)
     with get_write_lock():
         count = SqliteAlertRepository(db_path).mark_all_read(scope_tags)
     record_audit(

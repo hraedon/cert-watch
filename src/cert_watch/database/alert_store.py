@@ -325,7 +325,7 @@ class AlertStore:
 
             joins = (
                 " JOIN certificates c ON c.id = a.cert_id"
-                " JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port"
+                " LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port"
             )
             scope_clause, scope_params = _add_effective_tag_filter(
                 "1=1", [], scope_tags, col_cert="c.tags", col_host="h.tags"
