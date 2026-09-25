@@ -30,7 +30,10 @@ from cert_watch.routes.api._shared import (
     tags_from_json_body,
 )
 from cert_watch.security.ratelimit import rate_limit
-from cert_watch.services.certificate_identity import CertificateSupersededError
+from cert_watch.services.certificate_identity import (
+    CertificateNotFoundError,
+    CertificateSupersededError,
+)
 from cert_watch.services.certificate_management import (
     MAX_UPLOAD_BYTES,
     CertificateValidationError,
@@ -221,6 +224,8 @@ async def api_delete_certificate(
         return JSONResponse(status_code=403, content={"error": str(exc)})
     except CertificateSupersededError as exc:
         return superseded_json(exc)
+    except CertificateNotFoundError:
+        return JSONResponse(status_code=404, content={"error": "certificate not found"})
     if not deleted:
         return JSONResponse(status_code=404, content={"error": "certificate not found"})
     return JSONResponse(content={"status": "deleted", "id": cert_id})
@@ -344,6 +349,8 @@ async def api_set_cert_tags(
         return JSONResponse(content={"error": "not found"}, status_code=404)
     except CertificateSupersededError as exc:
         return superseded_json(exc)
+    except CertificateNotFoundError:
+        return JSONResponse(content={"error": "not found"}, status_code=404)
     return JSONResponse(
         content={
             "id": cert_id,

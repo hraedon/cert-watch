@@ -74,9 +74,7 @@ def test_unchanged_rescan_does_not_mark_itself_superseded(tmp_path, self_signed_
     assert row["replaces_cert_id"] != first
 
 
-def test_pre_renewal_link_redirects_to_current_certificate(
-    tmp_path, reload_app, self_signed_leaf
-):
+def test_pre_renewal_link_redirects_to_current_certificate(tmp_path, reload_app, self_signed_leaf):
     db = _db(tmp_path)
     SqliteHostRepository(db).add(_HOST, 443)
     old = seed_scanned(db, _HOST, 443, _leaf(self_signed_leaf.der))
@@ -126,19 +124,23 @@ def _alert_on(db: Path, cert_id: str, port: int, fingerprint: str) -> None:
             threshold_days=7,
             hostname=_HOST,
             dedupe_key=certificate_alert_key(
-                "expiry", cert_id=cert_id, fingerprint=fingerprint, hostname=_HOST,
-                port=port, suffix=("expiry_warning", "7"),
+                "expiry",
+                cert_id=cert_id,
+                fingerprint=fingerprint,
+                hostname=_HOST,
+                port=port,
+                suffix=("expiry_warning", "7"),
             ),
         )
     )
 
 
-def test_link_resolves_through_an_alert_when_events_are_gone(
-    tmp_path, reload_app, self_signed_leaf
-):
-    """An alert that fired on the old id still records its endpoint, and the
-    link opens that endpoint's certificate even when the host name has
-    another monitored port."""
+def test_an_alert_alone_no_longer_resolves_a_stale_link(tmp_path, reload_app, self_signed_leaf):
+    """#115 review round 6: stale links follow renewal lineage anchored on
+    the id's own issuance event -- the one resolver the mutation routes also
+    use. An alert records where a certificate was, not what replaced it, so
+    once the events have aged out the old id is "not found" rather than
+    guessed from the endpoint's current certificate."""
     from cert_watch.database.connection import _connect
 
     db = _db(tmp_path)
@@ -160,7 +162,8 @@ def test_link_resolves_through_an_alert_when_events_are_gone(
     with TestClient(app_mod.app) as client:
         r = client.get(f"/certificates/{oldest}", follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == f"/certificates/{current}?superseded=1"
+    assert r.headers["location"] == _NOT_FOUND
+    assert current  # the endpoint still has a current certificate
 
 
 def test_alert_fallback_never_picks_another_ports_certificate(
@@ -195,9 +198,7 @@ def test_alert_fallback_never_picks_another_ports_certificate(
     assert r.headers["location"] == _NOT_FOUND
 
 
-def test_host_id_is_a_stable_address_for_the_endpoint(
-    tmp_path, reload_app, self_signed_leaf
-):
+def test_host_id_is_a_stable_address_for_the_endpoint(tmp_path, reload_app, self_signed_leaf):
     db = _db(tmp_path)
     host_id = SqliteHostRepository(db).add(_HOST, 443)
     cert_id = seed_scanned(db, _HOST, 443, _leaf(self_signed_leaf.der))
@@ -213,16 +214,12 @@ def test_unknown_id_still_reports_not_found(tmp_path, reload_app):
     _db(tmp_path)
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
-        r = client.get(
-            "/certificates/00000000-0000-0000-0000-000000000000", follow_redirects=False
-        )
+        r = client.get("/certificates/00000000-0000-0000-0000-000000000000", follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"] == _NOT_FOUND
 
 
-def test_stale_link_does_not_reveal_an_out_of_scope_certificate(
-    tmp_path, self_signed_leaf
-):
+def test_stale_link_does_not_reveal_an_out_of_scope_certificate(tmp_path, self_signed_leaf):
     from tests.test_tag_scoped_access import _make_scoped_app, _scoped_client
 
     db = _db(tmp_path)

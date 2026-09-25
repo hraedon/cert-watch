@@ -43,6 +43,7 @@ from cert_watch.services.alert_groups import (
     update_alert_group,
 )
 from cert_watch.services.certificate_identity import (
+    CertificateNotFoundError,
     CertificateSupersededError,
     ensure_not_superseded,
     refuse_if_superseded,
@@ -351,6 +352,8 @@ async def api_assign_cert_to_group(
             )
         except CertificateSupersededError as exc:
             return superseded_json(exc)
+        except CertificateNotFoundError:
+            return JSONResponse(content={"error": "certificate not found"}, status_code=404)
         if outcome != "assigned":
             return JSONResponse(content={"error": outcome.replace("_", " ")}, status_code=404)
     record_audit(
@@ -385,6 +388,8 @@ async def api_unassign_cert_from_group(
             )
         except CertificateSupersededError as exc:
             return superseded_json(exc)
+        except CertificateNotFoundError:
+            return JSONResponse(content={"error": "certificate not found"}, status_code=404)
         if removed == "group_not_found":
             return JSONResponse(content={"error": "group not found"}, status_code=404)
         if removed != "unassigned":

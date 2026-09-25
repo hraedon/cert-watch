@@ -33,7 +33,10 @@ from cert_watch.services.certificate_detail import (
     PendingHostDetailData,
     load_certificate_detail,
 )
-from cert_watch.services.certificate_identity import CertificateSupersededError
+from cert_watch.services.certificate_identity import (
+    CertificateNotFoundError,
+    CertificateSupersededError,
+)
 from cert_watch.services.certificate_management import (
     CertificateValidationError,
     upload_certificate_bytes,
@@ -170,6 +173,8 @@ async def delete_certificate(
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     except CertificateSupersededError as exc:
         return superseded_redirect(exc)
+    except CertificateNotFoundError:
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     if not deleted:
         # It used to land Home with no message, as if it had deleted.
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
@@ -205,6 +210,8 @@ async def update_certificate_tags(
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     except CertificateSupersededError as exc:
         return superseded_redirect(exc)
+    except CertificateNotFoundError:
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     logger.info("updated tags for certificate %s", cert_id)
     return RedirectResponse(url=f"/certificates/{cert_id}", status_code=303)
 
@@ -230,6 +237,8 @@ async def update_certificate_owner(
         target = resolve_host_ownership_target(db, cert_id, auth=acting_auth(request))
     except CertificateSupersededError as exc:
         return superseded_redirect(exc)
+    except CertificateNotFoundError:
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     except ScopeDeniedError as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     except HostOwnershipTargetError as exc:
@@ -271,6 +280,8 @@ async def update_certificate_owner(
         )
     except CertificateSupersededError as exc:
         return superseded_redirect(exc)
+    except CertificateNotFoundError:
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     except HostOwnershipTargetError:
         # Renewed away between resolving the target and the write, to a
         # certificate the caller can't see: the unknown-id answer.

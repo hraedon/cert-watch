@@ -16,12 +16,13 @@ All notable changes to cert-watch are documented in this file.
   webhook links no longer break on the next scan. A link to a certificate
   that has since been renewed, or to an endpoint's host id, now opens the
   endpoint's current certificate with a short note, instead of "certificate
-  not found". For a certificate replaced before this release, the link
-  resolves only while its successor, its lifecycle event or an alert that
-  fired on it still records the endpoint's host and port; a host name alone
-  never picks a certificate, so a link can't open another port's
-  certificate. Scope still applies: a link never reveals a certificate the
-  viewer can't see (#113).
+  not found". The link follows the renewals from the certificate's own
+  lifecycle event, one step at a time and only on the same host and port; it
+  resolves only while those events are kept (the event-log retention
+  period), and a deleted certificate, a contradictory or ambiguous record,
+  or a step at another endpoint resolves to "not found" rather than a guess.
+  Scope still applies: a link never reveals a certificate the viewer can't
+  see (#113).
 - A scan no longer drops a scanned certificate's own tags or its manual
   alert-group assignments. Up to 1.0.3 every scan, changed or not, rewrote
   the certificate without them, which silently narrowed tag-scoped access,
@@ -48,13 +49,15 @@ All notable changes to cert-watch are documented in this file.
   tags, setting its owner, and assigning it to or removing it from an alert
   group. The API answers 409 with `current_cert_id`; the web forms return to
   the current certificate with a note. Nothing is applied to the renewed
-  certificate on the sender's behalf. This holds however many renewals ago
-  the id was current, and when a stale row still sits beside its
-  successor. The renewal chain is only followed within one endpoint (host
-  and port); a step recorded at another endpoint, a step with no endpoint, or
-  more than one possible successor ends it, and the id is treated as
-  unknown. A malformed event-log entry no longer breaks these changes or
-  certificate links. A caller outside the current certificate's tag scope gets
+  certificate on the sender's behalf. Whether a change goes ahead is decided
+  from the stored certificates alone: a stale certificate still stored beside
+  its replacement is refused, and so is one whose replacement record is
+  ambiguous, loops or moves to another endpoint -- those get the "not found"
+  answer and nothing is changed. For an id that no longer exists nothing can
+  be changed anyway; the answer names the current certificate only when the
+  same renewal chain the certificate links use (above) leads to it. A
+  malformed event-log entry no longer breaks these changes or certificate
+  links. A caller outside the current certificate's tag scope gets
   exactly the answer an unknown id gets on that route, so the refusal
   doesn't reveal that the id was real. Only a renewal counts: an id whose
   certificate was deleted is an ordinary "not found". The check and the

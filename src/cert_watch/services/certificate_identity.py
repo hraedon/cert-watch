@@ -14,27 +14,27 @@ after ``BEGIN IMMEDIATE`` and before the write, and commit both together.
 this process or another -- can renew the certificate between the check and
 the write (the scan's replace also runs under ``BEGIN IMMEDIATE``).
 
-An id is superseded when renewal lineage leads from it to a current
-certificate: a leaf that names it in ``replaces_cert_id``, or -- once that
-row is gone too -- the ``cert_renewed`` event that recorded the renewal,
-followed hop by hop to a row that still exists and that nothing replaces
-(the head). This is checked before asking whether the addressed row still
-exists: a stale row can coexist with its successor, and acting on it would
-bypass the current certificate's scope. Such an id is refused with
-:class:`CertificateSupersededError`, carrying the head's id, so the client
-can re-read the current certificate and decide again. It is never
-retargeted to the head and never answered with success for a no-op.
+Whether the write may go ahead is decided from certificate rows alone
+(:func:`cert_watch.database.cert_lineage.row_lineage`); lifecycle events
+never authorize or refuse a write:
 
-Only renewal lineage counts. An id that never existed, or whose certificate
-an operator deleted (its endpoint's next certificate is a ``cert_added``, not
-a renewal of it), is not superseded and gets the caller's ordinary handling.
+* the addressed row exists and nothing replaces it: go ahead;
+* exactly one unambiguous, loop-free chain of rows on the same endpoint
+  leads from it to a current certificate (the head): refuse with
+  :class:`CertificateSupersededError` naming the head -- or with the route's
+  unknown-id answer (*hidden*) when the caller can't see the addressed row or
+  the head. A stale row can coexist with its successor; acting on it would
+  bypass the current certificate's scope;
+* rows replace it but the chain is ambiguous, loops or changes endpoint:
+  refuse with the unknown-id answer. Never go ahead;
+* no row has the id: nothing can be written, and the route's ordinary
+  unknown-id handling applies. Only the *answer* may differ: when
+  :func:`~cert_watch.database.cert_lineage.navigation_hint` (the same resolver
+  the stale-link page uses) finds the certificate that replaced it and the
+  caller may see it, the refusal names it instead of saying "not found".
 
-A caller whose tag scope does not cover the head -- or the addressed row,
-while it still exists -- gets exactly the answer an unknown id gets on that
-route: the refusal would otherwise reveal that the id
-was real and renewed. For an addressed row that no longer exists, falling
-through gives that answer; for a stale row that still exists, the caller
-supplies it (*hidden*), because falling through would act on the stale row.
+The id is never retargeted to the head, and a no-op is never reported as a
+success.
 """
 
 from __future__ import annotations
@@ -42,6 +42,10 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 from typing import Any
+
+
+class CertificateNotFoundError(LookupError):
+    """The route's unknown-id answer, where the route supplies none of its own."""
 
 
 class CertificateSupersededError(LookupError):
@@ -75,103 +79,6 @@ def _may_read(conn: sqlite3.Connection, auth: Any, cert_id: str) -> bool:
     return bool({t.casefold() for t in parse_tags(scope_tag)} & effective)
 
 
-def _endpoint(hostname: Any, port: Any) -> tuple[str, int] | None:
-    """A canonical ``(hostname, port)``, or ``None`` when either is missing."""
-    import contextlib
-
-    from cert_watch.host_validation import canonical_hostname
-
-    if not hostname or port is None:
-        return None
-    name = str(hostname)
-    with contextlib.suppress(ValueError):
-        name = canonical_hostname(name)
-    try:
-        return name, int(port)
-    except (TypeError, ValueError):
-        return None
-
-
-def _row_endpoint(conn: sqlite3.Connection, cert_id: str) -> tuple[str, int] | None:
-    row = conn.execute(
-        "SELECT hostname, port FROM certificates WHERE id = ?", (cert_id,)
-    ).fetchone()
-    return _endpoint(row["hostname"], row["port"]) if row is not None else None
-
-
-# Renewal events for one replaced id. A payload that isn't valid JSON is
-# skipped (json_extract on it would raise and fail every mutation), via CASE
-# so the guard can't be reordered after the extraction.
-_RENEWAL_EVENTS = (
-    "SELECT CASE WHEN json_valid(payload) THEN json_extract(payload, '$.cert_id') END"
-    " AS cert_id,"
-    " CASE WHEN json_valid(payload) THEN json_extract(payload, '$.hostname') END AS hostname,"
-    " CASE WHEN json_valid(payload) THEN json_extract(payload, '$.port') END AS port"
-    " FROM event_log WHERE event_type = 'cert_renewed'"
-    " AND CASE WHEN json_valid(payload)"
-    " THEN json_extract(payload, '$.replaced_cert_id') END = ?"
-)
-
-
-def current_head(conn: sqlite3.Connection, cert_id: str) -> str | None:
-    """The current certificate renewal lineage leads to from *cert_id*, or
-    ``None``. Reads only on *conn*.
-
-    Every hop is bound to one endpoint: the addressed certificate's
-    ``(hostname, port)`` when its row still exists, else the first hop's.
-    A successor row or ``cert_renewed`` event at another endpoint, a hop
-    without an endpoint, more than one candidate successor, a lineage that
-    loops, or one that dead-ends in a deleted row all fail closed: ``None``,
-    so the id is treated as not superseded (never redirected elsewhere).
-    """
-    endpoint = _row_endpoint(conn, cert_id) if _exists(conn, cert_id) else None
-    seen = {cert_id}
-    current = cert_id
-    while True:
-        rows = conn.execute(
-            "SELECT id, hostname, port FROM certificates "
-            "WHERE replaces_cert_id = ? AND id != ? AND is_leaf = 1",
-            (current, current),
-        ).fetchall()
-        if len(rows) > 1:
-            return None
-        if rows:
-            successor = str(rows[0]["id"])
-            hop_endpoint = _endpoint(rows[0]["hostname"], rows[0]["port"])
-        else:
-            events = conn.execute(_RENEWAL_EVENTS, (current,)).fetchall()
-            candidates = {
-                (str(e["cert_id"]), _endpoint(e["hostname"], e["port"]))
-                for e in events
-                if e["cert_id"]
-            }
-            if not candidates:
-                break
-            if len(candidates) > 1:
-                return None
-            ((successor, hop_endpoint),) = candidates
-            if _exists(conn, successor) and _row_endpoint(conn, successor) != hop_endpoint:
-                return None
-        if hop_endpoint is None:
-            return None
-        if endpoint is None:
-            endpoint = hop_endpoint
-        elif hop_endpoint != endpoint:
-            return None
-        if successor in seen:
-            return None
-        seen.add(successor)
-        current = successor
-    if current == cert_id or not _exists(conn, current):
-        return None
-    return current
-
-
-def _exists(conn: sqlite3.Connection, cert_id: str) -> bool:
-    row = conn.execute("SELECT 1 FROM certificates WHERE id = ?", (cert_id,)).fetchone()
-    return row is not None
-
-
 def ensure_not_superseded(
     conn: sqlite3.Connection,
     cert_id: str,
@@ -179,31 +86,31 @@ def ensure_not_superseded(
     auth: Any,
     hidden: Callable[[], Exception] | None = None,
 ) -> None:
-    """Raise :class:`CertificateSupersededError` if *cert_id* was renewed away.
+    """Refuse a write addressed to a renewed-away (or invalid-lineage) id.
 
     *conn* must be the connection that performs the guarded write, inside a
     ``BEGIN IMMEDIATE`` transaction it has not yet committed. Only reads on
-    *conn*; never commits. When the caller may not see the current
-    certificate, raises ``hidden()`` -- the route's unknown-id error -- if
-    given, else returns (for an addressed row that no longer exists that is
-    already the unknown-id path).
+    *conn*; never commits. ``hidden()`` is the route's unknown-id error; it
+    defaults to :class:`CertificateNotFoundError`.
     """
-    head = current_head(conn, cert_id)
-    if head is None:
+    from cert_watch.database.cert_lineage import navigation_hint, row_lineage
+
+    unknown = hidden or (lambda: CertificateNotFoundError("certificate not found"))
+    lineage = row_lineage(conn, cert_id)
+    if lineage.kind == "current":
         return
-    # Out of scope for the addressed row (when it still exists) or for the
-    # head: the unknown-id answer -- authorization comes before any lookup
-    # a caller could learn from (#112).
-    addressed_exists = conn.execute(
-        "SELECT 1 FROM certificates WHERE id = ?", (cert_id,)
-    ).fetchone()
-    if (addressed_exists and not _may_read(conn, auth, cert_id)) or not _may_read(
-        conn, auth, head
-    ):
-        if hidden is not None:
-            raise hidden()
-        return
-    raise CertificateSupersededError(cert_id, head)
+    if lineage.kind == "invalid":
+        raise unknown()
+    if lineage.kind == "superseded":
+        assert lineage.head is not None
+        if _may_read(conn, auth, cert_id) and _may_read(conn, auth, lineage.head):
+            raise CertificateSupersededError(cert_id, lineage.head)
+        raise unknown()
+    # Missing: no write can happen; only the answer may name the certificate
+    # that replaced it, when the hint resolves and the caller may see it.
+    head = navigation_hint(conn, cert_id)
+    if head is not None and _may_read(conn, auth, head):
+        raise CertificateSupersededError(cert_id, head)
 
 
 def refuse_if_superseded(

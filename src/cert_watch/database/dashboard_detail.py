@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -87,65 +86,26 @@ def _current_leaf_for_endpoint(conn: Any, hostname: str, port: int) -> str | Non
     return str(row["id"]) if row is not None else None
 
 
-def _endpoint_from_alerts(conn: Any, stale_id: str) -> tuple[str, int] | None:
-    """The one endpoint the alerts on *stale_id* name, or ``None``.
-
-    A scanned certificate's dedupe key is ``<rule>:<host>:<port>:...`` (see
-    ``certificate_alert_key``). Each port monitored under the alert's host
-    name is matched against that prefix exactly; an alert without a key, or
-    keys naming no single endpoint, resolve nothing rather than guess.
-    """
-    rows = conn.execute(
-        "SELECT hostname, dedupe_key FROM alerts "
-        "WHERE (cert_id = ? OR trigger_cert_id = ?) AND hostname != '' "
-        "AND dedupe_key IS NOT NULL",
-        (stale_id, stale_id),
-    ).fetchall()
-    endpoints: set[tuple[str, int]] = set()
-    from cert_watch.host_validation import canonical_hostname
-
-    for row in rows:
-        # Stored host names are canonical (migration 0038 rewrote alerts and
-        # their keys); canonicalize again so a row written before it still
-        # joins the canonical hosts and certificates rows.
-        hostname = str(row["hostname"])
-        with contextlib.suppress(ValueError):
-            hostname = canonical_hostname(hostname)
-        _, _, identity = str(row["dedupe_key"]).partition(":")
-        ports = conn.execute(
-            "SELECT port FROM hosts WHERE hostname = ? "
-            "UNION SELECT port FROM certificates WHERE hostname = ? AND is_leaf = 1",
-            (hostname, hostname),
-        ).fetchall()
-        for port_row in ports:
-            if port_row["port"] is not None and identity.startswith(
-                f"{hostname}:{int(port_row['port'])}:"
-            ):
-                endpoints.add((hostname, int(port_row["port"])))
-    return endpoints.pop() if len(endpoints) == 1 else None
-
-
 def resolve_current_certificate(
     db_path: str | Path, stale_id: str
 ) -> CurrentCertificateRef | None:
-    """Map an id with no certificate row to the endpoint's current leaf.
+    """Map an id with no certificate row to the certificate to show instead.
 
-    Certificate ids change when a certificate is renewed (and, before #113,
-    on every rescan), so links to them go stale. The endpoint survives, and
-    each of these still records which endpoint an old id belonged to:
+    1. A host id (the stable address of an endpoint) opens the endpoint's
+       current certificate.
+    2. A certificate id that renewals replaced opens the certificate they
+       lead to, found by :func:`~cert_watch.database.cert_lineage.navigation_hint`
+       -- the same resolver the mutation routes use for their "renewed,
+       nothing was changed" answer, so the two never disagree. It follows
+       lineage only from the id's own issuance event, on that endpoint, one
+       unambiguous step at a time; anything else resolves to nothing.
 
-    1. a host id (the stable address of an endpoint);
-    2. the successor row, whose ``replaces_cert_id`` names the old id;
-    3. the ``cert_added`` / ``cert_renewed`` lifecycle event written when the
-       id was issued (kept for the event-log retention period);
-    4. an alert that fired on the id. Alerts record the host name but no
-       port column, so the endpoint is taken from the alert's dedupe key,
-       which names ``host:port`` for a scanned certificate. The host name
-       alone is never enough: it can't tell ``host:443`` from ``host:8443``.
-
-    Returns ``None`` when none of them knows the id. Performs no scope
-    check: the caller must authorize the returned certificate.
+    An id whose certificate was deleted (not renewed), or whose events have
+    aged out of the event log, is not resolved. Performs no scope check: the
+    caller must authorize the returned certificate.
     """
+    from cert_watch.database.cert_lineage import navigation_hint
+
     init_schema(db_path)
     with _connect(db_path) as conn:
         host = conn.execute(
@@ -154,43 +114,8 @@ def resolve_current_certificate(
         if host is not None:
             current = _current_leaf_for_endpoint(conn, host["hostname"], host["port"])
             return CurrentCertificateRef(current, superseded=False) if current else None
-
-        successor = conn.execute(
-            "SELECT hostname, port FROM certificates "
-            "WHERE replaces_cert_id = ? AND is_leaf = 1 AND hostname IS NOT NULL",
-            (stale_id,),
-        ).fetchone()
-        endpoint: tuple[str, int] | None = (
-            (successor["hostname"], successor["port"]) if successor is not None else None
-        )
-
-        if endpoint is None:
-            # CASE WHEN json_valid: a malformed payload is skipped instead of
-            # raising (and failing every stale link) -- #115 review.
-            event = conn.execute(
-                "SELECT CASE WHEN json_valid(payload) THEN "
-                "json_extract(payload, '$.hostname') END AS hostname, "
-                "CASE WHEN json_valid(payload) THEN "
-                "json_extract(payload, '$.port') END AS port FROM event_log "
-                "WHERE event_type IN ('cert_added', 'cert_renewed') "
-                "AND CASE WHEN json_valid(payload) THEN "
-                "(json_extract(payload, '$.cert_id') = ? "
-                "OR json_extract(payload, '$.replaced_cert_id') = ?) END "
-                "ORDER BY id DESC LIMIT 1",
-                (stale_id, stale_id),
-            ).fetchone()
-            if event is not None and event["hostname"] and event["port"] is not None:
-                endpoint = (str(event["hostname"]), int(event["port"]))
-
-        if endpoint is None:
-            endpoint = _endpoint_from_alerts(conn, stale_id)
-        if endpoint is None:
-            return None
-
-        current = _current_leaf_for_endpoint(conn, *endpoint)
-    if current is None or current == stale_id:
-        return None
-    return CurrentCertificateRef(current, superseded=True)
+        head = navigation_hint(conn, stale_id)
+    return CurrentCertificateRef(head, superseded=True) if head is not None else None
 
 
 def get_pending_host_detail_records(
