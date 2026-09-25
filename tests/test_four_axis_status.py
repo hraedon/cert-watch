@@ -805,6 +805,14 @@ def test_ungrouped_page_touches_scan_history_only_for_selected_endpoints(
         conn.create_function("cw_touch_scan_history", 1, count_touch)
 
     real_history_where = dashboard_page._history_where
+    where, params = real_history_where(
+        "sh", (("one.example.test", 443), ("two.example.test", 8443))
+    )
+    assert where == (
+        " WHERE (sh.hostname = ? AND sh.port = ?)"
+        " OR (sh.hostname = ? AND sh.port = ?)"
+    )
+    assert params == ["one.example.test", 443, "two.example.test", 8443]
 
     def instrumented_history_where(alias, endpoints):
         where, params = real_history_where(alias, endpoints)
@@ -1224,6 +1232,22 @@ def test_delivery_identities_are_admin_only_across_read_apis(
         )
         assert response.status_code == 200
         admin_bodies.append(response.json())
+
+        # Intermediates take a separate early-return path.  It must apply the
+        # same identity redaction as the leaf routing preview.
+        with _connect(db) as conn:
+            conn.execute("UPDATE certificates SET is_leaf = 0 WHERE id = ?", (cert_id,))
+            conn.commit()
+        client.cookies.delete(SESSION_COOKIE)
+        response = client.get(
+            f"/api/certificates/{cert_id}/alert-routing",
+            headers={"Authorization": f"Bearer {api_keys['read']}"},
+        )
+        assert response.status_code == 200
+        content = response.json()
+        assert "matched_groups" not in content
+        assert "recipients" not in content
+        assert all(secret not in json.dumps(content, sort_keys=True) for secret in secrets)
 
     admin_text = json.dumps(admin_bodies, sort_keys=True)
     assert secrets <= {secret for secret in secrets if secret in admin_text}
