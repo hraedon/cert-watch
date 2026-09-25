@@ -23,7 +23,7 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
-## Upgrading from 1.0.3 (unreleased)
+## Upgrading from 1.0.3 to 1.0.4
 
 The manual `renewed` host status has been removed. Operators can still mark a
 renewal `in_progress`, which suppresses renewal-stalled notices only; expiry
@@ -66,6 +66,14 @@ urgent items and says how many there are, and expanding a group in the
 issuer, owner or renewal-method views loads 100 rows at a time. Tag scopes
 now match tags stored with spaces (`staging, edge` is in scope `edge`)
 everywhere, as grouped Browse already did.
+
+Bulk actions now act only on what the caller may change. For a user whose
+role gives write access on some tags and read-only access on others, *Scan
+all*, *Mark all read* and *Flush* cover only the writable tags (they used to
+include read-only ones), and a user with no writable tag gets nothing selected.
+*Scan all*, adding hosts and CSV import report a `refused` count or per-row
+message when a host moves out of the caller's scope while its scan is running,
+instead of failing the whole request.
 
 One more behaviour change affects access control:
 
