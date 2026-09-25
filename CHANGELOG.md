@@ -2,7 +2,15 @@
 
 All notable changes to cert-watch are documented in this file.
 
-## [Unreleased]
+## [1.0.4] - 2026-09-25
+
+One set of numbers everywhere, stable certificate links, and two access-control
+fixes. Four schema migrations (0039-0042); read [UPGRADING.md](UPGRADING.md) first.
+Counts on Home, Browse, pivots, reports, posture and `/metrics` now come from one
+status rule (#113, #114); certificate ids survive unchanged rescans and links to a
+renewed certificate follow it (#113, #115); a `renewed` host status no longer mutes
+expiry alerts (#117); and every write a tag-scoped user can make re-checks their
+scope inside its database transaction (#122).
 
 ### Security
 
