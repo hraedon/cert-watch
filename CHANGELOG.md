@@ -26,9 +26,11 @@ All notable changes to cert-watch are documented in this file.
   for the returned page. Unknown four-axis values return HTTP 400 from the JSON
   APIs and are ignored with a notice in Browse (#126 S1).
 - Renewal history and alert-delivery evidence now produce the same state in
-  list rows, filters and counts. Renewal evidence is classified in the bounded
-  inventory query, and delivery uses the latest outcome for the configured,
-  normalized channel name (#126 S1).
+  list rows, filters and counts. Migration 0043 classifies each endpoint once
+  with the Python renewal classifier and persists its evidence; history writes
+  refresh it transactionally, and stale evidence fails closed to Unknown.
+  Delivery uses the latest outcome for the configured, normalized channel name
+  (#126 S1).
 - `GET /api/certificates/{id}/alert-routing` no longer exposes alert-group names
   or recipient addresses to viewer/operator sessions or read/write API keys.
   Non-admin callers receive delivery state, channel types and anonymous route

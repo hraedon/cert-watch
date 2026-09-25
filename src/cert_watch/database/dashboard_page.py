@@ -126,9 +126,9 @@ def inventory_candidates_sql(
     history_params: list[Any] = []
     if need_monitoring:
         history_where, history_params = _history_where("sh", history_endpoints)
-        # One ordered history pass supplies every monitoring fact.  The
-        # success key preserves the timestamp+id tie-break without six
-        # correlated probes per endpoint.
+        # One ordered history pass supplies every monitoring fact.  Keep the
+        # latest-success timestamp and id as separate typed values: joining
+        # them into one string makes ids such as 9 and 10 sort incorrectly.
         history_prefix = f"""
             history_ranked AS MATERIALIZED (
                 SELECT sh.*,
@@ -136,17 +136,25 @@ def inventory_candidates_sql(
                            PARTITION BY sh.hostname, sh.port
                            ORDER BY sh.scanned_at DESC, sh.id DESC
                        ) AS attempt_rank,
-                       MAX(CASE WHEN sh.status = 'success'
-                           THEN sh.scanned_at || char(31) || sh.id END) OVER (
+                       SUM(CASE WHEN sh.status = 'success' THEN 1 ELSE 0 END) OVER (
                            PARTITION BY sh.hostname, sh.port
-                       ) AS success_key
+                       ) AS success_count,
+                       FIRST_VALUE(sh.scanned_at) OVER (
+                           PARTITION BY sh.hostname, sh.port
+                           ORDER BY CASE WHEN sh.status = 'success' THEN 0 ELSE 1 END,
+                                    sh.scanned_at DESC, sh.id DESC
+                       ) AS success_scanned_at,
+                       FIRST_VALUE(sh.id) OVER (
+                           PARTITION BY sh.hostname, sh.port
+                           ORDER BY CASE WHEN sh.status = 'success' THEN 0 ELSE 1 END,
+                                    sh.scanned_at DESC, sh.id DESC
+                       ) AS success_id
                 FROM scan_history sh{history_where}
             ),
             history_summary AS MATERIALIZED (
                 SELECT hostname, port,
-                       CASE WHEN MAX(success_key) IS NULL THEN NULL ELSE
-                           substr(MAX(success_key), 1,
-                               instr(MAX(success_key), char(31)) - 1) END AS last_success,
+                       MAX(CASE WHEN success_count > 0 THEN success_scanned_at END)
+                           AS last_success,
                        MAX(CASE WHEN attempt_rank = 1 THEN scanned_at END)
                            AS latest_attempt,
                        MAX(CASE WHEN attempt_rank = 1 THEN status END)
@@ -154,125 +162,10 @@ def inventory_candidates_sql(
                        MAX(CASE WHEN attempt_rank = 1 THEN error_message END)
                            AS latest_error,
                        MIN(CASE WHEN status != 'success' AND (
-                           success_key IS NULL
-                           OR scanned_at > substr(success_key, 1,
-                               instr(success_key, char(31)) - 1)
-                           OR (scanned_at = substr(success_key, 1,
-                               instr(success_key, char(31)) - 1)
-                               AND id > substr(success_key,
-                                   instr(success_key, char(31)) + 1))
+                           success_count = 0
+                           OR (scanned_at, id) > (success_scanned_at, success_id)
                        ) THEN scanned_at END) AS first_failed
                 FROM history_ranked GROUP BY hostname, port
-            ),
-        """
-
-    if need_renewal:
-        renewal_where, renewal_params = _history_where("ch", history_endpoints)
-        history_params += renewal_params
-        # Renewal analytics are a candidate fact, not display-only context.
-        # One ordered history pass identifies contiguous fingerprint periods;
-        # the aggregate below mirrors renewal_analytics._classify_automation.
-        history_prefix += f"""
-            renewal_ordered AS MATERIALIZED (
-                SELECT ch.*,
-                       CASE WHEN LAG(ch.fingerprint_sha256) OVER (
-                           PARTITION BY ch.hostname, ch.port
-                           ORDER BY ch.scanned_at, ch.id
-                       ) IS NULL OR LAG(ch.fingerprint_sha256) OVER (
-                           PARTITION BY ch.hostname, ch.port
-                           ORDER BY ch.scanned_at, ch.id
-                       ) != ch.fingerprint_sha256 THEN 1 ELSE 0 END AS period_start
-                FROM cert_history ch{renewal_where}
-            ),
-            renewal_grouped AS MATERIALIZED (
-                SELECT *, SUM(period_start) OVER (
-                    PARTITION BY hostname, port ORDER BY scanned_at, id
-                    ROWS UNBOUNDED PRECEDING
-                ) AS period_no
-                FROM renewal_ordered
-            ),
-            renewal_period_rows AS MATERIALIZED (
-                SELECT *,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY hostname, port, period_no
-                           ORDER BY scanned_at, id
-                       ) AS first_rank,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY hostname, port, period_no
-                           ORDER BY CASE WHEN not_before IS NOT NULL
-                               AND not_after IS NOT NULL THEN 0 ELSE 1 END,
-                               scanned_at, id
-                       ) AS validity_rank
-                FROM renewal_grouped
-            ),
-            renewal_periods AS MATERIALIZED (
-                SELECT hostname, port, period_no,
-                       MIN(scanned_at) AS first_scanned_at,
-                       MAX(CASE WHEN first_rank = 1 THEN issuer END) AS issuer,
-                       MAX(CASE WHEN validity_rank = 1 THEN not_after END) AS not_after,
-                       MAX(CASE WHEN validity_rank = 1
-                           AND julianday(not_after) > julianday(not_before)
-                           THEN CAST(julianday(not_after) - julianday(not_before) AS INTEGER)
-                               + ((julianday(not_after) - julianday(not_before))
-                                  > CAST(julianday(not_after) - julianday(not_before)
-                                      AS INTEGER)) END) AS validity_days
-                FROM renewal_period_rows
-                GROUP BY hostname, port, period_no
-            ),
-            renewal_transitions AS MATERIALIZED (
-                SELECT *,
-                       LAG(first_scanned_at) OVER (
-                           PARTITION BY hostname, port ORDER BY period_no
-                       ) AS previous_first_scanned_at,
-                       LAG(not_after) OVER (
-                           PARTITION BY hostname, port ORDER BY period_no
-                       ) AS previous_not_after
-                FROM renewal_periods
-            ),
-            renewal_facts AS MATERIALIZED (
-                SELECT *,
-                       CASE WHEN previous_first_scanned_at IS NOT NULL
-                           AND julianday(first_scanned_at)
-                               > julianday(previous_first_scanned_at)
-                           THEN julianday(first_scanned_at)
-                               - julianday(previous_first_scanned_at) END AS cadence_days,
-                       CASE WHEN previous_first_scanned_at IS NOT NULL
-                           AND previous_not_after IS NOT NULL
-                           THEN julianday(previous_not_after)
-                               - julianday(first_scanned_at) END AS lead_days
-                FROM renewal_transitions
-            ),
-            renewal_aggregates AS MATERIALIZED (
-                SELECT hostname, port,
-                       COUNT(*) AS period_count,
-                       COUNT(validity_days) AS known_count,
-                       MAX(validity_days) AS max_lifetime,
-                       COUNT(cadence_days) AS cadence_count,
-                       COUNT(lead_days) AS lead_count,
-                       SUM(CASE WHEN lead_days <= 0 THEN 1 ELSE 0 END) AS late_count,
-                       AVG(cadence_days) AS cadence_avg,
-                       AVG(cadence_days * cadence_days) AS cadence_square_avg,
-                       MAX(CASE WHEN LOWER(COALESCE(issuer, '')) LIKE '%let''s encrypt%'
-                           OR LOWER(COALESCE(issuer, '')) LIKE '%zerossl%'
-                           OR LOWER(COALESCE(issuer, '')) LIKE '%buypass%'
-                           OR LOWER(COALESCE(issuer, '')) LIKE '%acme%'
-                           THEN 1 ELSE 0 END) AS has_acme_issuer
-                FROM renewal_facts GROUP BY hostname, port
-            ),
-            renewal_summary AS MATERIALIZED (
-                SELECT hostname, port,
-                       CASE
-                           WHEN period_count < 2 THEN 'unknown'
-                           WHEN known_count != period_count
-                               OR cadence_count != period_count - 1
-                               OR lead_count != period_count - 1 THEN 'unknown'
-                           WHEN max_lifetime > 90 OR late_count > 0 THEN 'manual'
-                           WHEN max_lifetime <= 90 AND cadence_count >= 2
-                               AND cadence_square_avg - cadence_avg * cadence_avg <= 9
-                               AND has_acme_issuer = 1 THEN 'likely-automated'
-                           ELSE 'manual'
-                       END AS automation_classification
-                FROM renewal_aggregates
             ),
         """
 
@@ -283,8 +176,8 @@ def inventory_candidates_sql(
         else ""
     )
     renewal_join = (
-        " LEFT JOIN renewal_summary rs"
-        " ON rs.hostname = h.hostname AND rs.port = h.port"
+        " LEFT JOIN endpoint_renewal_analytics ra"
+        " ON ra.hostname = h.hostname AND ra.port = h.port"
         if need_renewal
         else ""
     )
@@ -311,18 +204,18 @@ def inventory_candidates_sql(
         "cw_renewal_state(h.hostname, h.port, h.renewal_method, h.renewal_status,"
         " c.not_after, EXISTS(SELECT 1 FROM certificates succ"
         " WHERE succ.replaces_cert_id = c.id AND succ.id != c.id),"
-        " COALESCE(rs.automation_classification, 'unknown')) AS renewal"
+        " COALESCE(ra.classification, 'unknown')) AS renewal"
         if need_renewal
         else "NULL AS renewal"
     )
     pending_renewal_col = (
         "cw_renewal_state(h.hostname, h.port, h.renewal_method, h.renewal_status,"
-        " NULL, 0, COALESCE(rs.automation_classification, 'unknown')) AS renewal"
+        " NULL, 0, COALESCE(ra.classification, 'unknown')) AS renewal"
         if need_renewal
         else "NULL AS renewal"
     )
     renewal_analytics_col = (
-        "COALESCE(rs.automation_classification, 'unknown')"
+        "COALESCE(ra.classification, 'unknown')"
         if need_renewal
         else "'unknown'"
     )

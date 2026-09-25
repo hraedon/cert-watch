@@ -140,7 +140,7 @@ def test_upgrade_backfills_from_rows_and_retained_events(
 
     with caplog.at_level(logging.INFO, logger="cert_watch.migrations"):
         applied = run_pending_migrations(db, backup=False)
-    assert applied[-1] == "0042"
+    assert applied[-1] == "0043"
     assert _lineage_rows(db) == [("A", "B", _HOST, 443), ("Z", "A", _HOST, 443)]
     assert any(
         "recorded 1 renewal(s) from stored certificates and 1" in r.getMessage()

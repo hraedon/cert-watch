@@ -23,8 +23,14 @@ def dashboard_axis_stats(
     status: StatusContext | None = None,
     axes: StatusModelContext | None = None,
     axis_settings: AxisSettings | None = None,
+    axis_columns: frozenset[str] | None = None,
 ) -> dict[str, dict[str, int]]:
-    """Count each independent state from the same SQL candidates Browse uses."""
+    """Count requested states from the same SQL candidates Browse uses.
+
+    ``None`` retains the public all-axis behavior.  Page callers pass only
+    axes they display so an unrelated delivery or renewal classifier is not
+    evaluated estate-wide.
+    """
     status = status or prepare_status(db_path)
     axes = axes or prepare_status_model_context(
         db_path, certificate_status=status, settings=axis_settings
@@ -32,6 +38,7 @@ def dashboard_axis_stats(
     candidates = inventory_candidates_sql(
         q=q, source=source, scope_tags=scope_tags, status=status, axes=axes,
         sql_delivery=True,
+        axis_columns=axis_columns,
     )
     result = {
         "condition": dict.fromkeys(("expired", "le7", "8to30", "ok"), 0),
@@ -47,9 +54,11 @@ def dashboard_axis_stats(
     if candidates is None:
         return result
     sql, params = candidates
+    requested = set(result) if axis_columns is None else set(axis_columns)
     columns = {
         f"{axis}_{state}": (axis, state)
         for axis, states in result.items()
+        if axis in requested
         for state in states
     }
     aggregates = ", ".join(

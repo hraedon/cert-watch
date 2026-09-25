@@ -90,7 +90,11 @@ def home(
         scan_evidence=scan_evidence, status=status,
     )
     axis_stats = dashboard_axis_stats(
-        db, scope_tags=scope_tags, status=status, axes=axes
+        db,
+        scope_tags=scope_tags,
+        status=status,
+        axes=axes,
+        axis_columns=frozenset({"condition", "monitoring"}),
     )
     stats = {
         "expired": axis_stats["condition"]["expired"],

@@ -118,6 +118,9 @@ def _seed(tmp_path, db_name: str = "four-axis.sqlite3"):
                         not_before.isoformat(),
                     ),
                 )
+            from cert_watch.renewal_analytics import refresh_endpoint_analytics
+
+            refresh_endpoint_analytics(conn, host, 443)
         conn.commit()
     record_scan_history(
         db,
@@ -480,6 +483,65 @@ def test_delivery_uses_latest_outcome_per_normalized_channel(tmp_path):
     )["delivery"]["failing"] == 1
 
 
+def test_python_delivery_keeps_webhook_outcome_and_ignores_disabled_smtp(tmp_path):
+    from cert_watch.database import Alert, AlertStore
+    from cert_watch.database.delivery_evidence import begin_attempt, complete_attempt
+
+    db, _settings = _seed(tmp_path)
+    rows, _ = list_dashboard_page(db, per_page=0, now=NOW)
+    cert_id = _by_host(rows)["manual.example.test"]["id"]
+    alert_id = AlertStore(db).enqueue(
+        Alert(cert_id=cert_id, alert_type="expiry_warning", status="pending", message="m")
+    )
+    assert alert_id is not None
+
+    smtp = begin_attempt(db, alert_id, "smtp", {})
+    complete_attempt(db, smtp, {"outcome": "failed"})
+    webhook_only = AxisSettings(webhook_configured=True, webhook_kind="generic")
+    rows, _ = list_dashboard_page(db, per_page=0, now=NOW, axis_settings=webhook_only)
+    row = next(item for item in rows if item["id"] == cert_id)
+    assert row["delivery"] == "ok"
+    assert row["status"]["delivery"]["channels"][0]["last_outcome"] == "failed"
+
+    webhook = begin_attempt(db, alert_id, "webhook:generic", {})
+    complete_attempt(db, webhook, {"outcome": "partial"})
+    rows, _ = list_dashboard_page(db, per_page=0, now=NOW, axis_settings=webhook_only)
+    row = next(item for item in rows if item["id"] == cert_id)
+    assert row["delivery"] == "failing"
+    assert row["status"]["delivery"]["channels"][1]["last_outcome"] == "partial"
+
+
+def test_grouped_delivery_filter_and_overall_counts_use_required_axes(tmp_path):
+    from cert_watch.database import Alert, AlertStore, list_dashboard_grouped_page
+    from cert_watch.database.dashboard_axes import dashboard_axis_stats
+    from cert_watch.database.delivery_evidence import begin_attempt, complete_attempt
+
+    db, settings = _seed(tmp_path)
+    rows, _ = list_dashboard_page(db, per_page=0, now=NOW, axis_settings=settings)
+    cert_id = _by_host(rows)["manual.example.test"]["id"]
+    alert_id = AlertStore(db).enqueue(
+        Alert(cert_id=cert_id, alert_type="expiry_warning", status="pending", message="m")
+    )
+    assert alert_id is not None
+    attempt = begin_attempt(db, alert_id, "smtp", {})
+    complete_attempt(db, attempt, {"outcome": "failed"})
+
+    grouped, total = list_dashboard_grouped_page(
+        db, delivery="failing", per_page=0, now=NOW, axis_settings=settings
+    )
+    assert total == 1
+    assert grouped[0]["delivery"] == "failing"
+    assert grouped[0]["hosts"][0]["id"] == cert_id
+
+    overall = dashboard_axis_stats(
+        db,
+        status=prepare_status(db, NOW),
+        axis_settings=settings,
+        axis_columns=frozenset({"overall"}),
+    )["overall"]
+    assert overall["failing"] == 1
+
+
 @pytest.mark.parametrize(
     ("case", "settings", "owner", "tag", "group", "role", "expected"),
     [
@@ -661,16 +723,82 @@ def test_monitoring_failure_run_starts_after_latest_success_with_id_tiebreak(tmp
         db, ScanHistory("tie.example.test", 443, "failure", id="a", scanned_at=tied)
     )
     record_scan_history(
-        db, ScanHistory("tie.example.test", 443, "success", id="b", scanned_at=tied)
+        db,
+        ScanHistory(
+            "tie.example.test",
+            443,
+            "success",
+            id="b",
+            error_message="stale error from the second-latest attempt",
+            scanned_at=tied,
+        ),
     )
     rows, _ = list_dashboard_page(db, per_page=0, now=NOW)
     assert rows[0]["monitoring"] == "current"
     record_scan_history(
-        db, ScanHistory("tie.example.test", 443, "partial", id="c", scanned_at=later)
+        db,
+        ScanHistory(
+            "tie.example.test",
+            443,
+            "partial",
+            id="c",
+            error_message="latest connection failure",
+            scanned_at=later,
+        ),
     )
     rows, _ = list_dashboard_page(db, per_page=0, now=NOW)
     assert rows[0]["monitoring"] == "failing"
     assert rows[0]["status"]["monitoring"]["since"] == later.isoformat()
+    assert rows[0]["status"]["monitoring"]["raw_error"] == "latest connection failure"
+
+
+def test_ungrouped_page_touches_scan_history_only_for_selected_endpoints(
+    tmp_path, monkeypatch
+):
+    import cert_watch.database.dashboard_page as dashboard_page
+    from cert_watch.database import replace_scanned
+
+    db = tmp_path / "bounded-history.sqlite3"
+    init_schema(db)
+    hosts = SqliteHostRepository(db)
+    for index in range(40):
+        hostname = f"bounded-{index:02d}.example.test"
+        hosts.add(hostname, 443)
+        replace_scanned(db, hostname, 443, _cert(hostname, 90, f"fp-{index}"), [], True)
+        for attempt in range(3):
+            record_scan_history(
+                db,
+                ScanHistory(
+                    hostname,
+                    443,
+                    "success",
+                    scanned_at=NOW - timedelta(hours=attempt + 1),
+                ),
+            )
+
+    touched = 0
+
+    def count_touch(_row_id):
+        nonlocal touched
+        touched += 1
+        return 1
+
+    with _connect(db) as conn:
+        conn.create_function("cw_touch_scan_history", 1, count_touch)
+
+    real_history_where = dashboard_page._history_where
+
+    def instrumented_history_where(alias, endpoints):
+        where, params = real_history_where(alias, endpoints)
+        clause = f"cw_touch_scan_history({alias}.id)"
+        return (f"{where} AND {clause}" if where else f" WHERE {clause}"), params
+
+    monkeypatch.setattr(dashboard_page, "_history_where", instrumented_history_where)
+    rows, total = list_dashboard_page(db, per_page=5, page=1, now=NOW)
+
+    assert total == 40
+    assert len(rows) == 5
+    assert touched <= 15
 
 
 def test_self_referential_lineage_does_not_count_as_a_successor(tmp_path):

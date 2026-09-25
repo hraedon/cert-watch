@@ -145,7 +145,13 @@ def load_browse_page(
         page = max(1, min(page, total_pages))
 
     axis_stats = dashboard_axis_stats(
-        db_path, q=q, source=source, scope_tags=scope_tags, status=status, axes=axes
+        db_path,
+        q=q,
+        source=source,
+        scope_tags=scope_tags,
+        status=status,
+        axes=axes,
+        axis_columns=frozenset({"condition", "overall"}),
     )
     pivot_stats = dict(axis_stats["overall"])
 

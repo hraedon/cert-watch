@@ -1,9 +1,11 @@
 """Renewal analytics over the cert_history table."""
 from __future__ import annotations
 
+import json
+import sqlite3
 import statistics
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from math import ceil
 from pathlib import Path
 from typing import Any
@@ -241,6 +243,73 @@ def _compute_host_from_entries(
     )
 
 
+def _endpoint_entries(
+    conn: sqlite3.Connection, hostname: str, port: int
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """SELECT id, hostname, port, fingerprint_sha256, issuer, not_after,
+                  not_before, scanned_at
+           FROM cert_history
+           WHERE hostname = ? AND port = ?
+           ORDER BY scanned_at ASC, id ASC""",
+        (hostname, port),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def refresh_endpoint_analytics(
+    conn: sqlite3.Connection, hostname: str, port: int
+) -> HostRenewalAnalytics:
+    """Recompute and persist one endpoint's classifier result in *conn*.
+
+    The caller owns the transaction.  This is the only writer for
+    ``endpoint_renewal_analytics``; both the migration backfill and every
+    sanctioned ``cert_history`` mutation call it after changing history.
+    """
+    entries = _endpoint_entries(conn, hostname, port)
+    analytics = _compute_host_from_entries(hostname, entries, port=port)
+    latest = entries[-1] if entries else None
+    conn.execute(
+        """INSERT INTO endpoint_renewal_analytics
+               (hostname, port, classification, evidence_json,
+                observed_lifetimes_json, lifetime_trend,
+                renewal_lead_times_json, median_lead_time,
+                median_cadence_days, deployment_count, basis_history_count,
+                basis_latest_history_id, basis_latest_fingerprint, calculated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(hostname, port) DO UPDATE SET
+               classification = excluded.classification,
+               evidence_json = excluded.evidence_json,
+               observed_lifetimes_json = excluded.observed_lifetimes_json,
+               lifetime_trend = excluded.lifetime_trend,
+               renewal_lead_times_json = excluded.renewal_lead_times_json,
+               median_lead_time = excluded.median_lead_time,
+               median_cadence_days = excluded.median_cadence_days,
+               deployment_count = excluded.deployment_count,
+               basis_history_count = excluded.basis_history_count,
+               basis_latest_history_id = excluded.basis_latest_history_id,
+               basis_latest_fingerprint = excluded.basis_latest_fingerprint,
+               calculated_at = excluded.calculated_at""",
+        (
+            hostname,
+            port,
+            analytics.automation_classification,
+            json.dumps(analytics.classification_evidence, separators=(",", ":"), sort_keys=True),
+            json.dumps(analytics.observed_lifetimes, separators=(",", ":")),
+            analytics.lifetime_trend,
+            json.dumps(analytics.renewal_lead_times, separators=(",", ":")),
+            analytics.median_lead_time,
+            analytics.median_cadence_days,
+            analytics.cert_count,
+            len(entries),
+            str(latest["id"]) if latest is not None else None,
+            str(latest["fingerprint_sha256"]) if latest is not None else None,
+            datetime.now(UTC).isoformat(),
+        ),
+    )
+    return analytics
+
+
 def compute_host_analytics(
     db_path: str | Path,
     hostname: str,
@@ -273,7 +342,7 @@ def compute_host_analytics(
                 """SELECT hostname, fingerprint_sha256, issuer, not_after, not_before, scanned_at
                    FROM cert_history
                    WHERE hostname = ? AND port = ?
-                   ORDER BY scanned_at ASC""",
+                   ORDER BY scanned_at ASC, id ASC""",
                 (hostname, port),
             ).fetchall()
     elif scope_tags:
@@ -288,7 +357,7 @@ def compute_host_analytics(
         sql, params = _add_effective_tag_filter(
             sql, [hostname], scope_tags, col_cert=None, col_host="h.tags"
         )
-        sql += " ORDER BY ch.scanned_at ASC"
+        sql += " ORDER BY ch.scanned_at ASC, ch.id ASC"
         with _connect(db_path) as conn:
             rows = conn.execute(sql, params).fetchall()
     else:
@@ -297,7 +366,7 @@ def compute_host_analytics(
                 """SELECT hostname, fingerprint_sha256, issuer, not_after, not_before, scanned_at
                    FROM cert_history
                    WHERE hostname = ?
-                   ORDER BY scanned_at ASC""",
+                   ORDER BY scanned_at ASC, id ASC""",
                 (hostname,),
             ).fetchall()
 
@@ -323,7 +392,7 @@ def compute_fleet_analytics(
         sql, params = _add_effective_tag_filter(
             sql, [], scope_tags, col_cert=None, col_host="h.tags"
         )
-        sql += " ORDER BY ch.hostname, ch.port, ch.scanned_at ASC"
+        sql += " ORDER BY ch.hostname, ch.port, ch.scanned_at ASC, ch.id ASC"
         with _connect(db_path) as conn:
             rows = conn.execute(sql, params).fetchall()
     else:
@@ -333,7 +402,7 @@ def compute_fleet_analytics(
                           not_after, not_before, scanned_at
                    FROM cert_history
                    WHERE hostname IS NOT NULL
-                   ORDER BY hostname, port, scanned_at ASC"""
+                   ORDER BY hostname, port, scanned_at ASC, id ASC"""
             ).fetchall()
 
     from collections import defaultdict
@@ -372,7 +441,7 @@ def compute_endpoint_analytics(
                 conn.execute(
                     "SELECT hostname, port, fingerprint_sha256, issuer, not_after, "
                     "not_before, scanned_at FROM cert_history WHERE " + where
-                    + " ORDER BY hostname, port, scanned_at ASC",
+                    + " ORDER BY hostname, port, scanned_at ASC, id ASC",
                     [value for endpoint in chunk for value in endpoint],
                 ).fetchall()
             )
