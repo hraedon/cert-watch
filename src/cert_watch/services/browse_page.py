@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from cert_watch.database import (
+    dashboard_axis_stats,
     dashboard_urgency_stats,
     distinct_tags,
     get_posture_grades_for_certs,
@@ -18,6 +19,7 @@ from cert_watch.database import (
 )
 from cert_watch.database.chain_status_cache import prepare_status
 from cert_watch.scan_freshness import ScanEvidence, load_scan_evidence
+from cert_watch.status_model import AxisSettings, prepare_status_model_context
 
 _GLOBAL_VIEWS = frozenset({"issuer", "owner", "renewal_method", "calendar"})
 
@@ -42,6 +44,11 @@ class BrowsePageData:
     grouped: int
     posture_grades: dict[str, str]
     scan_evidence: dict[str, ScanEvidence]
+    axis_stats: dict[str, dict[str, int]] = field(default_factory=dict)
+    filter_condition: str = ""
+    filter_monitoring: str = ""
+    filter_renewal: str = ""
+    filter_delivery: str = ""
 
 
 def load_browse_page(
@@ -50,6 +57,10 @@ def load_browse_page(
     q: str | None,
     urgency: str | None,
     source: str | None,
+    condition: str | None = None,
+    monitoring: str | None = None,
+    renewal: str | None = None,
+    delivery: str | None = None,
     sort_by: str,
     sort_order: str,
     page: int,
@@ -58,17 +69,26 @@ def load_browse_page(
     scope_tags: tuple[str, ...],
     sched_hour: int,
     sched_min: int,
+    axis_settings: AxisSettings | None = None,
 ) -> BrowsePageData:
     """Fetch all read models needed for one Browse render."""
     if view in _GLOBAL_VIEWS:
-        q = urgency = source = None
+        q = urgency = source = condition = monitoring = renewal = delivery = None
     grouped = int(bool(grouped))
     # One status context for the whole render: every count, group, filter and
     # row below is judged at one instant with one chain status per row.
     status = prepare_status(db_path)
+    axis_settings = axis_settings or AxisSettings(
+        sched_hour=sched_hour, sched_min=sched_min,
+    )
+    axes = prepare_status_model_context(
+        db_path, certificate_status=status, settings=axis_settings
+    )
 
     pivot_groups = (
-        list_fleet_pivot(db_path, view, scope_tags=scope_tags, status=status)
+        list_fleet_pivot(
+            db_path, view, scope_tags=scope_tags, status=status, axes=axes
+        )
         if view in {"issuer", "owner", "renewal_method"}
         else None
     )
@@ -99,6 +119,11 @@ def load_browse_page(
             per_page=per_page,
             scope_tags=scope_tags,
             status=status,
+            axes=axes,
+            condition=condition,
+            monitoring=monitoring,
+            renewal=renewal,
+            delivery=delivery,
         )
         total_pages = max((total + per_page - 1) // per_page, 1)
         page = max(1, min(page, total_pages))
@@ -114,6 +139,11 @@ def load_browse_page(
             per_page=per_page,
             scope_tags=scope_tags,
             status=status,
+            axes=axes,
+            condition=condition,
+            monitoring=monitoring,
+            renewal=renewal,
+            delivery=delivery,
         )
         total_pages = max((total + per_page - 1) // per_page, 1)
         page = max(1, min(page, total_pages))
@@ -123,11 +153,21 @@ def load_browse_page(
             db_path, q=q, source=source, scope_tags=scope_tags, status=status
         )
 
+    axis_stats = dashboard_axis_stats(
+        db_path, q=q, source=source, scope_tags=scope_tags, status=status, axes=axes
+    )
+
     if pivot_groups is not None:
         tracked_total = total
     else:
         _, tracked_total = list_dashboard_page(
-            db_path, q=q, source=source, per_page=1, scope_tags=scope_tags, status=status
+            db_path,
+            q=q,
+            source=source,
+            per_page=1,
+            scope_tags=scope_tags,
+            status=status,
+            axes=axes,
         )
 
     is_global_view = pivot_groups is not None or calendar_data is not None
@@ -149,11 +189,16 @@ def load_browse_page(
         all_tags=distinct_tags(db_path, scope_tags=scope_tags),
         pivot_groups=pivot_groups,
         pivot_stats=pivot_stats,
+        axis_stats=axis_stats,
         pivot_view=view if is_global_view else "",
         calendar_data=calendar_data,
         filter_q=q or "",
         filter_urgency=urgency or "",
         filter_source=source or "",
+        filter_condition=condition or "",
+        filter_monitoring=monitoring or "",
+        filter_renewal=renewal or "",
+        filter_delivery=delivery or "",
         sort_by=sort_by,
         sort_order=sort_order,
         page=page,

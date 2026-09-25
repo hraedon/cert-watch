@@ -10,9 +10,20 @@ from typing import Any, cast
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from cert_watch.status_model import overall_state
 from cert_watch.tags import format_tags, parse_tags
 
 logger = logging.getLogger("cert_watch.routes.api")
+
+
+def status_api_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Copy a dashboard row with an honest compatibility status token."""
+    result = dict(row)
+    result["urgency"] = overall_state(row)
+    result["overall_state"] = result["urgency"]
+    if row.get("hosts"):
+        result["hosts"] = [status_api_row(child) for child in row["hosts"]]
+    return result
 
 
 def _normalize_pagination(page: int, limit: int, total: int) -> tuple[int, int, int, int]:
@@ -146,9 +157,20 @@ def _pagination_links(
     """Build HATEOAS pagination links for a JSON API response."""
     pages = (total + limit - 1) // limit if limit else 0
     base = str(request.base_url).rstrip("/") + path
-    links: dict[str, str | None] = {"self": f"{base}?page={page}&limit={limit}"}
-    links["next"] = f"{base}?page={page + 1}&limit={limit}" if page < pages else None
-    links["prev"] = f"{base}?page={page - 1}&limit={limit}" if page > 1 else None
+    from urllib.parse import urlencode
+
+    retained = [
+        (key, value)
+        for key, value in request.query_params.multi_items()
+        if key not in {"page", "limit"}
+    ]
+
+    def link(target: int) -> str:
+        return f"{base}?{urlencode([*retained, ('page', target), ('limit', limit)])}"
+
+    links: dict[str, str | None] = {"self": link(page)}
+    links["next"] = link(page + 1) if page < pages else None
+    links["prev"] = link(page - 1) if page > 1 else None
     return links
 
 

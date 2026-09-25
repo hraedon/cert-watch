@@ -73,7 +73,7 @@
 <div class="cw-page-head">
   <div>
     <h1 data-testid="dashboard-heading">Certificates</h1>
-    <div class="cw-page-head-sub">Status covers expiry and chain trust. Grades describe the last TLS scan.</div>
+    <div class="cw-page-head-sub">Condition, monitoring, renewal, and delivery are four status axes. Grades describe the last TLS scan.</div>
   </div>
   <div class="cw-page-actions">
     <div class="cw-menuwrap">
@@ -132,7 +132,7 @@ Tracked</span>
 
 
 
-<a href="/browse?urgency=expired&amp;sort_by=days&amp;sort_order=asc&amp;grouped=0" class="cw-stat">
+<a href="/browse?condition=expired&amp;sort_by=days&amp;sort_order=asc&amp;grouped=0" class="cw-stat">
   <span class="cw-stat-label">
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
@@ -144,38 +144,38 @@ Expired</span>
 
 
 
-<a href="/browse?urgency=critical&amp;sort_by=days&amp;sort_order=asc&amp;grouped=0" class="cw-stat">
+<a href="/browse?condition=le7&amp;sort_by=days&amp;sort_order=asc&amp;grouped=0" class="cw-stat">
   <span class="cw-stat-label">
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
 
-Critical</span>
+≤7 days</span>
   <div class="cw-stat-val t-crit">1</div>
-  <div class="cw-stat-sub">&lt; 7 days</div>
+  <div class="cw-stat-sub">expiry condition</div>
 </a>
 
 
 
-<a href="/browse?urgency=warning&amp;sort_by=days&amp;sort_order=asc&amp;grouped=0" class="cw-stat">
+<a href="/browse?condition=8to30&amp;sort_by=days&amp;sort_order=asc&amp;grouped=0" class="cw-stat">
   <span class="cw-stat-label">
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v5l3 2"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
 
-Warning</span>
-  <div class="cw-stat-val t-warn">3</div>
-  <div class="cw-stat-sub">expiry or trust issue</div>
+8–30 days</span>
+  <div class="cw-stat-val t-warn">1</div>
+  <div class="cw-stat-sub">expiry condition</div>
 </a>
 
 
 
-<a href="/browse?urgency=healthy&amp;sort_by=days&amp;sort_order=asc&amp;grouped=0" class="cw-stat">
+<a href="/browse?condition=ok&amp;sort_by=days&amp;sort_order=asc&amp;grouped=0" class="cw-stat">
   <span class="cw-stat-label">
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
 
-Healthy</span>
-  <div class="cw-stat-val">0</div>
-  <div class="cw-stat-sub">30+ days · trusted chain</div>
+OK</span>
+  <div class="cw-stat-val t-ok">2</div>
+  <div class="cw-stat-sub">more than 30 days</div>
 </a>
 
   </div>
@@ -186,6 +186,10 @@ Healthy</span>
     <form method="get" action="/browse" class="cw-chiprow">
     <input type="hidden" name="urgency" value="">
     <input type="hidden" name="source" value="">
+
+
+
+
     <input type="hidden" name="sort_by" value="days">
     <input type="hidden" name="sort_order" value="asc">
     <input type="hidden" name="grouped" value="0">
@@ -296,9 +300,11 @@ Uploaded</span>
 
   </div>
 </td>
-            <td data-label="Status"><span class="cw-status t-expired">
+            <td data-label="Status">
+  <span class="cw-status t-expired">
   <span class="dot" aria-hidden="true"></span>Expired
 </span>
+
 
 </td>
             <td data-label="Grade">
@@ -368,9 +374,11 @@ Uploaded</span>
 
   </div>
 </td>
-            <td data-label="Status"><span class="cw-status t-crit">
-  <span class="dot" aria-hidden="true"></span>Critical
+            <td data-label="Status">
+  <span class="cw-status t-crit">
+  <span class="dot" aria-hidden="true"></span>≤7 days
 </span>
+
 
 </td>
             <td data-label="Grade">
@@ -440,9 +448,11 @@ Uploaded</span>
 
   </div>
 </td>
-            <td data-label="Status"><span class="cw-status t-warn">
-  <span class="dot" aria-hidden="true"></span>Warning
+            <td data-label="Status">
+  <span class="cw-status t-warn">
+  <span class="dot" aria-hidden="true"></span>8–30 days
 </span>
+
 
 </td>
             <td data-label="Grade">
@@ -538,9 +548,11 @@ Scanned</span>
 
   </div>
 </td>
-            <td data-label="Status"><span class="cw-status t-warn">
-  <span class="dot" aria-hidden="true"></span>Warning
+            <td data-label="Status">
+  <span class="cw-status t-ok">
+  <span class="dot" aria-hidden="true"></span>OK
 </span>
+
 
 
     <div class="cw-sub cw-muted">Current scan</div>
@@ -622,9 +634,11 @@ Uploaded</span>
 
   </div>
 </td>
-            <td data-label="Status"><span class="cw-status t-warn">
-  <span class="dot" aria-hidden="true"></span>Warning
+            <td data-label="Status">
+  <span class="cw-status t-ok">
+  <span class="dot" aria-hidden="true"></span>OK
 </span>
+
 
 </td>
             <td data-label="Grade">
@@ -703,9 +717,11 @@ Monitored</span>
 
   </div>
 </td>
-            <td data-label="Status"><span class="cw-status t-muted">
-  <span class="dot" aria-hidden="true"></span>Unknown
+            <td data-label="Status">
+  <span class="cw-status t-crit">
+  <span class="dot" aria-hidden="true"></span>Scan failing
 </span>
+
 
 
     <div class="cw-sub t-warn">No successful scan</div>

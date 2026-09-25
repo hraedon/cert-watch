@@ -18,6 +18,7 @@ from cert_watch.database import (
 )
 from cert_watch.routes._deps import _db_path, _get_settings
 from cert_watch.routes._scoped import scope_tags_from_auth
+from cert_watch.status_model import AxisSettings
 
 logger = logging.getLogger("cert_watch.routes.api.insights")
 
@@ -88,7 +89,13 @@ def api_pivot_group_entries(
     from cert_watch.database import get_pivot_group_page
 
     entries, total = get_pivot_group_page(
-        db, pivot, group_key, scope_tags=scope_tags, page=page, per_page=per_page
+        db,
+        pivot,
+        group_key,
+        scope_tags=scope_tags,
+        page=page,
+        per_page=per_page,
+        axis_settings=AxisSettings.from_settings(_get_settings(request)),
     )
     # Strip internal _pivot_key field; add the label so the JS consumer
     # doesn't duplicate the status rule (WI-071). The row keeps the urgency

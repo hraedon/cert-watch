@@ -61,10 +61,9 @@ def test_browse_expiry_language_does_not_claim_operational_health(
     page: Page, cert_watch_server: str
 ) -> None:
     page.goto(f"{cert_watch_server}/browse")
-    expect(page.locator(".cw-stats")).to_contain_text("30+ days · trusted chain")
-    expect(page.locator(".cw-page-head-sub")).to_contain_text(
-        "Status covers expiry and chain trust"
-    )
+    expect(page.locator(".cw-stats")).to_contain_text("more than 30 days")
+    expect(page.locator(".cw-stats")).not_to_contain_text("trusted chain")
+    expect(page.locator(".cw-page-head-sub")).to_contain_text("four status axes")
 
 
 def test_dense_mobile_rows_and_authenticated_chrome_fit(

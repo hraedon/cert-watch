@@ -14,9 +14,10 @@ from cert_watch.auth.guards import require_auth
 from cert_watch.compliance import build_compliance_report, report_to_csv_rows, report_to_dict
 from cert_watch.database import SqliteHostRepository, list_dashboard_page
 from cert_watch.readiness import build_readiness_report, readiness_report_to_dict
-from cert_watch.routes._deps import _csv_safe, _db_path
+from cert_watch.routes._deps import _csv_safe, _db_path, _get_settings
 from cert_watch.routes._scoped import enforce_scope_tag, scope_tags_from_auth
-from cert_watch.routes.api._shared import compliance_signing_key
+from cert_watch.routes.api._shared import compliance_signing_key, status_api_row
+from cert_watch.status_model import AxisSettings, overall_state
 
 logger = logging.getLogger("cert_watch.routes.api.reports")
 
@@ -65,7 +66,10 @@ def api_export_certificates_csv(
     """Export all certificates as CSV for compliance reporting."""
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
-    rows, _ = list_dashboard_page(db, per_page=100000, scope_tags=scope_tags)
+    rows, _ = list_dashboard_page(
+        db, per_page=100000, scope_tags=scope_tags,
+        axis_settings=AxisSettings.from_settings(_get_settings(request)),
+    )
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(
@@ -76,8 +80,12 @@ def api_export_certificates_csv(
             "issuer",
             "not_after",
             "days_remaining",
-            "urgency",
+            "overall_status",
             "chain_valid",
+            "condition",
+            "monitoring",
+            "renewal",
+            "delivery",
         ]
     )
     for r in rows:
@@ -89,8 +97,12 @@ def api_export_certificates_csv(
                 _csv_safe(r["issuer"]),
                 _csv_safe(r["not_after"]),
                 _csv_safe(r["days_remaining"]),
-                _csv_safe(r["urgency"]),
+                _csv_safe(overall_state(r)),
                 _csv_safe(r.get("chain_valid", "")),
+                _csv_safe(r.get("condition", "")),
+                _csv_safe(r.get("monitoring", "")),
+                _csv_safe(r.get("renewal", "")),
+                _csv_safe(r.get("delivery", "")),
             ]
         )
         for chain in r.get("chain", []):
@@ -120,9 +132,12 @@ def api_export_certificates_json(
     """Export all certificates as JSON for compliance reporting."""
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
-    rows, _ = list_dashboard_page(db, per_page=100000, scope_tags=scope_tags)
+    rows, _ = list_dashboard_page(
+        db, per_page=100000, scope_tags=scope_tags,
+        axis_settings=AxisSettings.from_settings(_get_settings(request)),
+    )
     return JSONResponse(
-        content={"certificates": rows},
+        content={"certificates": [status_api_row(row) for row in rows]},
         headers={"Content-Disposition": "attachment; filename=certificates.json"},
     )
 
@@ -134,7 +149,10 @@ def api_report_inventory_csv(
     """Full certificate inventory as CSV for audit/compliance reporting."""
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
-    rows, _ = list_dashboard_page(db, per_page=100000, scope_tags=scope_tags)
+    rows, _ = list_dashboard_page(
+        db, per_page=100000, scope_tags=scope_tags,
+        axis_settings=AxisSettings.from_settings(_get_settings(request)),
+    )
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(
@@ -151,6 +169,10 @@ def api_report_inventory_csv(
             "chain_valid",
             "fingerprint_sha256",
             "tags",
+            "condition",
+            "monitoring",
+            "renewal",
+            "delivery",
         ]
     )
     for r in rows:
@@ -168,6 +190,10 @@ def api_report_inventory_csv(
                 _csv_safe(r.get("chain_valid", "")),
                 _csv_safe(r.get("fingerprint_sha256", "")),
                 _csv_safe(r.get("tags", "")),
+                _csv_safe(r.get("condition", "")),
+                _csv_safe(r.get("monitoring", "")),
+                _csv_safe(r.get("renewal", "")),
+                _csv_safe(r.get("delivery", "")),
             ]
         )
     return PlainTextResponse(
@@ -187,7 +213,10 @@ def api_report_expiring_csv(
     days = max(1, min(days, 365))
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
-    rows, _ = list_dashboard_page(db, per_page=100000, scope_tags=scope_tags)
+    rows, _ = list_dashboard_page(
+        db, per_page=100000, scope_tags=scope_tags,
+        axis_settings=AxisSettings.from_settings(_get_settings(request)),
+    )
     expiring = [
         r
         for r in rows
@@ -247,6 +276,7 @@ def api_compliance_report_json(
         version=__version__,
         commit=__commit__,
         signing_key=signing_key,
+        axis_settings=AxisSettings.from_settings(_get_settings(request)),
     )
     return JSONResponse(
         content=report_to_dict(report),
@@ -272,6 +302,7 @@ def api_compliance_report_csv(
         version=__version__,
         commit=__commit__,
         signing_key=signing_key,
+        axis_settings=AxisSettings.from_settings(_get_settings(request)),
     )
     output = io.StringIO()
     writer = csv.writer(output)

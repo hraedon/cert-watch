@@ -19,6 +19,7 @@ def _load_host_owner_maps(
     db_path: str | Path,
     *,
     conn: sqlite3.Connection | None = None,
+    endpoints: tuple[tuple[str, int], ...] | None = None,
 ) -> tuple[dict[tuple[str, int], int | None], dict[tuple[str, int], dict[str, Any]]]:
     """Load per-host threshold and owner/contact maps in a single query.
 
@@ -34,7 +35,16 @@ def _load_host_owner_maps(
     else:
         connection = nullcontext(conn)
     with connection as active_conn:
-        for row in active_conn.execute("SELECT * FROM hosts").fetchall():
+        sql = "SELECT * FROM hosts"
+        params: list[Any] = []
+        if endpoints is not None:
+            if not endpoints:
+                return {}, {}
+            sql += " WHERE " + " OR ".join(
+                "(hostname = ? AND port = ?)" for _ in endpoints
+            )
+            params = [value for endpoint in endpoints for value in endpoint]
+        for row in active_conn.execute(sql, params).fetchall():
             key = (row["hostname"], row["port"])
             d = dict(row)
             host_thresholds[key] = d.get("threshold_days")
@@ -308,12 +318,16 @@ def resolve_routing(
     """Resolve immutable, versioned routing snapshots for certificate IDs."""
     if not cert_ids:
         return {}
-    matched_groups: dict[str, list[str]] = {}
-    group_recipients, group_thresholds = _resolve_group_config(
-        db_path, matched_groups=matched_groups, cert_ids=cert_ids, conn=conn,
-    )
-    _, owners = _load_host_owner_maps(db_path, conn=conn)
-    role_members = _load_role_user_emails(db_path, conn=conn)
+    # Keep every ``IN`` list below SQLite's conservative parameter ceiling.
+    # This also gives status/filter callers one supported batch API for large
+    # estates instead of reimplementing recipient matching (#126 S1).
+    if len(cert_ids) > 350:
+        resolved: dict[str, dict[str, Any]] = {}
+        for start in range(0, len(cert_ids), 350):
+            resolved.update(
+                resolve_routing(db_path, cert_ids[start : start + 350], conn=conn)
+            )
+        return resolved
     placeholders = ",".join("?" for _ in cert_ids)
     connection: AbstractContextManager[sqlite3.Connection]
     if conn is None:
@@ -332,6 +346,19 @@ def resolve_routing(
     endpoints = {
         row["id"]: (row["hostname"], row["port"]) for row in cert_rows
     }
+    endpoint_keys = tuple(
+        dict.fromkeys(
+            (str(hostname), int(port))
+            for hostname, port in endpoints.values()
+            if hostname is not None and port is not None
+        )
+    )
+    matched_groups: dict[str, list[str]] = {}
+    group_recipients, group_thresholds = _resolve_group_config(
+        db_path, matched_groups=matched_groups, cert_ids=cert_ids, conn=conn,
+    )
+    _, owners = _load_host_owner_maps(db_path, conn=conn, endpoints=endpoint_keys)
+    role_members = _load_role_user_emails(db_path, conn=conn)
     group_names = {row["id"]: row["name"] for row in group_rows}
     snapshots: dict[str, dict[str, Any]] = {}
     for cert_id in cert_ids:

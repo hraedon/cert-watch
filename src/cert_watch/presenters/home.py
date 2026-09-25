@@ -63,6 +63,7 @@ class HomeView:
     queue: tuple[AttentionItemView, ...]
     queue_total: int
     stats: dict[str, int]
+    axis_stats: dict[str, dict[str, int]]
     tracked_total: int
     scan_coverage: ScanCoverageView
     horizon: tuple[HorizonBucketView, ...]
@@ -78,6 +79,7 @@ class HomeView:
             "queue": list(self.queue),
             "queue_total": self.queue_total,
             "stats": self.stats,
+            "axis_stats": self.axis_stats,
             "tracked_total": self.tracked_total,
             "scan_coverage": self.scan_coverage,
             "horizon": list(self.horizon),
@@ -123,6 +125,7 @@ def present_home(
     *,
     queue: list[dict[str, Any]],
     stats: dict[str, int],
+    axis_stats: dict[str, dict[str, int]] | None = None,
     queue_total: int | None = None,
     tracked_total: int,
     scan_coverage: dict[str, int],
@@ -167,6 +170,7 @@ def present_home(
         queue=tuple(_present_attention_item(item) for item in queue),
         queue_total=len(queue) if queue_total is None else queue_total,
         stats=stats,
+        axis_stats=axis_stats or {},
         tracked_total=tracked_total,
         scan_coverage=ScanCoverageView(**scan_coverage),
         horizon=tuple(horizon),

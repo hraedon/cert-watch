@@ -62,6 +62,7 @@ def _build_unified_from_dash(
             "renewal_method": dict(h).get("renewal_method", ""),
             "runbook_url": dict(h).get("runbook_url", ""),
             "notes": dict(h).get("notes", ""),
+            "scan_interval_hours": dict(h).get("scan_interval_hours"),
         }
         if host_key in scanned_map:
             row = scanned_map[host_key]
@@ -143,6 +144,7 @@ def _build_pending_entries(host_rows: list[Any], scan_rows: list[Any]) -> list[d
             "renewal_method": dict(h).get("renewal_method", ""),
             "runbook_url": dict(h).get("runbook_url", ""),
             "notes": dict(h).get("notes", ""),
+            "scan_interval_hours": dict(h).get("scan_interval_hours"),
         }
         entries.append({
             "id": h["id"],

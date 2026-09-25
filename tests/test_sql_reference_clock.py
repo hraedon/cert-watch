@@ -108,7 +108,12 @@ def test_sql_urgency_matches_python_days_remaining(
                 group = groups[f"CA for {name}"]
                 days = _python_days(delta)
                 assert group["earliest_expiry"] == days, name
-                assert group["worst_urgency"] == _python_urgency(days), name
+                expected = _python_urgency(days)
+                # Seeded endpoints have no scan observation. The pivot's
+                # overall status must not call an unobserved endpoint healthy.
+                assert group["worst_urgency"] == (
+                    "gray" if expected == "healthy" else expected
+                ), name
 
         # Home expiry cards: SQL CASE buckets.
         assert dashboard_expiry_stats(db, **kwargs) == _expected_buckets()

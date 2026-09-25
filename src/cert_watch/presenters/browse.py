@@ -50,6 +50,13 @@ class BrowseEntryView:
     scan_status: str | None
     scan_error: str | None
     last_scanned_at: str | None
+    status: dict[str, Any]
+    condition: str | None
+    monitoring: str
+    renewal: str
+    delivery: str
+    overall_label: str
+    overall_tone: str
 
     def __getitem__(self, key: str) -> Any:
         """Retain the prior read-only mapping access for route-level tests."""
@@ -96,6 +103,7 @@ class BrowseView:
     all_tags: tuple[str, ...]
     pivot_groups: tuple[PivotGroupView, ...] | None
     pivot_stats: dict[str, int]
+    axis_stats: dict[str, dict[str, int]]
     pivot_view: str
     calendar_data: tuple[CalendarBucketView, ...] | None
     current_week_start: str
@@ -103,6 +111,10 @@ class BrowseView:
     filter_q: str
     filter_urgency: str
     filter_source: str
+    filter_condition: str
+    filter_monitoring: str
+    filter_renewal: str
+    filter_delivery: str
     sort_by: str
     sort_order: str
     page: int
@@ -125,6 +137,10 @@ class BrowseView:
             "q": self.filter_q or None,
             "urgency": self.filter_urgency or None,
             "source": self.filter_source or None,
+            "condition": self.filter_condition or None,
+            "monitoring": self.filter_monitoring or None,
+            "renewal": self.filter_renewal or None,
+            "delivery": self.filter_delivery or None,
             "sort_by": self.sort_by,
             "sort_order": self.sort_order,
             "grouped": self.grouped,
@@ -142,6 +158,7 @@ class BrowseView:
                 list(self.pivot_groups) if self.pivot_groups is not None else None
             ),
             "pivot_stats": self.pivot_stats,
+            "axis_stats": self.axis_stats,
             "pivot_view": self.pivot_view,
             "calendar_data": (
                 list(self.calendar_data) if self.calendar_data is not None else None
@@ -151,6 +168,10 @@ class BrowseView:
             "filter_q": self.filter_q,
             "filter_urgency": self.filter_urgency,
             "filter_source": self.filter_source,
+            "filter_condition": self.filter_condition,
+            "filter_monitoring": self.filter_monitoring,
+            "filter_renewal": self.filter_renewal,
+            "filter_delivery": self.filter_delivery,
             "sort_by": self.sort_by,
             "sort_order": self.sort_order,
             "page": self.page,
@@ -217,6 +238,22 @@ def _present_entry(
     deduped = tuple(str(san) for san in san_items if san != (name or host))
     renewal_method = str(raw.get("renewal_method") or "")
     days_remaining = raw.get("days_remaining")
+    raw_status = raw.get("status")
+    status: dict[str, Any] = raw_status if isinstance(raw_status, dict) else {}
+    raw_condition = raw.get("condition")
+    condition = str(raw_condition) if raw_condition is not None else None
+    monitoring = str(raw.get("monitoring") or "never_scanned")
+    if raw.get("host_id") and monitoring == "failing":
+        overall_label, overall_tone = "Scan failing", "t-crit"
+    elif raw.get("host_id") and monitoring == "never_scanned":
+        overall_label, overall_tone = "Never scanned", "t-muted"
+    else:
+        overall_label, overall_tone = {
+            "expired": ("Expired", "t-expired"),
+            "le7": ("≤7 days", "t-crit"),
+            "8to30": ("8–30 days", "t-warn"),
+            "ok": ("OK", "t-ok"),
+        }.get(condition or "", ("Unknown", "t-muted"))
     return BrowseEntryView(
         id=str(raw.get("id") or ""),
         host_id=raw.get("host_id"),
@@ -255,6 +292,13 @@ def _present_entry(
         scan_status=raw.get("scan_status"),
         scan_error=raw.get("scan_error"),
         last_scanned_at=raw.get("last_scanned_at"),
+        status=status,
+        condition=condition,
+        monitoring=monitoring,
+        renewal=str(raw.get("renewal") or "unknown"),
+        delivery=str(raw.get("delivery") or "unrouted"),
+        overall_label=overall_label,
+        overall_tone=overall_tone,
     )
 
 
@@ -309,6 +353,7 @@ def present_browse(data: BrowsePageData, *, now: datetime | None = None) -> Brow
         all_tags=tuple(data.all_tags),
         pivot_groups=pivot_groups,
         pivot_stats=data.pivot_stats,
+        axis_stats=data.axis_stats,
         pivot_view=data.pivot_view,
         calendar_data=calendar,
         current_week_start=current_week_start,
@@ -316,6 +361,10 @@ def present_browse(data: BrowsePageData, *, now: datetime | None = None) -> Brow
         filter_q=data.filter_q,
         filter_urgency=data.filter_urgency,
         filter_source=data.filter_source,
+        filter_condition=data.filter_condition,
+        filter_monitoring=data.filter_monitoring,
+        filter_renewal=data.filter_renewal,
+        filter_delivery=data.filter_delivery,
         sort_by=data.sort_by,
         sort_order=data.sort_order,
         page=data.page,

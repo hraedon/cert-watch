@@ -399,6 +399,7 @@ def test_group_views_and_cards_do_not_build_the_estate(big_estate):
     from cert_watch.database import (
         dashboard_urgency_stats,
         get_pivot_group_entries,
+        list_dashboard_grouped_page,
         list_dashboard_page,
     )
     from cert_watch.services.browse_page import load_browse_page
@@ -423,6 +424,7 @@ def test_group_views_and_cards_do_not_build_the_estate(big_estate):
     assert built(lambda: get_pivot_group_entries(db, "owner", "Small")) == 2
     assert built(lambda: list_dashboard_page(db, per_page=25)) <= 25
     assert built(lambda: list_dashboard_page(db, urgency="warning", per_page=25)) <= 25
+    assert built(lambda: list_dashboard_grouped_page(db, per_page=25)) <= 25
 
 
 def test_steady_state_recomputes_no_chain_status(big_estate):

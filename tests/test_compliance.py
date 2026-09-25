@@ -966,8 +966,7 @@ class TestReportIssue113:
         assert "(uploaded)<" in html
 
     def test_bucket_edges_follow_the_status_thresholds(self, tmp_path, monkeypatch):
-        """7 days left is Warning (critical is < 7), so it is not listed as
-        expiring within 7 days; 30 days left is not within 30."""
+        """The four-axis condition bands include their 7- and 30-day edges."""
         from datetime import UTC, datetime, timedelta
 
         from cert_watch.certificate_model import Certificate
@@ -991,9 +990,9 @@ class TestReportIssue113:
             )
         report = build_compliance_report(str(db))
         buckets = {b.label: [e.subject for e in b.entries] for b in report.remediation_buckets}
-        assert buckets["Expiring within 7 days"] == []
-        assert buckets["Expiring within 30 days"] == ["CN=seven.example.test"]
-        assert buckets["Expiring within 90 days"] == ["CN=thirty.example.test"]
+        assert buckets["Expiring within 7 days"] == ["CN=seven.example.test"]
+        assert buckets["Expiring within 30 days"] == ["CN=thirty.example.test"]
+        assert buckets["Expiring within 90 days"] == []
         urgency = {
             e.subject: e.urgency for b in report.remediation_buckets for e in b.entries
         }

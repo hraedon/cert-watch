@@ -26,8 +26,10 @@ from cert_watch.database import (
     get_renewal_history,
     get_stored_certificate_detail_records,
     list_cert_history,
+    list_dashboard_page,
 )
 from cert_watch.scan_freshness import ScanEvidence, load_scan_evidence
+from cert_watch.status_model import AxisSettings
 from cert_watch.tags import parse_tags
 
 logger = logging.getLogger("cert_watch.services.certificate_detail")
@@ -54,6 +56,7 @@ class StoredCertificateDetailData:
     # The endpoint's latest scan attempt. A failed attempt leaves the stored
     # certificate in place, so the page must say the evidence is old (#113).
     latest_scan: LatestScanRecord | None = None
+    status: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,7 @@ class PendingHostDetailData:
     latest_scan: LatestScanRecord | None
     scan_evidence: ScanEvidence | None
     all_tags: list[str]
+    status: dict[str, Any] | None = None
 
 
 CertificateDetailData = StoredCertificateDetailData | PendingHostDetailData
@@ -98,6 +102,7 @@ def load_certificate_detail(
     scope_tags: tuple[str, ...],
     sched_hour: int,
     sched_min: int,
+    axis_settings: AxisSettings | None = None,
 ) -> CertificateDetailData | None:
     """Fetch the complete read model for either detail-page render path."""
     all_tags = distinct_tags(db_path, scope_tags=scope_tags)
@@ -112,12 +117,26 @@ def load_certificate_detail(
             hour=sched_hour,
             minute=sched_min,
         ).get(pending.host.id)
+        rows, _ = list_dashboard_page(
+            db_path,
+            source="scanned",
+            q=f"{pending.host.hostname}:{pending.host.port}",
+            per_page=0,
+            scope_tags=scope_tags,
+            axis_settings=axis_settings or AxisSettings(
+                sched_hour=sched_hour, sched_min=sched_min
+            ),
+        )
+        status_model = next(
+            (row["status"] for row in rows if row.get("host_id") == pending.host.id), None
+        )
         return PendingHostDetailData(
             cert_id=cert_id,
             host=pending.host,
             latest_scan=pending.latest_scan,
             scan_evidence=evidence,
             all_tags=all_tags,
+            status=status_model,
         )
 
     chain_certs = [cert for _, cert in stored.chain]
@@ -147,6 +166,19 @@ def load_certificate_detail(
             hour=sched_hour,
             minute=sched_min,
         ).get(stored.host.id)
+    query = f"{stored.hostname}:{stored.port}" if stored.hostname else stored.cert.subject
+    rows, _ = list_dashboard_page(
+        db_path,
+        q=query,
+        per_page=0,
+        scope_tags=scope_tags,
+        axis_settings=axis_settings or AxisSettings(
+            sched_hour=sched_hour, sched_min=sched_min
+        ),
+    )
+    status_model = next(
+        (row["status"] for row in rows if row.get("id") == cert_id), None
+    )
     return StoredCertificateDetailData(
         cert_id=cert_id,
         cert=stored.cert,
@@ -175,4 +207,5 @@ def load_certificate_detail(
             )[:5]
         ),
         latest_scan=latest_scan,
+        status=status_model,
     )

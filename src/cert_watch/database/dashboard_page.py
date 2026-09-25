@@ -26,6 +26,14 @@ from cert_watch.database.dashboard_unified import (
     _build_unified_for_leaf_ids,
 )
 from cert_watch.database.schema import init_schema
+from cert_watch.status_model import (
+    AxisSettings,
+    StatusModelContext,
+    attach_status_models,
+    load_delivery_statuses,
+    prepare_status_model_context,
+    register_status_model_functions,
+)
 from cert_watch.status_rule import effective_days_sql
 
 
@@ -35,6 +43,7 @@ def inventory_candidates_sql(
     q: str | None = None,
     scope_tags: list[str] | tuple[str, ...] | None = None,
     status: StatusContext | None = None,
+    axes: StatusModelContext | None = None,
 ) -> tuple[str, list[Any]] | None:
     """SQL selecting one row per Browse inventory row, and its parameters.
 
@@ -71,7 +80,72 @@ def inventory_candidates_sql(
         if status is not None
         else "NULL AS eff_days, NULL AS chain_status"
     )
-    status_params: list[Any] = [status.sql_now, status.trust] if status is not None else []
+    condition_col = (
+        f"cw_condition({effective_days_sql('c')})"
+        if status is not None and axes is not None
+        else "NULL"
+    )
+    status_params: list[Any] = (
+        [status.sql_now, status.trust, status.sql_now]
+        if status is not None and axes is not None
+        else [status.sql_now, status.trust]
+        if status is not None
+        else []
+    )
+
+    latest_success = (
+        "(SELECT MAX(sh.scanned_at) FROM scan_history sh"
+        " WHERE sh.hostname = h.hostname AND sh.port = h.port AND sh.status = 'success')"
+    )
+    latest_attempt = (
+        "(SELECT sh.scanned_at FROM scan_history sh"
+        " WHERE sh.hostname = h.hostname AND sh.port = h.port"
+        " ORDER BY sh.scanned_at DESC, sh.id DESC LIMIT 1)"
+    )
+    latest_scan_status = (
+        "(SELECT sh.status FROM scan_history sh"
+        " WHERE sh.hostname = h.hostname AND sh.port = h.port"
+        " ORDER BY sh.scanned_at DESC, sh.id DESC LIMIT 1)"
+    )
+    latest_error = (
+        "(SELECT sh.error_message FROM scan_history sh"
+        " WHERE sh.hostname = h.hostname AND sh.port = h.port"
+        " ORDER BY sh.scanned_at DESC, sh.id DESC LIMIT 1)"
+    )
+    first_failed = (
+        "(SELECT MIN(sf.scanned_at) FROM scan_history sf"
+        " WHERE sf.hostname = h.hostname AND sf.port = h.port AND sf.status != 'success'"
+        " AND sf.scanned_at > COALESCE((SELECT MAX(ss.scanned_at) FROM scan_history ss"
+        " WHERE ss.hostname = h.hostname AND ss.port = h.port"
+        " AND ss.status = 'success'), ''))"
+    )
+    monitoring_cols = (
+        f"cw_monitoring_state({latest_success}, {latest_attempt}, {latest_scan_status},"
+        " h.scan_interval_hours) AS monitoring,"
+        f" {latest_success} AS monitoring_last_success,"
+        f" {latest_attempt} AS monitoring_last_attempt,"
+        f" {latest_scan_status} AS monitoring_attempt_status,"
+        f" {latest_error} AS monitoring_error,"
+        f" {first_failed} AS monitoring_first_failed"
+        if axes is not None
+        else "NULL AS monitoring, NULL AS monitoring_last_success,"
+        " NULL AS monitoring_last_attempt, NULL AS monitoring_attempt_status,"
+        " NULL AS monitoring_error, NULL AS monitoring_first_failed"
+    )
+    renewal_col = (
+        "cw_renewal_state(h.hostname, h.port, h.renewal_method, h.renewal_status,"
+        " c.not_after, EXISTS(SELECT 1 FROM certificates succ"
+        " WHERE succ.replaces_cert_id = c.id AND succ.id != c.id)) AS renewal"
+        if axes is not None
+        else "NULL AS renewal"
+    )
+    pending_renewal_col = (
+        "cw_renewal_state(h.hostname, h.port, h.renewal_method, h.renewal_status,"
+        " NULL, 0) AS renewal"
+        if axes is not None
+        else "NULL AS renewal"
+    )
+    delivery_col = "cw_delivery_state(c.id)" if axes is not None else "NULL"
 
     select_parts: list[str] = []
     params: list[Any] = []
@@ -88,6 +162,10 @@ def inventory_candidates_sql(
                    ), '0000-01-01T00:00:00') AS sort_scan,
                    c.not_after AS sort_expiry,
                    {status_cols},
+                   {condition_col} AS condition,
+                   {monitoring_cols},
+                   {renewal_col},
+                   {delivery_col} AS delivery,
                    COALESCE(c.issuer, '') AS grp_issuer,
                    COALESCE(h.owner_name, '') AS grp_owner,
                    COALESCE(h.renewal_method, '') AS grp_method,
@@ -115,7 +193,7 @@ def inventory_candidates_sql(
         params += scanned_params
 
         # Pending hosts (no leaf certificate).
-        pending_sql = """
+        pending_sql = f"""
             SELECT 'pending' AS etype, h.id AS ekey,
                    LOWER(h.hostname || ':' || h.port) AS sort_name,
                    '9999-12-31T23:59:59' AS sort_issue,
@@ -125,6 +203,10 @@ def inventory_candidates_sql(
                    ), '0000-01-01T00:00:00') AS sort_scan,
                    '9999-12-31T23:59:59' AS sort_expiry,
                    NULL AS eff_days, NULL AS chain_status,
+                   NULL AS condition,
+                   {monitoring_cols},
+                   {pending_renewal_col},
+                   'unrouted' AS delivery,
                    '' AS grp_issuer,
                    COALESCE(h.owner_name, '') AS grp_owner,
                    COALESCE(h.renewal_method, '') AS grp_method,
@@ -134,7 +216,7 @@ def inventory_candidates_sql(
             WHERE NOT EXISTS (
                 SELECT 1 FROM certificates c
                 WHERE c.hostname = h.hostname AND c.port = h.port
-                  AND c.is_leaf = 1
+                  AND c.is_leaf = 1 AND c.source = 'scanned'
             )
         """
         pending_params: list[Any] = []
@@ -159,6 +241,15 @@ def inventory_candidates_sql(
                    '0000-01-01T00:00:00' AS sort_scan,
                    c.not_after AS sort_expiry,
                    {status_cols},
+                   {condition_col} AS condition,
+                   'never_scanned' AS monitoring,
+                   NULL AS monitoring_last_success,
+                   NULL AS monitoring_last_attempt,
+                   NULL AS monitoring_attempt_status,
+                   NULL AS monitoring_error,
+                   NULL AS monitoring_first_failed,
+                   'unknown' AS renewal,
+                   {delivery_col} AS delivery,
                    COALESCE(c.issuer, '') AS grp_issuer,
                    '' AS grp_owner,
                    '' AS grp_method,
@@ -197,7 +288,11 @@ def _chunks(values: list[Any]) -> list[list[Any]]:
 
 
 def build_inventory_entries(
-    conn: Any, ordered: list[Any], *, status: StatusContext
+    conn: Any,
+    ordered: list[Any],
+    *,
+    status: StatusContext,
+    axes: StatusModelContext | None = None,
 ) -> list[dict[str, Any]]:
     """Materialise the rich rows for *ordered* candidates, in that order.
 
@@ -256,7 +351,43 @@ def build_inventory_entries(
         now=status.now, chain_statuses=chain_statuses,
     )
     built += _build_pending_entries(pending_hosts, scan_rows)
-    return _reorder_by_candidates(built, ordered)
+    result = _reorder_by_candidates(built, ordered)
+    candidate_by_key = {(r["etype"], r["ekey"]): r for r in ordered}
+    for entry in result:
+        etype = "pending" if entry.get("kind") == "pending" else "leaf"
+        candidate = candidate_by_key.get((etype, entry.get("id")))
+        if candidate is None:
+            continue
+        keys = set(candidate.keys())
+        for key in (
+            "eff_days", "condition", "monitoring", "monitoring_last_success",
+            "monitoring_last_attempt", "monitoring_attempt_status", "monitoring_error",
+            "monitoring_first_failed", "renewal", "delivery",
+        ):
+            if key in keys:
+                entry["effective_days" if key == "eff_days" else key] = candidate[key]
+        from cert_watch.status_model import monitoring_since
+
+        cfg = axes.settings if axes is not None else AxisSettings()
+        entry["monitoring_since"] = monitoring_since(
+            str(entry.get("monitoring") or "never_scanned"),
+            entry.get("monitoring_last_success"),
+            entry.get("monitoring_attempt_status"),
+            entry.get("scan_interval_hours"),
+            cfg.sched_hour,
+            cfg.sched_min,
+            entry.get("monitoring_first_failed"),
+        )
+        renewal = entry.get("renewal") or "unknown"
+        method = str(entry.get("renewal_method") or "").casefold()
+        entry["renewal_source"] = (
+            "operator_report" if renewal == "in_progress"
+            else "renewal_window" if renewal == "stalled"
+            else "renewal_method" if method in {"acme", "cert-manager", "manual"}
+            else "renewal_analytics" if renewal != "unknown"
+            else "none"
+        )
+    return result
 
 
 def list_dashboard_page(
@@ -272,6 +403,12 @@ def list_dashboard_page(
     scope_tags: list[str] | tuple[str, ...] | None = None,
     now: datetime | None = None,
     status: StatusContext | None = None,
+    axes: StatusModelContext | None = None,
+    axis_settings: AxisSettings | None = None,
+    condition: str | None = None,
+    monitoring: str | None = None,
+    renewal: str | None = None,
+    delivery: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Return a SQL-filtered, sorted, paginated page of unified dashboard rows.
 
@@ -303,22 +440,52 @@ def list_dashboard_page(
     sql_dir = _safe_dir("DESC" if sort_order == "desc" else "ASC")
 
     status = status or prepare_status(db_path, now)
+    axes = axes or prepare_status_model_context(
+        db_path, certificate_status=status, settings=axis_settings
+    )
     candidates = inventory_candidates_sql(
-        source=source, q=q, scope_tags=scope_tags, status=status if urgency else None
+        source=source, q=q, scope_tags=scope_tags, status=status, axes=axes
     )
     if candidates is None:
         return [], 0
     base_sql, params = candidates
+    axis_filters = {
+        "condition": condition,
+        "monitoring": monitoring,
+        "renewal": renewal,
+        "delivery": delivery,
+    }
+    if delivery:
+        with _connect(db_path) as conn:
+            register_status_model_functions(conn, axes)
+            cert_ids = tuple(
+                row[0]
+                for row in conn.execute(
+                    f"SELECT ekey FROM ({base_sql}) WHERE etype = 'leaf'", params
+                ).fetchall()
+            )
+        load_delivery_statuses(db_path, cert_ids, axes)
+        # The request-bound UDF closes over the now-populated map.
     if urgency:
         base_sql = f"SELECT * FROM ({base_sql}) WHERE urgency = ?"
         params = [*params, urgency]
+    for column, value in axis_filters.items():
+        if value:
+            base_sql = f"SELECT * FROM ({base_sql}) WHERE {column} = ?"
+            params = [*params, value]
 
     with _connect(db_path) as conn:
+        register_status_model_functions(conn, axes)
         total_row = conn.execute(f"SELECT COUNT(*) FROM ({base_sql})", params).fetchone()
         total = total_row[0] if total_row else 0
 
         # The status filter's chain status comes along, so the rows show it.
-        cols = "etype, ekey, chain_status" if urgency else "etype, ekey"
+        cols = (
+            "etype, ekey, chain_status, eff_days, condition, monitoring,"
+            " monitoring_last_success, monitoring_last_attempt,"
+            " monitoring_attempt_status, monitoring_error, monitoring_first_failed,"
+            " renewal, delivery"
+        )
         page_sql = f"SELECT {cols} FROM ({base_sql}) ORDER BY {sort_col} {sql_dir}"
         page_params = list(params)
         if per_page > 0:
@@ -327,7 +494,8 @@ def list_dashboard_page(
             page_sql += " LIMIT ? OFFSET ?"
             page_params += [per_page, offset]
         ordered = conn.execute(page_sql, page_params).fetchall()
-        built = build_inventory_entries(conn, ordered, status=status)
+        built = build_inventory_entries(conn, ordered, status=status, axes=axes)
+    attach_status_models(db_path, built, axes)
     return built, total
 
 

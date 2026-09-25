@@ -54,6 +54,7 @@ _URGENCY_LABELS = {
     "critical": "Critical",
     "warning": "Warning",
     "healthy": "Healthy",
+    "failing": "Scan failing",
     "gray": "Unknown",
     "neutral": "—",
 }

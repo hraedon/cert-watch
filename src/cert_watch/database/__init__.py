@@ -41,6 +41,9 @@ from cert_watch.database.connection import _iso as _iso
 from cert_watch.database.connection import _parse_iso as _parse_iso
 from cert_watch.database.connection import _row_to_cert as _row_to_cert
 from cert_watch.database.connection import get_write_lock
+from cert_watch.database.dashboard_axes import (
+    dashboard_axis_stats as dashboard_axis_stats,
+)
 
 # Dashboard
 from cert_watch.database.dashboard_detail import (
@@ -314,6 +317,7 @@ __all__ = [  # noqa: RUF022 — exports are grouped by database subsystem
     "count_dashboard_leaves",
     "count_leaf_certs",
     "dashboard_expiry_stats",
+    "dashboard_axis_stats",
     "dashboard_urgency_stats",
     "get_cert_detail",
     "get_pending_host_detail_records",

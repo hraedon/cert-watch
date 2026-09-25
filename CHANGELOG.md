@@ -2,6 +2,26 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Home, Browse, endpoint detail, inventory/compliance reports and the host and
+  certificate JSON lists now share one four-axis status model: expiry-only
+  certificate condition, scan-cadence monitoring (including the first
+  consecutive failure and plain-language cause), renewal state, and resolved
+  alert delivery routes/outcomes. Browse and both JSON lists accept combinable
+  SQL filters for every axis while preserving tag scope (#126 S1).
+
+### Fixed
+
+- An endpoint with a failed, overdue or never-successful scan is no longer
+  labelled Healthy/OK because its last stored certificate was fine. Chain
+  trust is reported separately from expiry condition (#126 S1).
+- Default certificate-grouped Browse now selects, orders and paginates group
+  keys in SQL before building display rows, so one page no longer materialises
+  the whole estate (#120, #126 S1).
+
 ## [1.0.4] - 2026-09-25
 
 One set of numbers everywhere, stable certificate links, and two access-control

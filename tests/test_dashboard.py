@@ -155,10 +155,10 @@ def test_dashboard_filter_clear_link(reload_app, tmp_path, leaf_pem_file):
     assert 'value="leaf"' in r.text
 
 
-def test_dashboard_stat_cards_are_urgency_filters(
+def test_dashboard_stat_cards_are_condition_filters(
     reload_app, tmp_path, leaf_pem_file, expiring_soon_leaf
 ):
-    """Stat cards link to urgency filters and reflect the active state."""
+    """Stat cards link to condition filters and reflect the active state."""
     import re
     from html import unescape
     from urllib.parse import parse_qs, urlsplit
@@ -175,15 +175,15 @@ def test_dashboard_stat_cards_are_urgency_filters(
     assert r.status_code == 200
     assert '<a href="/browse?' in r.text and 'class="cw-stat"' in r.text  # linked stat cells
     linked_filters = {
-        parse_qs(urlsplit(unescape(href)).query).get("urgency", [""])[0]
+        parse_qs(urlsplit(unescape(href)).query).get("condition", [""])[0]
         for href in re.findall(r'<a href="([^"]+)" class="cw-stat[^\"]*"', r.text)
     }
-    assert linked_filters == {"", "expired", "critical", "warning", "healthy"}
+    assert linked_filters == {"", "expired", "le7", "8to30", "ok"}
 
     def _active_filter(text: str) -> str:
         active = re.findall(r'<a href="([^"]+)" class="cw-stat active"', text)
         assert len(active) == 1
-        return parse_qs(urlsplit(unescape(active[0])).query).get("urgency", [""])[0]
+        return parse_qs(urlsplit(unescape(active[0])).query).get("condition", [""])[0]
 
     def _stat_value(text: str, label: str) -> int:
         pattern = (
@@ -197,18 +197,18 @@ def test_dashboard_stat_cards_are_urgency_filters(
 
     assert _stat_value(r.text, "Tracked") == 3
     assert _stat_value(r.text, "Expired") == 1
-    assert _stat_value(r.text, "Critical") == 1
-    # The long-lived fixture is self-signed: its expiry is healthy, its
-    # composite certificate status correctly requires trust attention.
-    assert _stat_value(r.text, "Warning") == 1
-    assert _stat_value(r.text, "Healthy") == 0
+    assert _stat_value(r.text, "≤7 days") == 1
+    assert _stat_value(r.text, "8–30 days") == 0
+    # Chain trust is independent from expiry condition, so a self-signed
+    # long-lived upload still has an OK condition.
+    assert _stat_value(r.text, "OK") == 1
 
     assert r.text.count('class="cw-stat active"') == 1
     # unfiltered: the Tracked cell is active
     assert _active_filter(r.text) == ""
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/browse?urgency=expired")
+        r = client.get("/browse?condition=expired")
     assert r.status_code == 200
     assert r.text.count('class="cw-stat active"') == 1
     assert _active_filter(r.text) == "expired"
@@ -332,8 +332,8 @@ def upload_certificate_from_bytes(der_bytes, filename):
         tmp_path.unlink(missing_ok=True)
 
 
-def test_dashboard_page2_stats_use_fleet_urgency_totals(reload_app, tmp_path, monkeypatch):
-    """Stat-card urgency counts must reflect the full fleet, not only page 2."""
+def test_dashboard_page2_stats_use_fleet_condition_totals(reload_app, tmp_path, monkeypatch):
+    """Condition counts must reflect the full fleet, not only page 2."""
     import re
 
     from cryptography.hazmat.primitives import hashes
@@ -389,12 +389,12 @@ def test_dashboard_page2_stats_use_fleet_urgency_totals(reload_app, tmp_path, mo
         r = client.get("/browse?page=2")
     assert r.status_code == 200
     assert "Page 2 of" in r.text
-    # Page 2 rows are the 5 healthiest certs; the stat-card counters
+    # Page 2 rows have the longest validity; the stat-card counters
     # must still reflect the full filtered fleet distribution.
     assert _stat_value(r.text, "Expired") == 1
-    assert _stat_value(r.text, "Healthy") == 21
-    assert _stat_value(r.text, "Critical") == 3
-    assert _stat_value(r.text, "Warning") == 5
+    assert _stat_value(r.text, "OK") == 21
+    assert _stat_value(r.text, "≤7 days") == 3
+    assert _stat_value(r.text, "8–30 days") == 5
     assert _stat_value(r.text, "Tracked") == 30
 
 
