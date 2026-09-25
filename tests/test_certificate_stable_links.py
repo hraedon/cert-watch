@@ -135,12 +135,12 @@ def _alert_on(db: Path, cert_id: str, port: int, fingerprint: str) -> None:
     )
 
 
-def test_an_alert_alone_no_longer_resolves_a_stale_link(tmp_path, reload_app, self_signed_leaf):
-    """#115 review round 6: stale links follow renewal lineage anchored on
-    the id's own issuance event -- the one resolver the mutation routes also
-    use. An alert records where a certificate was, not what replaced it, so
-    once the events have aged out the old id is "not found" rather than
-    guessed from the endpoint's current certificate."""
+def test_a_stale_link_survives_event_retention(tmp_path, reload_app, self_signed_leaf):
+    """#115 review round 9: stale links follow the renewal record the scan
+    writes (migration 0042), not the event log, so a link from two renewals
+    ago still opens the current certificate after every event is purged --
+    also with a second monitored port on the same host name, and whatever
+    alerts say (they are not consulted)."""
     from cert_watch.database.connection import _connect
 
     db = _db(tmp_path)
@@ -162,8 +162,7 @@ def test_an_alert_alone_no_longer_resolves_a_stale_link(tmp_path, reload_app, se
     with TestClient(app_mod.app) as client:
         r = client.get(f"/certificates/{oldest}", follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == _NOT_FOUND
-    assert current  # the endpoint still has a current certificate
+    assert r.headers["location"] == f"/certificates/{current}?superseded=1"
 
 
 def test_alert_fallback_never_picks_another_ports_certificate(

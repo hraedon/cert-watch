@@ -6,19 +6,18 @@ Two questions, answered separately on purpose:
   stored certificate rows only (``replaces_cert_id`` among existing rows).
   Events never authorize or refuse a write.
 * :func:`navigation_hint` -- *where should a person holding this missing id
-  be sent?* It may read lifecycle events, but only when every event naming
-  the id agrees on its endpoint, and it never changes whether a write
-  happens.
+  be sent?* It reads the renewal record (``certificate_lineage``, migration
+  0042) and certificate rows -- never the event log -- and it never changes
+  whether a write happens.
   Both the stale-link page redirect and the mutation routes' "renewed,
   nothing was changed" answer use it, so they cannot disagree.
 
-Trust boundary: ``event_log`` and ``certificates`` are written only by the
-application. The checks here defend against records that are stale,
-duplicated, contradictory, malformed or misattributed in *one* of them (an
-old event, a leftover duplicate row, a payload naming the wrong endpoint).
-A scenario that needs forged, mutually consistent rows in *both* tables
-requires direct write access to the database, which is trusted and out of
-scope.
+Trust boundary: ``certificates`` and ``certificate_lineage`` are written only
+by the application (the renewal record by the scan, in the same transaction
+as the new certificate). The checks here defend against records that are
+stale, duplicated, contradictory or looping -- a leftover duplicate row, a
+deleted head, an ambiguous chain. Forging mutually consistent records needs
+direct write access to the database, which is trusted and out of scope.
 """
 
 from __future__ import annotations
@@ -114,47 +113,21 @@ def row_lineage(conn: sqlite3.Connection, cert_id: str) -> Lineage:
     return Lineage("superseded", current)
 
 
-# Lifecycle events, skipping payloads that aren't valid JSON (json_extract
-# on one would raise). CASE forces the json_valid test before extraction.
-def _event_field(name: str) -> str:
-    return f"CASE WHEN json_valid(payload) THEN json_extract(payload, '$.{name}') END"
-
-
-_OWN_EVENTS = (
-    f"SELECT {_event_field('hostname')} AS hostname, {_event_field('port')} AS port "
-    "FROM event_log WHERE event_type IN ('cert_added', 'cert_renewed') "
-    f"AND {_event_field('cert_id')} = ?"
-)
-_RENEWALS_OF = (
-    f"SELECT {_event_field('cert_id')} AS cert_id, {_event_field('hostname')} AS hostname, "
-    f"{_event_field('port')} AS port FROM event_log WHERE event_type = 'cert_renewed' "
-    f"AND {_event_field('replaced_cert_id')} = ?"
-)
+def _lineage_successors(conn: sqlite3.Connection, cert_id: str) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT new_cert_id, hostname, port FROM certificate_lineage "
+        "WHERE old_cert_id = ? AND new_cert_id != ?",
+        (cert_id, cert_id),
+    ).fetchall()
 
 
 def _anchor(conn: sqlite3.Connection, cert_id: str) -> Endpoint | None:
-    """The endpoint *cert_id* belonged to, from the lifecycle events that
-    name it: its own issuance (``cert_added``, or ``cert_renewed`` as the new
-    id) and the ``cert_renewed`` that replaced it. Either kind anchors on its
-    own -- the issuance event ages out of retention long before a 90-day
-    certificate is renewed, while the renewal event is fresh -- but every
-    event that names the id must agree on one endpoint, or there is none.
-    Renewal events alone anchor only when a stored successor row naming the
-    id is on that endpoint too."""
-    own = conn.execute(_OWN_EVENTS, (cert_id,)).fetchall()
-    renewed = conn.execute(_RENEWALS_OF, (cert_id,)).fetchall()
-    endpoints = {endpoint_of(e["hostname"], e["port"]) for e in [*own, *renewed]}
+    """The endpoint *cert_id* was renewed at, from the renewal record: every
+    ``certificate_lineage`` row naming it as the old id must agree."""
+    endpoints = {endpoint_of(r["hostname"], r["port"]) for r in _lineage_successors(conn, cert_id)}
     if len(endpoints) != 1:
         return None
     (endpoint,) = endpoints
-    if not own:
-        # Only renewal events are left, and a lone one would be both the
-        # anchor and the first hop -- "all agree" is vacuous. Require a
-        # surviving successor row that names the id and sits on the same
-        # endpoint (#115 review round 8).
-        rows = _successor_rows(conn, cert_id)
-        if not any(endpoint_of(r["hostname"], r["port"]) == endpoint for r in rows):
-            return None
     return endpoint
 
 
@@ -162,13 +135,14 @@ def navigation_hint(conn: sqlite3.Connection, cert_id: str) -> str | None:
     """The current certificate a person holding the missing id *cert_id*
     should be shown, or ``None``. Never used to decide a write.
 
-    The lifecycle events naming the id fix its endpoint (see
-    :func:`_anchor`); with none left, there is no hint. Each hop -- a row naming
-    the current id in ``replaces_cert_id`` or a ``cert_renewed`` event naming
-    it as replaced -- must offer exactly one successor, on that endpoint
-    (both the row's and the event's, where both exist), without looping. The
-    last certificate must exist, on that endpoint. Any failure: no hint.
-    The caller checks the head is visible to the viewer.
+    Reads only the renewal record (``certificate_lineage``, written by the
+    scan with each renewal) and certificate rows -- never the event log,
+    whose retention and Settings → Event stream choices must not break links.
+    The renewal record naming the id fixes its endpoint. Each hop -- a
+    lineage row or a stored leaf naming the current id -- must offer exactly
+    one successor, on that endpoint, without looping, and the last
+    certificate must exist there. Any failure: no hint. The caller checks
+    the head is visible to the viewer.
     """
     if _row(conn, cert_id) is not None:
         return None  # not a missing id
@@ -183,11 +157,9 @@ def navigation_hint(conn: sqlite3.Connection, cert_id: str) -> str | None:
             candidates.setdefault(str(row["id"]), set()).add(
                 endpoint_of(row["hostname"], row["port"])
             )
-        for event in conn.execute(_RENEWALS_OF, (current,)):
-            if not event["cert_id"]:
-                return None
-            candidates.setdefault(str(event["cert_id"]), set()).add(
-                endpoint_of(event["hostname"], event["port"])
+        for edge in _lineage_successors(conn, current):
+            candidates.setdefault(str(edge["new_cert_id"]), set()).add(
+                endpoint_of(edge["hostname"], edge["port"])
             )
         if not candidates:
             break

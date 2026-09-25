@@ -37,7 +37,7 @@ request now receives a `400` or `422` validation error instead of being
 accepted. Use `in_progress` only while work is underway, or omit the field/use
 `pending` when it is not.
 
-Three schema migrations are applied on startup; nothing else to reconfigure.
+Four schema migrations are applied on startup; nothing else to reconfigure.
 
 - **0039** adds a cached chain status to each certificate row
   (`chain_status`, `chain_status_basis`). The cache is filled on the first
@@ -51,6 +51,15 @@ Three schema migrations are applied on startup; nothing else to reconfigure.
   attempt; one that failed without any attempt is dated to the upgrade, so
   it shows as a recent failure for the first 24 hours rather than possibly
   being missed.
+- **0042** adds `certificate_lineage`, an internal record of renewals (old
+  certificate id, new id, host and port) that the scan writes with each
+  renewal. Links to a renewed certificate follow it, so they no longer stop
+  working when events age out of the event-log retention period or when
+  `cert_renewed` is switched off under Settings → Event stream. The record
+  is backfilled from stored certificates and from any `cert_renewed` events
+  still retained whose chain reaches a stored certificate on the same host
+  and port; the startup log reports how many of each. It is kept for good
+  (one small row per renewal) and is not part of the event stream.
 
 Behaviour to be aware of: Home's *Needs attention* panel lists the 50 most
 urgent items and says how many there are, and expanding a group in the

@@ -64,6 +64,10 @@ CERT_ID_REFERENCES: dict[str, tuple[str, str]] = {
     "event_log.payload": ("HISTORY", "HISTORY"),
     "audit_log.target_id": ("HISTORY", "HISTORY"),
     "audit_log.detail": ("HISTORY", "HISTORY"),
+    # The renewal record (migration 0042): appended on each renewal, never
+    # rewritten; a row whose new id is later deleted is inert.
+    "certificate_lineage.old_cert_id": ("HISTORY", "HISTORY"),
+    "certificate_lineage.new_cert_id": ("HISTORY", "HISTORY"),
 }
 
 def distinct_tags(
@@ -308,6 +312,15 @@ def _do_replace(
         conn.execute(
             "INSERT OR IGNORE INTO alert_group_certs (group_id, cert_id) VALUES (?, ?)",
             (group_id, leaf_id),
+        )
+    if replaces_id is not None and not unchanged:
+        # The renewal record stale links follow (migration 0042), written in
+        # this transaction -- never from the event log, which ages out and
+        # may not store renewals at all.
+        conn.execute(
+            "INSERT OR IGNORE INTO certificate_lineage "
+            "(old_cert_id, new_cert_id, hostname, port, created_at) VALUES (?, ?, ?, ?, ?)",
+            (replaces_id, leaf_id, hostname, port, now),
         )
 
     for chain_cert in chain:

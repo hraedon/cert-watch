@@ -16,14 +16,13 @@ All notable changes to cert-watch are documented in this file.
   webhook links no longer break on the next scan. A link to a certificate
   that has since been renewed, or to an endpoint's host id, now opens the
   endpoint's current certificate with a short note, instead of "certificate
-  not found". The link follows the renewals one step at a time, only on the
-  host and port its lifecycle events record: its issuance event, or the
-  renewal event that replaced it, which is written at renewal -- so a
-  renewal webhook's `cert_watch_url`, a bookmark or a shared link keeps
-  working for the event-log retention period after the renewal, however old
-  the certificate was. A deleted certificate, a contradictory or ambiguous
-  record, or a step at another endpoint resolves to "not found" rather than
-  a guess.
+  not found". The link follows an internal record of renewals that the scan
+  writes with each one (migration 0042), one step at a time and only on the
+  same host and port -- not the event log -- so a renewal webhook's
+  `cert_watch_url`, a bookmark or a shared link keeps working regardless of
+  event-log retention or which events Settings → Event stream stores. A
+  deleted certificate, a contradictory or ambiguous record, or a step at
+  another endpoint resolves to "not found" rather than a guess.
   Scope still applies: a link never reveals a certificate the viewer can't
   see (#113).
 - A scan no longer drops a scanned certificate's own tags or its manual
@@ -56,10 +55,10 @@ All notable changes to cert-watch are documented in this file.
   from the stored certificates alone: a stale certificate still stored beside
   its replacement is refused, and so is one whose replacement record is
   ambiguous, loops or moves to another endpoint -- those get the "not found"
-  answer and nothing is changed. For an id that no longer exists, the event
-  log never decides whether a change happens: the answer names the current
-  certificate only when the same renewal chain the certificate links use
-  (above) leads to it, and removing a leftover alert-group assignment for
+  answer and nothing is changed. For an id that no longer exists, whether a
+  change happens never depends on the renewal record: the answer names the
+  current certificate only when the same renewal chain the certificate links
+  use (above) leads to it, and removing a leftover alert-group assignment for
   such an id still removes it. A
   malformed event-log entry no longer breaks these changes or certificate
   links. A caller outside the current certificate's tag scope gets
