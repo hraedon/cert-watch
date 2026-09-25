@@ -48,6 +48,7 @@ def scan_history_view(request: Request, page: int = 1) -> HTMLResponse:
             **get_auth_context(request),
             **get_csrf_context(request),
             "active_page": "activity",
+            "notice": request.query_params.get("notice", ""),
             "tab": "scans",
             "page": page,
             "total_pages": total_pages,

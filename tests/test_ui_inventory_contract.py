@@ -90,13 +90,13 @@ def _result(service: str, resource_id: str) -> Any:
     if service.endswith("create_hosts"):
         from cert_watch.services.host_management import HostCreateResult
 
-        return HostCreateResult((resource_id,), 1)
+        return HostCreateResult((resource_id,), 1, 0)
     if service.endswith("import_hosts_csv"):
         from cert_watch.services.host_management import HostImportResult
 
         return HostImportResult(1, ())
     if service.endswith("scan_all_hosts"):
-        return (1, 0)
+        return (1, 0, 0)
     if service.endswith("update_host_settings"):
         return SimpleNamespace(
             id=resource_id,

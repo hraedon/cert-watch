@@ -4,7 +4,30 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- Every host-, certificate-, and alert-targeted write reachable by a
+  tag-scoped operator now rechecks the target's current effective tags after
+  taking SQLite's cross-process write lock and before changing it. This closes
+  races where another process could move a host to a different team after the
+  request's first scope check. The same rule now covers host deletion and
+  settings, alert acknowledgement and retry, idempotent host create/import,
+  and manual, bulk, and create-time scan storage. Bulk alert acknowledgement
+  and delivery claims evaluate the caller's writable (not merely visible) tag
+  set inside the locked write statement, including alerts on tagged uploaded
+  certificates that have no host row. Mixed-case scope tags and same-name
+  hosts on different ports are covered explicitly. Case-variant per-tag roles
+  now retain their highest grant, and a scoped caller with no writable tag
+  selects nothing instead of falling back to unrestricted bulk access (#122).
+
 ### Fixed
+
+- A host that moves outside the caller's write scope while a scan is in flight
+  is refused by the scan-storage transaction. Scan-all continues with the
+  remaining hosts and reports a separate refused count; create and CSV import
+  keep the successfully created host rows and report refused follow-up scans
+  instead of failing the completed request. Failed-scan history and events now
+  receive the same in-transaction scope recheck (#122).
 
 - Settings → Tags no longer fails with a server error once any alert group
   exists (#113).

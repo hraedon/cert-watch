@@ -14,7 +14,7 @@ from cert_watch import __commit__, __version__
 from cert_watch.attention import attention_queue_page
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.auth.guards import get_auth_context, write_form_guard
-from cert_watch.auth.scope import ScopeDeniedError
+from cert_watch.auth.scope import ScopeDeniedError, writable_scope_tags
 from cert_watch.database import (
     AlertStore,
     dashboard_urgency_stats,
@@ -176,7 +176,7 @@ async def flush_alert_queue(
 
     # Tag-scoped access control: filter alerts by user's scope tags
     auth_ctx = getattr(request.state, "auth_context", None)
-    scope_tags = scope_tags_from_auth(auth_ctx)
+    scope_tags = writable_scope_tags(auth_ctx)
 
     alert_config = s.build_alert_config() if s.smtp_host else None
     webhook_config = s.build_webhook_config() if s.webhook_url else None

@@ -63,6 +63,17 @@ class TestMayWriteTags:
         ctx = self._ctx(tag_tiers={"prod": "operator"})
         assert ctx.may_write_tags({"staging"}) is False
 
+    @pytest.mark.parametrize(
+        "tag_tiers",
+        [
+            {"team-a": "operator", "Team-A": "viewer"},
+            {"Team-A": "viewer", "team-a": "operator"},
+        ],
+    )
+    def test_case_variant_tiers_take_the_highest_grant(self, tag_tiers):
+        ctx = self._ctx(tag_tiers=tag_tiers)
+        assert ctx.may_write_tags({"TEAM-A"}) is True
+
     def test_empty_tag_tiers_falls_back_to_global(self):
         assert self._ctx(tier="viewer").may_write_tags({"prod"}) is False
         assert self._ctx(tier="operator").may_write_tags({"prod"}) is True
@@ -90,6 +101,16 @@ class TestResolveTagTiers:
         }
         _tier, _scope, tag_tiers = _resolve_tier_and_scope(["a", "b"], role_tiers)
         assert tag_tiers == {"prod": "operator"}
+
+    @pytest.mark.parametrize("roles", [["ops", "view"], ["view", "ops"]])
+    def test_max_across_case_variant_roles_per_tag(self, roles):
+        role_tiers = {
+            "ops": ("operator", "team-a", {}),
+            "view": ("viewer", "Team-A", {}),
+        }
+        _tier, scope, tag_tiers = _resolve_tier_and_scope(roles, role_tiers)
+        assert scope.casefold() == "team-a"
+        assert tag_tiers == {scope: "operator"}
 
     def test_unscoped_roles_do_not_pollute_tag_tiers(self):
         role_tiers = {"admin": ("admin", "", {})}

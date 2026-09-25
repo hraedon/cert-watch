@@ -53,6 +53,7 @@ class Permission(StrEnum):
 ROLE_ADMIN = "admin"
 ROLE_OPERATOR = "operator"
 ROLE_VIEWER = "viewer"
+_TIER_ORDER = {ROLE_VIEWER: 0, ROLE_OPERATOR: 1, ROLE_ADMIN: 2}
 
 # Reserved session claims (stored in the session's roles list) naming how the
 # session was minted. The "cw:" prefix is stripped from IdP claims before they
@@ -66,6 +67,18 @@ ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
     ROLE_OPERATOR: frozenset({Permission.CERT_READ, Permission.CERT_WRITE}),
     ROLE_VIEWER: frozenset({Permission.CERT_READ}),
 }
+
+
+def _highest_tag_tiers(tag_tiers: dict[str, str]) -> dict[str, str]:
+    """Case-fold tag keys and retain the highest tier for each logical tag."""
+    folded: dict[str, str] = {}
+    for tag, tier in tag_tiers.items():
+        key = tag.casefold()
+        if key not in folded or _TIER_ORDER.get(tier, 0) > _TIER_ORDER.get(
+            folded[key], 0
+        ):
+            folded[key] = tier
+    return folded
 
 
 def permissions_for_tier(tier: str) -> frozenset[Permission]:
@@ -256,8 +269,7 @@ class AuthContext:
         decision is :meth:`may_write_tags` at the scope seam."""
         if self.may_write():
             return True
-        order = {ROLE_VIEWER: 0, ROLE_OPERATOR: 1, ROLE_ADMIN: 2}
-        return any(order.get(t, 0) >= 1 for t in self.tag_tiers.values())
+        return any(_TIER_ORDER.get(t, 0) >= 1 for t in self.tag_tiers.values())
 
     def may_write_tags(
         self, resource_tags: set[str] | frozenset[str] | tuple[str, ...] | list[str]
@@ -271,11 +283,10 @@ class AuthContext:
         """
         if self.may_write():
             return True
-        order = {ROLE_VIEWER: 0, ROLE_OPERATOR: 1, ROLE_ADMIN: 2}
         # Tags match case-insensitively, as everywhere else in scope (#69).
-        folded = {t.casefold(): tier for t, tier in self.tag_tiers.items()}
+        folded = _highest_tag_tiers(self.tag_tiers)
         return any(
-            order.get(folded.get(t.casefold(), ROLE_VIEWER), 0) >= 1
+            _TIER_ORDER.get(folded.get(t.casefold(), ROLE_VIEWER), 0) >= 1
             for t in resource_tags
         )
 
@@ -490,29 +501,37 @@ def _resolve_tier_and_scope(
     """
     from cert_watch.tags import format_tags, parse_tags
 
-    order = {ROLE_VIEWER: 0, ROLE_OPERATOR: 1, ROLE_ADMIN: 2}
     chosen_tier = ROLE_VIEWER
-    scope_tags: set[str] = set()
-    tag_tiers: dict[str, str] = {}
+    scope_tags: dict[str, str] = {}
+    folded_tag_tiers: dict[str, str] = {}
     for name in resolved_role_names:
         tier, scope, overrides = role_tiers.get(name, (ROLE_VIEWER, "", {}))
         role_scope_tags = parse_tags(scope)
         # Union ALL roles' tags (scoped + unscoped) for visibility/alerts.
-        scope_tags.update(role_scope_tags)
+        for tag in role_scope_tags:
+            scope_tags.setdefault(tag.casefold(), tag)
         if scope:
             # Scoped role: its tier applies per-tag, never globally. Every
             # scope tag gets an explicit entry (viewer included) so the UI
             # can show the full per-tag picture.
+            folded_overrides = _highest_tag_tiers(overrides)
             for tag in role_scope_tags:
-                tag_tier = overrides.get(tag, tier)
-                if tag not in tag_tiers or order.get(tag_tier, 0) > order.get(
-                    tag_tiers[tag], 0
+                key = tag.casefold()
+                tag_tier = folded_overrides.get(key, tier)
+                if key not in folded_tag_tiers or _TIER_ORDER.get(
+                    tag_tier, 0
+                ) > _TIER_ORDER.get(
+                    folded_tag_tiers[key], 0
                 ):
-                    tag_tiers[tag] = tag_tier
+                    folded_tag_tiers[key] = tag_tier
         # Only unscoped roles (empty scope_tag) contribute to the tier.
-        elif order.get(tier, 0) > order.get(chosen_tier, 0):
+        elif _TIER_ORDER.get(tier, 0) > _TIER_ORDER.get(chosen_tier, 0):
             chosen_tier = tier
-    return chosen_tier, format_tags(scope_tags), tag_tiers
+    scope = format_tags(scope_tags.values())
+    tag_tiers = {
+        scope_tags[key]: tier for key, tier in folded_tag_tiers.items()
+    }
+    return chosen_tier, scope, tag_tiers
 
 
 def _local_user_context(

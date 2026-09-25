@@ -198,6 +198,37 @@ def ensure_write_scope(
         raise ScopeDeniedError(error)
 
 
+def writable_scope_tags(auth_ctx: Any) -> tuple[str, ...] | None:
+    """Return the caller's tag-scoped write grants for a bulk mutation.
+
+    An empty tuple retains the existing meaning of unrestricted access for
+    administrators, auth-disabled callers, and unscoped global writers. A
+    scoped global writer gets all visible tags; a caller whose writes come
+    only from per-tag tiers gets just the tags on which they are at least an
+    operator. Read-only visibility tags are deliberately excluded. ``None``
+    distinctly means a scoped caller has no writable tags and every bulk
+    consumer must therefore select nothing.
+    """
+    if auth_ctx is None:
+        return ()
+    if getattr(auth_ctx, "is_admin", False):
+        return ()
+    from cert_watch.tags import parse_tags
+
+    scope_tags = parse_tags(getattr(auth_ctx, "scope_tag", "") or "")
+    if not scope_tags:
+        return ()
+    may_write = getattr(auth_ctx, "may_write", None)
+    if callable(may_write) and may_write():
+        return tuple(scope_tags)
+
+    may_write_tags = getattr(auth_ctx, "may_write_tags", None)
+    if not callable(may_write_tags):
+        return None
+    writable = tuple(tag for tag in scope_tags if may_write_tags({tag}))
+    return writable or None
+
+
 def ensure_new_tags_in_scope(auth_ctx: Any, new_tags: str) -> None:
     """Raise :class:`ScopeDeniedError` unless every tag is within scope."""
     require_auth_context(auth_ctx)

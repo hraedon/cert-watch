@@ -437,15 +437,18 @@ class SqliteAlertRepository(AlertRepository):
         return [self._row_to_alert(r) for r in rows]
 
     def list_pending_scoped(
-        self, scope_tags: tuple[str, ...] | list[str]
+        self, scope_tags: tuple[str, ...] | list[str] | None
     ) -> list[Alert]:
         """Return pending alerts whose effective (cert ∪ host) tags intersect
         *scope_tags* (WI-078).
 
         Empty *scope_tags* means no restriction — equivalent to
-        :meth:`list_pending`. Joins each alert to its certificate and host so a
-        tag-scoped user only flushes alerts inside their team scope.
+        :meth:`list_pending`; ``None`` means select nothing. Joins each alert
+        to its certificate and host so a tag-scoped user only flushes alerts
+        inside their team scope.
         """
+        if scope_tags is None:
+            return []
         if not scope_tags:
             return self.list_pending()
         from cert_watch.database.dashboard import _add_effective_tag_filter
@@ -463,15 +466,21 @@ class SqliteAlertRepository(AlertRepository):
             rows = conn.execute(sql, params).fetchall()
         return [self._row_to_alert(r) for r in rows]
 
-    def mark_all_read(self, scope_tags: tuple[str, ...] | list[str] = ()) -> int:
+    def mark_all_read(
+        self, scope_tags: tuple[str, ...] | list[str] | None = ()
+    ) -> int:
         """Mark all unread alerts as read; return the number updated (WI-078).
 
         When *scope_tags* is non-empty, only alerts whose certificate/host
         effective tags intersect the scope are marked — a tag-scoped user does
-        not clear alerts outside their team scope. Empty *scope_tags* marks all.
+        not clear alerts outside their team scope. Empty *scope_tags* marks all;
+        ``None`` marks none.
         """
         with _connect(self.db_path) as conn:
-            if scope_tags:
+            begin_immediate(conn)
+            if scope_tags is None:
+                cur = conn.execute("UPDATE alerts SET read = 1 WHERE 0")
+            elif scope_tags:
                 from cert_watch.database.dashboard import _add_effective_tag_filter
 
                 # Select every in-scope cert (not just leaf certs) so the SCOPE
@@ -481,7 +490,7 @@ class SqliteAlertRepository(AlertRepository):
                 # so a scoped user can clear any in-scope alert they can flush.
                 inner_sql = """
                     SELECT c.id FROM certificates c
-                    JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
+                    LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
                     WHERE 1=1
                 """
                 inner_sql, params = _add_effective_tag_filter(
@@ -771,6 +780,8 @@ class SqliteHostRepository:
         notes: str = "",
         expected_issuers: str = "",
         starttls_mode: str = "",
+        *,
+        conn: sqlite3.Connection | None = None,
     ) -> str:
         import sqlite3
         try:
@@ -782,30 +793,39 @@ class SqliteHostRepository:
                 "hostname must be syntactically valid before persistence"
             ) from None
         host_id = str(uuid.uuid4())
-        with _connect(self.db_path) as conn:
-            try:
-                conn.execute(
-                    "INSERT INTO hosts"
-                    " (id, hostname, port, threshold_days, tags, scan_interval_hours,"
-                    "  owner_name, owner_email, owner_slack, renewal_status,"
-                    "  renewal_method, runbook_url, notes, expected_issuers,"
-                    "  starttls_mode, added_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        host_id, hostname, port, threshold_days, tags,
-                        scan_interval_hours, owner_name, owner_email,
-                        owner_slack, renewal_status, renewal_method,
-                        runbook_url, notes, expected_issuers, starttls_mode,
-                        _iso(datetime.now(UTC)),
-                    ),
-                )
+        owned = conn is None
+        if conn is None:
+            conn = _connect(self.db_path)
+        try:
+            conn.execute(
+                "INSERT INTO hosts"
+                " (id, hostname, port, threshold_days, tags, scan_interval_hours,"
+                "  owner_name, owner_email, owner_slack, renewal_status,"
+                "  renewal_method, runbook_url, notes, expected_issuers,"
+                "  starttls_mode, added_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    host_id, hostname, port, threshold_days, tags,
+                    scan_interval_hours, owner_name, owner_email,
+                    owner_slack, renewal_status, renewal_method,
+                    runbook_url, notes, expected_issuers, starttls_mode,
+                    _iso(datetime.now(UTC)),
+                ),
+            )
+            if owned:
                 conn.commit()
-            except sqlite3.IntegrityError:
-                row = conn.execute(
-                    "SELECT id FROM hosts WHERE hostname = ? AND port = ?",
-                    (hostname, port),
-                ).fetchone()
-                return row["id"] if row else host_id
+        except sqlite3.IntegrityError:
+            if owned:
+                conn.rollback()
+            row = conn.execute(
+                "SELECT id FROM hosts WHERE hostname = ? AND port = ?",
+                (hostname, port),
+            ).fetchone()
+            return row["id"] if row else host_id
+        except Exception:
+            if owned:
+                conn.rollback()
+            raise
         return host_id
 
     def list_all(self) -> list[HostEntry]:
@@ -813,13 +833,17 @@ class SqliteHostRepository:
             rows = conn.execute("SELECT * FROM hosts ORDER BY added_at").fetchall()
         return [self._row_to_host(r) for r in rows]
 
-    def list_scoped(self, scope_tags: tuple[str, ...] | list[str]) -> list[HostEntry]:
+    def list_scoped(
+        self, scope_tags: tuple[str, ...] | list[str] | None
+    ) -> list[HostEntry]:
         """Return hosts whose tags intersect *scope_tags* (WI-078).
 
         Empty *scope_tags* means no scope restriction — equivalent to
-        :meth:`list_all`. Used by bulk operations (scan-all) so a tag-scoped
-        user only acts on hosts inside their team scope.
+        :meth:`list_all`; ``None`` means select nothing. Used by bulk operations
+        (scan-all) so a tag-scoped user only acts on hosts inside their team scope.
         """
+        if scope_tags is None:
+            return []
         if not scope_tags:
             return self.list_all()
         from cert_watch.database.dashboard import _add_effective_tag_filter
@@ -887,9 +911,16 @@ class SqliteHostRepository:
             return None
         return self._row_to_host(r)
 
-    def delete(self, host_id: str) -> bool:
-        """Delete the host and cascade-delete its scanned certs and alerts."""
-        with _connect(self.db_path) as conn:
+    def delete(self, host_id: str, *, conn: sqlite3.Connection | None = None) -> bool:
+        """Delete the host and cascade-delete its scanned certs and alerts.
+
+        When *conn* is supplied, the caller owns the transaction. This lets a
+        service authorize the host on the same locked snapshot as the delete.
+        """
+        owned = conn is None
+        if conn is None:
+            conn = _connect(self.db_path)
+        try:
             r = conn.execute(
                 "SELECT hostname, port FROM hosts WHERE id = ?", (host_id,)
             ).fetchone()
@@ -950,7 +981,12 @@ class SqliteHostRepository:
                 (hostname, port),
             )
             conn.execute("DELETE FROM hosts WHERE id = ?", (host_id,))
-            conn.commit()
+            if owned:
+                conn.commit()
+        except Exception:
+            if owned:
+                conn.rollback()
+            raise
         return True
 
     def update_owner(
