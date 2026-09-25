@@ -82,6 +82,20 @@ class TestAutomationClassifierBoundaries:
     def test_lifetime_cap_is_inclusive_at_90_days(self):
         assert _classify(lifetimes=[90, 90, 90]) == "likely-automated"
         assert _classify(lifetimes=[90, 91, 90]) == "manual"
+        _classification, at_cap = _classify_automation(
+            [{"issuer": "CN=ZeroSSL"}] * 3,
+            [90, 90, 90],
+            [60.0, 60.0],
+            [30.0, 30.0],
+        )
+        _classification, over_cap = _classify_automation(
+            [{"issuer": "CN=ZeroSSL"}] * 3,
+            [90, 91, 90],
+            [60.0, 60.0],
+            [30.0, 30.0],
+        )
+        assert at_cap["all_lifetimes_le_90"] is True
+        assert over_cap["all_lifetimes_le_90"] is False
 
     def test_zero_lead_is_late_and_positive_lead_is_not(self):
         assert _classify(leads=[0.0, 30.0]) == "manual"
