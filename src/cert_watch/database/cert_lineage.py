@@ -11,6 +11,14 @@ Two questions, answered separately on purpose:
   happens.
   Both the stale-link page redirect and the mutation routes' "renewed,
   nothing was changed" answer use it, so they cannot disagree.
+
+Trust boundary: ``event_log`` and ``certificates`` are written only by the
+application. The checks here defend against records that are stale,
+duplicated, contradictory, malformed or misattributed in *one* of them (an
+old event, a leftover duplicate row, a payload naming the wrong endpoint).
+A scenario that needs forged, mutually consistent rows in *both* tables
+requires direct write access to the database, which is trusted and out of
+scope.
 """
 
 from __future__ import annotations
@@ -130,13 +138,23 @@ def _anchor(conn: sqlite3.Connection, cert_id: str) -> Endpoint | None:
     id) and the ``cert_renewed`` that replaced it. Either kind anchors on its
     own -- the issuance event ages out of retention long before a 90-day
     certificate is renewed, while the renewal event is fresh -- but every
-    event that names the id must agree on one endpoint, or there is none."""
+    event that names the id must agree on one endpoint, or there is none.
+    Renewal events alone anchor only when a stored successor row naming the
+    id is on that endpoint too."""
     own = conn.execute(_OWN_EVENTS, (cert_id,)).fetchall()
     renewed = conn.execute(_RENEWALS_OF, (cert_id,)).fetchall()
     endpoints = {endpoint_of(e["hostname"], e["port"]) for e in [*own, *renewed]}
     if len(endpoints) != 1:
         return None
     (endpoint,) = endpoints
+    if not own:
+        # Only renewal events are left, and a lone one would be both the
+        # anchor and the first hop -- "all agree" is vacuous. Require a
+        # surviving successor row that names the id and sits on the same
+        # endpoint (#115 review round 8).
+        rows = _successor_rows(conn, cert_id)
+        if not any(endpoint_of(r["hostname"], r["port"]) == endpoint for r in rows):
+            return None
     return endpoint
 
 

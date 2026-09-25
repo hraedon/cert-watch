@@ -916,11 +916,38 @@ def test_a_hint_hop_without_an_endpoint_resolves_nothing(tmp_path):
 def test_the_renewal_event_anchors_once_the_issuance_event_has_aged_out(tmp_path):
     """Round 7 (Sol, Fable): the issuance event ages out of the default 30-day
     retention long before a 90-day certificate is renewed; the fresh renewal
-    event naming the id as replaced anchors it on its own."""
+    event anchors the id -- corroborated by the successor row that names it
+    on the same endpoint (round 8)."""
     db = _fresh(tmp_path)
-    target = _cert_at(db, _HOST, 443)
+    target = _cert_at(db, _HOST, 443, replaces=_GONE)
     _renewal_event(db, _GONE, target, _HOST, 443)
     assert _hint(db, _GONE) == target
+
+
+def test_a_lone_renewal_event_without_a_successor_row_anchors_nothing(tmp_path, reload_app):
+    """Round 8 (Sol's probe): with the issuance event gone, one misattributed
+    cert_renewed was both anchor and hop, linking a team-old id to an
+    unrelated team-new certificate (page 303, mutation 409 naming it)."""
+    db = _fresh(tmp_path)
+    SqliteHostRepository(db).add(_OTHER, 8443, tags="team-new")
+    unrelated = _cert_at(db, _OTHER, 8443, tags="team-new")
+    _renewal_event(db, _GONE, unrelated, _OTHER, 8443)
+    assert _hint(db, _GONE) is None
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        page = client.get(f"/certificates/{_GONE}", follow_redirects=False)
+        tags = client.put(f"/api/certificates/{_GONE}/tags", json={"tags": "x"})
+    assert page.headers["location"] == "/?error=certificate+not+found"
+    assert (tags.status_code, tags.json()) == (404, {"error": "not found"})
+
+
+def test_a_renewal_event_whose_successor_row_is_elsewhere_anchors_nothing(tmp_path):
+    """The row that names the id is on another endpoint than the event: they
+    don't corroborate each other."""
+    db = _fresh(tmp_path)
+    target = _cert_at(db, _OTHER, 443, replaces=_GONE)
+    _renewal_event(db, _GONE, target, _HOST, 443)
+    assert _hint(db, _GONE) is None
 
 
 def test_with_no_event_left_there_is_no_anchor(tmp_path):
