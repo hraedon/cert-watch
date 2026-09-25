@@ -154,3 +154,59 @@ def test_upgrade_backfills_from_rows_and_retained_events(
         upgrade(conn)  # idempotent
         conn.commit()
     assert _lineage_rows(db) == [("A", "B", _HOST, 443), ("Z", "A", _HOST, 443)]
+
+
+def _redo_0042(db: Path) -> None:
+    """Drop the record and re-run migration 0042 on the database as it is."""
+    import cert_watch.database.schema as schema
+
+    with _connect(db) as conn:
+        conn.execute("DROP TABLE certificate_lineage")
+        conn.execute("DELETE FROM schema_version WHERE id = '0042'")
+        conn.commit()
+    schema._initialized.clear()
+    init_schema(db)
+
+
+@pytest.mark.parametrize("order", ["oldest-first", "newest-first"])
+def test_backfill_follows_a_pure_event_chain(tmp_path, order):
+    """Fable round 10: A -> B -> C -> D with only D stored. Each event reaches
+    a stored certificate only through the next one, so the backfill has to
+    grow the chain from D outwards -- in either order the events come in."""
+    from cert_watch.database import SqliteCertificateRepository, resolve_current_certificate
+
+    db = tmp_path / "c.sqlite3"
+    init_schema(db)
+    SqliteHostRepository(db).add(_HOST, 443)
+    d = SqliteCertificateRepository(db, source="scanned", hostname=_HOST, port=443).add(
+        parse_certificate(_make_cert(_HOST).der)
+    )
+    a, b, c = (x * 8 + "-0000-4000-8000-000000000000" for x in "abc")
+    hops = [(a, b), (b, c), (c, d)]
+    with _connect(db) as conn:
+        for old, new in hops if order == "oldest-first" else hops[::-1]:
+            _renewed_event(conn, old, new, _HOST, 443)
+        conn.commit()
+    _redo_0042(db)
+    assert sorted(r[:2] for r in _lineage_rows(db)) == sorted(hops)
+    assert resolve_current_certificate(db, a).cert_id == d
+
+
+def test_backfill_canonicalizes_as_typed_event_host_names(tmp_path):
+    """Fable round 10: an event payload spelling the host as typed (case,
+    trailing dot) still matches the canonical certificate row, and the record
+    stores the canonical spelling."""
+    from cert_watch.database import SqliteCertificateRepository
+    from cert_watch.migrations.m0042_certificate_lineage import upgrade
+
+    db = tmp_path / "c.sqlite3"
+    init_schema(db)
+    d = SqliteCertificateRepository(db, source="scanned", hostname=_HOST, port=443).add(
+        parse_certificate(_make_cert(_HOST).der)
+    )
+    with _connect(db) as conn:
+        conn.execute("DELETE FROM certificate_lineage")
+        _renewed_event(conn, "OLD", d, _HOST.upper() + ".", "443")
+        upgrade(conn)
+        conn.commit()
+    assert _lineage_rows(db) == [("OLD", d, _HOST, 443)]
