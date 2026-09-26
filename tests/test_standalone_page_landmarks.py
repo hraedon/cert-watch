@@ -29,3 +29,10 @@ def test_document_has_exactly_one_main(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     assert len(re.findall(r"<main\b", text)) == 1, f"{path.name}: expected one <main>"
     assert text.count("</main>") == 1
+
+
+def test_health_check_unavailable_is_warn_not_crit() -> None:
+    """An unreachable health endpoint is a monitoring problem: warn (#126 S2)."""
+    js = (TEMPLATES.parent / "static" / "js" / "core.js").read_text(encoding="utf-8")
+    block = js[: js.index("'Health check unavailable'")].rsplit("strip.className", 1)[1]
+    assert "t-warn" in block and "t-crit" not in block

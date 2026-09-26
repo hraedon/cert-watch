@@ -93,7 +93,8 @@
   {% if scan_failed and (scan_error or cert) %}
   <div class="cw-panel" data-testid="scan-failure-panel">
     <div class="cw-panel-body">
-      <div class="cw-note t-crit">
+      {# Monitoring failing is warn, not crit (#126). #}
+      <div class="cw-note t-warn">
         {{ icons.svg_icon('alert', 16) }}
         <div>
           <b>{{ 'Latest scan failed' if cert else 'Scan failed' }}</b>{% if scan_at_label %} <span class="tnum">· {{ scan_at_label }}</span>{% endif %}

@@ -8,7 +8,8 @@
 
    Voice: a warm-charcoal instrument panel. Colour is reserved for
    status; everything else is ink on paper. IBM Plex Mono carries
-   hostnames, serials and fingerprints only (`.mono`, `.cw-id`);
+   hostnames, serials, fingerprints and other machine syntax (raw
+   errors, identifiers, API paths, report hashes) via `.mono`/`.cw-id`;
    chips, labels, dates, counts, prose and chrome are sans.
 
    Grammar rules (enforced by review, so written down here):
@@ -607,11 +608,11 @@ details.cw-editor[open] .when-open { display: inline; }
   padding: 10px 26px; font-size: var(--cw-fs-sm); border-bottom: 1px solid var(--border);
   background: var(--cw-tone-soft, var(--bg-soft)); color: var(--cw-on-tint, var(--text-2));
 }
-.cw-flash .x {
+.cw-flash .x, .cw-health .x {
   background: none; border: none; font-size: var(--cw-fs-md); line-height: 1; cursor: pointer;
   color: inherit; opacity: .7; padding: 0 4px;
 }
-.cw-flash .x:hover { opacity: 1; }
+.cw-flash .x:hover, .cw-health .x:hover { opacity: 1; }
 /* in-panel feedback (settings save, async test results) */
 .cw-inline-flash {
   padding: 9px 12px; border-radius: var(--radius); font-size: var(--cw-fs-sm); line-height: 1.5;

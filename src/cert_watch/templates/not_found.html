@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>cert-watch — page not found</title>
+  <script nonce="{{ request.state.csp_nonce }}">
+    try {
+      var t = localStorage.getItem('cw-theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+  </script>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/cw.css">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+</head>
+<body>
+  <main class="cw-auth-center">
+    <div class="cw-panel cw-auth-panel">
+      <div class="cw-auth-intro">
+        <h1 data-testid="not-found-heading">Page not found</h1>
+      </div>
+      <p class="cw-sub">There is nothing at this address. It may have been deleted, or the link may be mistyped.</p>
+      <p><a class="cw-link" href="/">Go to Home</a></p>
+    </div>
+  </main>
+</body>
+</html>

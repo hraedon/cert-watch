@@ -104,8 +104,9 @@ Each of these bugs shipped once, past a green suite:
   are neutral ink (links get a hairline underline), never a status colour or
   the patina accent.
 - One type scale: 12, 14, 16, 20 and 28 px (`--cw-fs-xs` to `--cw-fs-xl` in
-  `cw.css`). Monospace is for hostnames, serials and fingerprints; chips,
-  labels, dates and counts are sans.
+  `cw.css`). Monospace is for hostnames, serials, fingerprints and other
+  machine syntax such as raw errors, identifiers, API paths and headers,
+  and report hashes; chips, labels, dates and counts are sans.
 - If you add, move or remove an editing control, update `UI-INVENTORY.md` in
   the same pull request.
 - Visual baselines match GitHub's `ubuntu-latest` rendering. Regenerate them

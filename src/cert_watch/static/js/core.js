@@ -301,7 +301,7 @@
         .then(function (data) { fails = 0; render(data); schedule(BASE); })
         .catch(function () {
           fails++;
-          strip.className = 'cw-health t-crit';
+          strip.className = 'cw-health t-warn'; // monitoring problem: warn (#126)
           stripText.textContent = 'Health check unavailable';
           strip.classList.remove('cw-hidden');
           schedule(Math.min(BASE * Math.pow(2, fails), MAX));

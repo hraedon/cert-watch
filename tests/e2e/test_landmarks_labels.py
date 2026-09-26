@@ -10,7 +10,10 @@ in CI:
 - every form field, including ones in closed drawers and editors, has an
   associated label (``<label for>``, a wrapping ``<label>``, ``aria-label`` or
   ``aria-labelledby``);
-- no visible text is rendered in the ``--text-3`` colour, in either theme.
+- no visible text is rendered in the ``--text-3`` colour, in either theme;
+- every visible text element uses one of the five type-scale sizes
+  (12/14/16/20/28 px), controls included;
+- an unknown path gives a browser a real HTML page (lang, title, ``<main>``).
 """
 
 from __future__ import annotations
@@ -90,3 +93,43 @@ def test_no_visible_text_uses_text_3(page: Page, cert_watch_server: str, theme: 
         + "\n".join(offenders)
     )
 
+
+
+_TYPE_SCALE = {"12px", "14px", "16px", "20px", "28px"}
+
+_FONT_SIZES = """() => {
+  const out = [];
+  for (const el of document.body.querySelectorAll('*')) {
+    const own = [...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim());
+    if (!own || !el.checkVisibility()) continue;
+    out.push([getComputedStyle(el).fontSize, el.outerHTML.slice(0, 100)]);
+  }
+  return out;
+}"""
+
+
+def test_visible_text_uses_the_type_scale(page: Page, cert_watch_server: str) -> None:
+    """#126 S2: five sizes only. Catches unstyled controls too (a bare
+    <button> renders at the browser default 13.33px)."""
+    offenders: list[str] = []
+    for path in _PAGES:
+        page.goto(f"{cert_watch_server}{path}")
+        # The health strip is shown asynchronously; reveal it so its
+        # dismiss button is measured whatever the health poll returned.
+        page.evaluate("document.getElementById('cw-health')?.classList.remove('cw-hidden')")
+        offenders += [
+            f"{path}: {size} {html}"
+            for size, html in page.evaluate(_FONT_SIZES)
+            if size not in _TYPE_SCALE
+        ]
+    assert not offenders, "font sizes off the 12/14/16/20/28 scale:\n" + "\n".join(offenders)
+
+
+def test_unknown_path_renders_an_html_page_for_browsers(
+    page: Page, cert_watch_server: str
+) -> None:
+    response = page.goto(f"{cert_watch_server}/no-such-page")
+    assert response is not None and response.status == 404
+    assert page.locator("html").get_attribute("lang") == "en"
+    assert page.title() == "cert-watch — page not found"
+    assert page.locator("main").count() == 1
