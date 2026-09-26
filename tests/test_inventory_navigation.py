@@ -83,8 +83,14 @@ def test_home_cards_follow_to_the_same_flat_population(reload_app, tmp_path):
     SqliteHostRepository(db).add("pending.example.test", 443)
     with TestClient(app_mod.app) as client:
         home = client.get("/")
-        stats = _stats(home.text)
-        assert set(stats) == {"Tracked", "Expired", "≤7 days", "8–30 days", "OK"}
+        condition = home.context["axis_stats"]["condition"]
+        stats = {
+            "Tracked": (home.context["tracked_total"], "/browse?grouped=0"),
+            "Expired": (condition["expired"], "/browse?condition=expired&grouped=0"),
+            "≤7 days": (condition["le7"], "/browse?condition=le7&grouped=0"),
+            "8–30 days": (condition["8to30"], "/browse?condition=8to30&grouped=0"),
+            "OK": (condition["ok"], "/browse?condition=ok&grouped=0"),
+        }
         assert stats["Tracked"][0] == 4  # Includes the pending host with no certificate.
         assert stats["OK"][0] == 1  # Trust is independent from expiry condition.
         assert stats["8–30 days"][0] == 0
@@ -94,7 +100,7 @@ def test_home_cards_follow_to_the_same_flat_population(reload_app, tmp_path):
             assert browse.status_code == 200
             assert browse.context["total_entries"] == count, label
             assert len(browse.context["entries"]) == count, label
-        assert "No expirations in the next 12 weeks" not in home.text
+        assert home.text.count('data-testid="home-week-link"') == 12
 
 
 def test_inventory_navigation_preserves_filters_encoding_and_sort_order(reload_app, tmp_path):

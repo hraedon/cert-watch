@@ -147,14 +147,20 @@ Every page counts the estate with the same definitions.
   groups in SQL before it builds display rows. A grouped filter or search
   selects a group when any member matches, then shows every in-scope member of
   that selected group; the group is the result unit.
+- **Home links** — Home's summary numbers use those same condition, monitoring
+  and delivery filters. Its chain rows add an exact issuer filter, and each
+  twelve-week bar adds an exact seven-day expiry window. All open flat Browse,
+  so the destination row count is the number shown on Home.
 - **Days** — whole days until the leaf certificate expires, negative once it
   has expired ("expired 41 days ago"). A group view's *Earliest expiry* is the
   smallest effective days in the group, so it agrees with the group's status.
-- **Needs attention** (Home) — one item per problem per endpoint: expiry by
-  the status rule (renewal stalls inside the renewal window rank just after
-  Expired), an unverified chain, a failing scan, or scan evidence that is
-  overdue. Home shows the 50 most urgent and says how many there are.
-  Expanding a group view's row loads it 100 rows at a time.
+- **Home triage** — Certificate risk ranks expired, ≤7-day and 8–30-day rows
+  by effective days, while chain-trust problems are grouped once per issuer.
+  Monitoring gaps exclude uploaded files and show bounded failing and
+  never-scanned rows with their cause and start time. Delivery/routing reports
+  undeliverable and unrouted certificate counts without exposing recipient or
+  group identities to non-admins. Row building remains bounded; expanding a
+  Browse group loads it 100 rows at a time.
 - **Graded** — a certificate with a posture grade: its latest scan's grade, or,
   for an uploaded file, the grade of the file itself. The Posture fleet grade
   and the compliance report's grade distribution cover the same certificates.

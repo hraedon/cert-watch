@@ -129,8 +129,9 @@ def test_home_browse_and_detail_expose_overdue_scans(
         browse = client.get("/browse?grouped=0")
         detail = client.get(f"/certificates/{cert_id}")
     assert home.status_code == browse.status_code == detail.status_code == 200
-    assert "0 of 1 monitored endpoints have current observations" in home.text
-    assert "1 failing or overdue" in home.text
+    assert ">0</b> of 1 current" in home.text
+    assert ">1</b> failing" in home.text
+    assert "since" in home.text
     assert "Monitoring failing" in browse.text
     assert "Last successful scan" in detail.text
     assert "Scan overdue" in detail.text

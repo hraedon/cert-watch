@@ -114,7 +114,7 @@ def test_page_visual(
 # ---------------------------------------------------------------------------
 
 _POPULATED_MASKS = [*_MASKS, "tbody td:nth-child(4)"]  # Expires column (dates + relative strings)
-_HOME_POPULATED_MASKS = [*_MASKS, ".cw-att-row .cw-sub", ".cw-cal-date"]
+_HOME_POPULATED_MASKS = [*_MASKS, ".cw-home-state", ".cw-home-foot", ".cw-home-strip"]
 
 
 @pytest.fixture(scope="module")
@@ -176,11 +176,74 @@ def test_home_populated_visual(
 ) -> None:
     page.goto(populated_server)
     expect(page.get_by_test_id("home-heading")).to_be_visible()
-    # The seed has three expiring/expired leaves and two long-lived leaves
-    # without an issuing chain. Trust issues also require operator attention.
-    expect(page.get_by_test_id("attention-item")).to_have_count(5)
+    # The seed has three expiring/expired leaves and two issuing-CA groups.
+    expect(page.get_by_test_id("home-risk-row")).to_have_count(3)
+    expect(page.get_by_test_id("home-chain-row")).to_have_count(2)
     page.evaluate("document.fonts.ready")
     page.wait_for_timeout(400)
     assert_snapshot(
         page, name="home-populated.png", mask_elements=_HOME_POPULATED_MASKS
     )
+
+
+def test_home_a_blocks_layout_and_every_filtered_link(
+    page: Page, populated_server: str
+) -> None:
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    page.goto(populated_server)
+    blocks = [
+        page.get_by_test_id("certificate-risk-block"),
+        page.get_by_test_id("monitoring-gaps-block"),
+        page.get_by_test_id("delivery-routing-block"),
+    ]
+    boxes = [block.bounding_box() for block in blocks]
+    assert all(box is not None for box in boxes)
+    assert max(box["y"] for box in boxes if box) - min(box["y"] for box in boxes if box) < 2
+
+    summary_ids = (
+        "home-tracked-count",
+        "home-condition-count-expired",
+        "home-condition-count-le7",
+        "home-condition-count-8to30",
+        "home-condition-count-ok",
+        "home-monitoring-count-failing",
+        "home-monitoring-count-never",
+        "home-monitoring-count-current",
+        "home-delivery-count-failing",
+        "home-delivery-count-unrouted",
+        "home-chain-total-link",
+    )
+    links: list[tuple[str, int]] = []
+    for testid in summary_ids:
+        link = page.get_by_test_id(testid)
+        count = int(next(part for part in link.inner_text().split() if part.isdigit()))
+        href = link.get_attribute("href")
+        assert href is not None
+        links.append((href, count))
+    for link in page.get_by_test_id("home-chain-row").locator("a").all():
+        href = link.get_attribute("href")
+        assert href is not None
+        links.append((href, int(link.inner_text().split()[-1])))
+    for link in page.get_by_test_id("home-week-link").all():
+        href = link.get_attribute("href")
+        assert href is not None
+        links.append((href, int(link.get_attribute("data-count") or "0")))
+
+    all_home_hrefs = set(page.locator("main a").evaluate_all(
+        "els => els.map(el => el.getAttribute('href')).filter(Boolean)"
+    ))
+    assert len(links) == 25
+    for href, expected in links:
+        page.goto(f"{populated_server}{href}")
+        expect(page.get_by_test_id("cert-row")).to_have_count(expected)
+    for href in sorted(all_home_hrefs):
+        response = page.goto(f"{populated_server}{href}")
+        assert response is not None and response.status < 400, href
+
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(populated_server)
+    boxes = [page.get_by_test_id(testid).bounding_box() for testid in (
+        "certificate-risk-block", "monitoring-gaps-block", "delivery-routing-block",
+    )]
+    assert all(box is not None for box in boxes)
+    assert [box["y"] for box in boxes if box] == sorted(box["y"] for box in boxes if box)

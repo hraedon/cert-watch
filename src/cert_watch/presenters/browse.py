@@ -115,6 +115,9 @@ class BrowseView:
     filter_monitoring: str
     filter_renewal: str
     filter_delivery: str
+    filter_chain_problem: bool
+    filter_issuer: str
+    filter_expiry_week: str
     sort_by: str
     sort_order: str
     page: int
@@ -141,6 +144,9 @@ class BrowseView:
             "monitoring": self.filter_monitoring or None,
             "renewal": self.filter_renewal or None,
             "delivery": self.filter_delivery or None,
+            "chain_problem": "1" if self.filter_chain_problem else None,
+            "issuer": self.filter_issuer or None,
+            "expiry_week": self.filter_expiry_week or None,
             "sort_by": self.sort_by,
             "sort_order": self.sort_order,
             "grouped": self.grouped,
@@ -172,6 +178,9 @@ class BrowseView:
             "filter_monitoring": self.filter_monitoring,
             "filter_renewal": self.filter_renewal,
             "filter_delivery": self.filter_delivery,
+            "filter_chain_problem": self.filter_chain_problem,
+            "filter_issuer": self.filter_issuer,
+            "filter_expiry_week": self.filter_expiry_week,
             "sort_by": self.sort_by,
             "sort_order": self.sort_order,
             "page": self.page,
@@ -375,6 +384,9 @@ def present_browse(data: BrowsePageData, *, now: datetime | None = None) -> Brow
         filter_monitoring=data.filter_monitoring,
         filter_renewal=data.filter_renewal,
         filter_delivery=data.filter_delivery,
+        filter_chain_problem=data.filter_chain_problem,
+        filter_issuer=data.filter_issuer,
+        filter_expiry_week=data.filter_expiry_week,
         sort_by=data.sort_by,
         sort_order=data.sort_order,
         page=data.page,

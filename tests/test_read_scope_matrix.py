@@ -832,6 +832,26 @@ _PAYMENTS_LEAVES = sum(h.scanned for h in _PAYMENTS) + 1  # + the uploaded cert
 
 
 @pytest.mark.parametrize("user", _USERS)
+def test_home_three_blocks_and_horizon_use_only_the_users_scope(
+    estate: _Estate, user: str
+) -> None:
+    """Home's derived rows and every aggregate stay inside the tag scope."""
+    with _client(estate.full_dir, user) as client:
+        response = client.get("/")
+    assert response.status_code == 200
+    context = response.context
+    assert context["tracked_total"] == len(_PAYMENTS) + 1  # uploaded file
+    assert context["monitored_total"] == len(_PAYMENTS)
+    assert sum(context["axis_stats"]["condition"].values()) == _PAYMENTS_LEAVES
+    assert sum(context["axis_stats"]["monitoring"].values()) == len(_PAYMENTS)
+    assert sum(context["axis_stats"]["delivery"].values()) == len(_PAYMENTS) + 1
+    assert sum(bucket.count for bucket in context["horizon"]) == 4
+    visible_rows = [*context["risk_rows"], *context["monitoring_rows"]]
+    assert visible_rows
+    assert all("hrteam" not in row.name and "shared.test" not in row.name for row in visible_rows)
+
+
+@pytest.mark.parametrize("user", _USERS)
 def test_posture_shows_only_in_scope_weak_primitives(runs: dict[str, _Run], user: str) -> None:
     body = runs[user].full["/posture"].body
     assert runs[user].full["/posture"].status == 200

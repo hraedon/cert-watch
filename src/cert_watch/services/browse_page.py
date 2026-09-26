@@ -48,6 +48,9 @@ class BrowsePageData:
     filter_monitoring: str = ""
     filter_renewal: str = ""
     filter_delivery: str = ""
+    filter_chain_problem: bool = False
+    filter_issuer: str = ""
+    filter_expiry_week: str = ""
 
 
 def load_browse_page(
@@ -60,6 +63,9 @@ def load_browse_page(
     monitoring: str | None = None,
     renewal: str | None = None,
     delivery: str | None = None,
+    chain_problem: bool = False,
+    issuer: str | None = None,
+    expiry_week: str | None = None,
     sort_by: str,
     sort_order: str,
     page: int,
@@ -73,6 +79,10 @@ def load_browse_page(
     """Fetch all read models needed for one Browse render."""
     if view in _GLOBAL_VIEWS:
         q = urgency = source = condition = monitoring = renewal = delivery = None
+        chain_problem = False
+        issuer = expiry_week = None
+    if chain_problem or expiry_week:
+        grouped = 0
     grouped = int(bool(grouped))
     # One status context for the whole render: every count, group, filter and
     # row below is judged at one instant with one chain status per row.
@@ -140,6 +150,9 @@ def load_browse_page(
             monitoring=monitoring,
             renewal=renewal,
             delivery=delivery,
+            chain_problem=chain_problem,
+            issuer=issuer,
+            expiry_week=expiry_week,
         )
         total_pages = max((total + per_page - 1) // per_page, 1)
         page = max(1, min(page, total_pages))
@@ -161,7 +174,10 @@ def load_browse_page(
         # Calendar buckets only contain certificates with an expiry date; the
         # page-level inventory total must still include pending hosts.
         tracked_total = dashboard_inventory_count(db_path, scope_tags=scope_tags)
-    elif not any((urgency, condition, monitoring, renewal, delivery)):
+    elif not any((
+        urgency, condition, monitoring, renewal, delivery,
+        chain_problem, expiry_week,
+    )):
         tracked_total = total
     else:
         tracked_total = dashboard_inventory_count(
@@ -190,6 +206,9 @@ def load_browse_page(
         filter_monitoring=monitoring or "",
         filter_renewal=renewal or "",
         filter_delivery=delivery or "",
+        filter_chain_problem=chain_problem,
+        filter_issuer=issuer or "",
+        filter_expiry_week=expiry_week or "",
         sort_by=sort_by,
         sort_order=sort_order,
         page=page,

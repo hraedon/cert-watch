@@ -62,10 +62,7 @@
     <main class="cw-page" id="main">
 
 
-      <div id="cw-health" class="cw-health cw-hidden">
-        <span class="cw-status"><span class="dot" id="cw-health-dot" aria-hidden="true"></span><span id="cw-health-text">Loading…</span></span>
-        <button type="button" class="x" data-dismiss="cw-health" data-dismiss-key="cw-health-dismissed" id="cw-health-dismiss" title="Dismiss" aria-label="Dismiss">&times;</button>
-      </div>
+
 
 
 <div class="cw-wrap">
@@ -73,7 +70,7 @@
 <div class="cw-page-head">
   <div>
     <h1 data-testid="home-heading">Home</h1>
-    <div class="cw-page-head-sub">What needs a human, ranked by time-to-impact.</div>
+    <div class="cw-page-head-sub">Certificate risk, monitoring gaps, and alert delivery.</div>
   </div>
   <div class="cw-page-actions">
     <a href="/browse" class="cw-btn">
@@ -88,386 +85,266 @@ Browse inventory</a>
 
 
 
-  <div class="cw-stats">
+
+  <p class="cw-home-scope">
+    <a class="cw-link" href="/browse?grouped=0" data-testid="home-tracked-count">6 tracked items</a>
+    · 2 monitored endpoints
+  </p>
+
+  <div class="cw-home-grid" data-testid="home-blocks">
+    <section class="cw-home-block" data-testid="certificate-risk-block">
+      <div class="cw-home-head">
+        <h2>Certificate risk</h2>
+        <div class="cw-home-counts">
+          <a href="/browse?condition=expired&amp;grouped=0" data-testid="home-condition-count-expired"><b class="t-crit">1</b> expired</a>
+          <a href="/browse?condition=le7&amp;grouped=0" data-testid="home-condition-count-le7"><b class="t-crit">1</b> ≤7 days</a>
+          <a href="/browse?condition=8to30&amp;grouped=0" data-testid="home-condition-count-8to30"><b class="t-warn">1</b> 8–30 days</a>
+          <a href="/browse?condition=ok&amp;grouped=0" data-testid="home-condition-count-ok"><b>2</b> OK</a>
+        </div>
+      </div>
 
 
-<a href="/browse?grouped=0" class="cw-stat" data-testid="home-tracked-stat">
-  <span class="cw-stat-label">
+      <ul class="cw-home-rows">
 
-    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>
+        <li class="cw-home-row" data-testid="home-risk-row" data-condition="expired">
+          <div class="cw-home-row-main">
+            <span class="cw-home-state t-crit"><span class="cw-home-dot"></span>Expired 400 days ago</span>
+            <a class="cw-id cw-home-id" href="/certificates/{{CERT_3_ID}}">legacy.demo.test</a>
+          </div>
 
-Tracked</span>
-  <div class="cw-stat-val">6</div>
-  <div class="cw-stat-sub">endpoints / files</div>
-</a>
+        </li>
 
+        <li class="cw-home-row" data-testid="home-risk-row" data-condition="le7">
+          <div class="cw-home-row-main">
+            <span class="cw-home-state t-crit"><span class="cw-home-dot"></span>4 days left</span>
+            <a class="cw-id cw-home-id" href="/certificates/{{CERT_1_ID}}">intranet.demo.test</a>
+          </div>
 
+        </li>
 
-<a href="/browse?condition=expired&amp;grouped=0" class="cw-stat">
-  <span class="cw-stat-label">
+        <li class="cw-home-row" data-testid="home-risk-row" data-condition="8to30">
+          <div class="cw-home-row-main">
+            <span class="cw-home-state t-warn"><span class="cw-home-dot"></span>10 days left</span>
+            <a class="cw-id cw-home-id" href="/certificates/{{CERT_5_ID}}">vpn.demo.test</a>
+          </div>
 
-    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+        </li>
 
-Expired</span>
-  <div class="cw-stat-val t-expired">1</div>
-  <div class="cw-stat-sub">needs attention</div>
-</a>
-
-
-
-<a href="/browse?condition=le7&amp;grouped=0" class="cw-stat">
-  <span class="cw-stat-label">
-
-    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
-
-≤7 days</span>
-  <div class="cw-stat-val t-crit">1</div>
-  <div class="cw-stat-sub">expiry condition</div>
-</a>
-
-
-
-<a href="/browse?condition=8to30&amp;grouped=0" class="cw-stat">
-  <span class="cw-stat-label">
-
-    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v5l3 2"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
-
-8–30 days</span>
-  <div class="cw-stat-val t-warn">1</div>
-  <div class="cw-stat-sub">expiry condition</div>
-</a>
+      </ul>
 
 
 
-<a href="/browse?condition=ok&amp;grouped=0" class="cw-stat">
-  <span class="cw-stat-label">
+      <div class="cw-home-subhead">
+        <span>Chain can’t be verified · <a class="cw-link" href="/browse?chain_problem=1&amp;grouped=0" data-testid="home-chain-total-link">5 certificates</a> · grouped by issuer</span>
+      </div>
+      <ul class="cw-home-rows">
 
-    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
+        <li class="cw-home-row cw-home-row--stack" data-testid="home-chain-row">
+          <div class="cw-home-row-main">
+            <strong>Demo Internal CA</strong>
+            <span class="cw-home-detail">Serve the intermediate with the leaf, or add a private CA in Trust anchors.</span>
+          </div>
+          <a class="cw-link cw-home-side" href="/browse?chain_problem=1&amp;issuer=CN%3DDemo+Internal+CA&amp;grouped=0">View 4</a>
+        </li>
 
-OK</span>
-  <div class="cw-stat-val t-ok">2</div>
-  <div class="cw-stat-sub">more than 30 days</div>
-</a>
+        <li class="cw-home-row cw-home-row--stack" data-testid="home-chain-row">
+          <div class="cw-home-row-main">
+            <strong>Demo Legacy CA</strong>
+            <span class="cw-home-detail">Serve the intermediate with the leaf, or add a private CA in Trust anchors.</span>
+          </div>
+          <a class="cw-link cw-home-side" href="/browse?chain_problem=1&amp;issuer=CN%3DDemo+Legacy+CA&amp;grouped=0">View 1</a>
+        </li>
 
+      </ul>
+
+    </section>
+
+    <section class="cw-home-block" data-testid="monitoring-gaps-block">
+      <div class="cw-home-head">
+        <h2>Monitoring gaps</h2>
+        <div class="cw-home-counts">
+          <a href="/browse?monitoring=failing&amp;grouped=0" data-testid="home-monitoring-count-failing"><b class="t-warn">1</b> failing</a>
+          <a href="/browse?monitoring=never_scanned&amp;grouped=0" data-testid="home-monitoring-count-never"><b class="">0</b> never scanned</a>
+          <a href="/browse?monitoring=current&amp;grouped=0" data-testid="home-monitoring-count-current"><b>1</b> of 2 current</a>
+        </div>
+      </div>
+
+
+      <ul class="cw-home-rows">
+
+        <li class="cw-home-row cw-home-row--stack" data-testid="home-monitoring-row" data-monitoring="failing">
+          <div class="cw-home-row-main">
+            <span class="cw-home-state t-warn"><span class="cw-home-dot"></span>Failing <span class="cw-home-when">since 2026-09-22 12:00 UTC</span></span>
+            <a class="cw-id cw-home-id" href="/certificates/{{HOST_2_ID}}">pending.demo.test:8443</a>
+            <span class="cw-home-detail">The server rejected the TLS handshake.</span>
+
+          </div>
+          <span class="cw-home-side">Edge Team</span>
+        </li>
+
+      </ul>
+
+
+      <footer class="cw-home-foot">
+        <span>Last run 2026-09-22 12:00 UTC</span>
+        <span>Next daily run 2026-09-23 06:00 UTC</span>
+        <a class="cw-link" href="/scan-history">Scan history</a>
+      </footer>
+    </section>
+
+    <section class="cw-home-block" data-testid="delivery-routing-block">
+      <div class="cw-home-head">
+        <h2>Delivery &amp; routing</h2>
+        <div class="cw-home-counts">
+          <a href="/browse?delivery=failing&amp;grouped=0" data-testid="home-delivery-count-failing"><b class="t-crit">1</b> alerts undelivered</a>
+          <a href="/browse?delivery=unrouted&amp;grouped=0" data-testid="home-delivery-count-unrouted"><b>5</b> unrouted</a>
+        </div>
+      </div>
+      <ul class="cw-home-rows">
+
+        <li class="cw-home-row cw-home-row--stack" data-testid="home-delivery-line">
+          <div class="cw-home-row-main">
+            <span class="cw-home-state t-warn"><span class="cw-home-dot"></span>Email not configured</span>
+            <span class="cw-home-detail">SMTP is not configured; email routes cannot deliver.</span>
+          </div>
+          <a class="cw-link cw-home-side" href="/settings/channels">Channels</a>
+        </li>
+
+      </ul>
+    </section>
   </div>
 
-  <div class="cw-panel" data-testid="scan-coverage">
-    <div class="cw-panel-body">
-      <div class="cw-chiprow">
-        <b>Scan coverage</b>
-
-
-        <span><a class="cw-link" href="/browse?monitoring=current&grouped=0">1 of 2 monitored endpoints have current observations</a></span>
-
-      </div>
-      <p class="cw-hint">Current means a successful scan within its configured cadence, with no later incomplete attempt. Uploaded files are excluded.</p>
-
-      <div class="cw-chiprow">
-        <a class="cw-chip t-warn" href="/browse?monitoring=failing&grouped=0">1 failing or overdue</a>
-        <a class="cw-chip t-muted" href="/browse?monitoring=never_scanned&grouped=0">0 without a successful scan</a>
-      </div>
-
+  <section class="cw-home-horizon" data-testid="horizon-panel">
+    <div class="cw-home-head">
+      <h2>Expiring by week</h2>
+      <span class="cw-hint">next 12 weeks · select a week to open it in Browse · <a class="cw-link" href="/browse?view=calendar">calendar</a></span>
     </div>
-  </div>
+    <div class="cw-home-horizon-body" tabindex="0" aria-label="Scrollable twelve-week expiry chart">
+      <ul class="cw-home-strip" aria-label="Certificate expirations by week">
 
+        <li>
+          <a href="/browse?expiry_week=2026-09-21&amp;grouped=0" title="Week of Sep 21: 1 certificate — open in Browse" aria-label="Week of Sep 21: 1 certificate — open in Browse" data-testid="home-week-link" data-count="1">
+            <span class="cw-home-bar-count">1</span>
+            <svg class="cw-home-bar t-crit" viewBox="0 0 36 44" preserveAspectRatio="none" aria-hidden="true">
+              <rect x="0" y="0" width="36" height="44"></rect>
+            </svg>
+            <span class="cw-home-bar-label">Sep 21</span>
+          </a>
+        </li>
 
-  <div class="cw-panel" data-testid="attention-panel">
-    <div class="cw-panel-head">
-      <h2>
+        <li>
+          <a href="/browse?expiry_week=2026-09-28&amp;grouped=0" title="Week of Sep 28: 1 certificate — open in Browse" aria-label="Week of Sep 28: 1 certificate — open in Browse" data-testid="home-week-link" data-count="1">
+            <span class="cw-home-bar-count">1</span>
+            <svg class="cw-home-bar t-warn" viewBox="0 0 36 44" preserveAspectRatio="none" aria-hidden="true">
+              <rect x="0" y="0" width="36" height="44"></rect>
+            </svg>
+            <span class="cw-home-bar-label">Sep 28</span>
+          </a>
+        </li>
 
-    <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+        <li>
+          <a href="/browse?expiry_week=2026-10-05&amp;grouped=0" title="Week of Oct 5: 0 certificates — open in Browse" aria-label="Week of Oct 5: 0 certificates — open in Browse" data-testid="home-week-link" data-count="0">
+            <span class="cw-home-bar-count"><span class="cw-sr">0</span></span>
+            <svg class="cw-home-bar  empty" viewBox="0 0 36 44" preserveAspectRatio="none" aria-hidden="true">
+              <rect x="0" y="42" width="36" height="2"></rect>
+            </svg>
+            <span class="cw-home-bar-label">Oct 5</span>
+          </a>
+        </li>
 
- Needs attention</h2>
-      <span class="cw-hint">6 items</span>
+        <li>
+          <a href="/browse?expiry_week=2026-10-12&amp;grouped=0" title="Week of Oct 12: 0 certificates — open in Browse" aria-label="Week of Oct 12: 0 certificates — open in Browse" data-testid="home-week-link" data-count="0">
+            <span class="cw-home-bar-count"><span class="cw-sr">0</span></span>
+            <svg class="cw-home-bar  empty" viewBox="0 0 36 44" preserveAspectRatio="none" aria-hidden="true">
+              <rect x="0" y="42" width="36" height="2"></rect>
+            </svg>
+            <span class="cw-home-bar-label">Oct 12</span>
+          </a>
+        </li>
+
+        <li>
+          <a href="/browse?expiry_week=2026-10-19&amp;grouped=0" title="Week of Oct 19: 0 certificates — open in Browse" aria-label="Week of Oct 19: 0 certificates — open in Browse" data-testid="home-week-link" data-count="0">
+            <span class="cw-home-bar-count"><span class="cw-sr">0</span></span>
+            <svg class="cw-home-bar  empty" viewBox="0 0 36 44" preserveAspectRatio="none" aria-hidden="true">
+              <rect x="0" y="42" width="36" height="2"></rect>
+            </svg>
+            <span class="cw-home-bar-label">Oct 19</span>
+          </a>
+        </li>
+
+        <li>
+          <a href="/browse?expiry_week=2026-10-26&amp;grouped=0" title="Week of Oct 26: 0 certificates — open in Browse" aria-label="Week of Oct 26: 0 certificates — open in Browse" data-testid="home-week-link" data-count="0">
+            <span class="cw-home-bar-count"><span class="cw-sr">0</span></span>
+            <svg class="cw-home-bar  empty" viewBox="0 0 36 44" preserveAspectRatio="none" aria-hidden="true">
+              <rect x="0" y="42" width="36" height="2"></rect>
+            </svg>
+            <span class="cw-home-bar-label">Oct 26</span>
+          </a>
+        </li>
+
+        <li>
+          <a href="/browse?expiry_week=2026-11-02&amp;grouped=0" title="Week of Nov 2: 0 certificates — open in Browse" aria-label="Week of Nov 2: 0 certificates — open in Browse" data-testid="home-week-link" data-count="0">
+            <span class="cw-home-bar-count"><span class="cw-sr">0</span></span>
+            <svg class="cw-home-bar  empty" viewBox="0 0 36 44" preserveAspectRatio="none" aria-hidden="true">
+              <rect x="0" y="42" width="36" height="2"></rect>
+            </svg>
+            <span class="cw-home-bar-label">Nov 2</span>
+          </a>
+        </li>
+
+        <li>
+          <a href="/browse?expiry_week=2026-11-09&amp;grouped=0" title="Week of Nov 9: 0 certificates — open in Browse" aria-label="Week of Nov 9: 0 certificates — open in Browse" data-testid="home-week-link" data-count="0">
+            <span class="cw-home-bar-count"><span class="cw-sr">0</span></span>
+            <svg class="cw-home-bar  empty" viewBox="0 0 36 44" preserveAspectRatio="none" aria-hidden="true">
+              <rect x="0" y="42" width="36" height="2"></rect>
+            </svg>
+            <span class="cw-home-bar-label">Nov 9</span>
+          </a>
+        </li>
+
+        <li>
+          <a href="/browse?expiry_week=2026-11-16&amp;grouped=0" title="Week of Nov 16: 1 certificate — open in Browse" aria-label="Week of Nov 16: 1 certificate — open in Browse" data-testid="home-week-link" data-count="1">
+            <span class="cw-home-bar-count">1</span>
+            <svg class="cw-home-bar " viewBox="0 0 36 44" preserveAspectRatio="none" aria-hidden="true">
+              <rect x="0" y="0" width="36" height="44"></rect>
+            </svg>
+            <span class="cw-home-bar-label">Nov 16</span>
+          </a>
+        </li>
+
+        <li>
+          <a href="/browse?expiry_week=2026-11-23&amp;grouped=0" title="Week of Nov 23: 0 certificates — open in Browse" aria-label="Week of Nov 23: 0 certificates — open in Browse" data-testid="home-week-link" data-count="0">
+            <span class="cw-home-bar-count"><span class="cw-sr">0</span></span>
+            <svg class="cw-home-bar  empty" viewBox="0 0 36 44" preserveAspectRatio="none" aria-hidden="true">
+              <rect x="0" y="42" width="36" height="2"></rect>
+            </svg>
+            <span class="cw-home-bar-label">Nov 23</span>
+          </a>
+        </li>
+
+        <li>
+          <a href="/browse?expiry_week=2026-11-30&amp;grouped=0" title="Week of Nov 30: 0 certificates — open in Browse" aria-label="Week of Nov 30: 0 certificates — open in Browse" data-testid="home-week-link" data-count="0">
+            <span class="cw-home-bar-count"><span class="cw-sr">0</span></span>
+            <svg class="cw-home-bar  empty" viewBox="0 0 36 44" preserveAspectRatio="none" aria-hidden="true">
+              <rect x="0" y="42" width="36" height="2"></rect>
+            </svg>
+            <span class="cw-home-bar-label">Nov 30</span>
+          </a>
+        </li>
+
+        <li>
+          <a href="/browse?expiry_week=2026-12-07&amp;grouped=0" title="Week of Dec 7: 0 certificates — open in Browse" aria-label="Week of Dec 7: 0 certificates — open in Browse" data-testid="home-week-link" data-count="0">
+            <span class="cw-home-bar-count"><span class="cw-sr">0</span></span>
+            <svg class="cw-home-bar  empty" viewBox="0 0 36 44" preserveAspectRatio="none" aria-hidden="true">
+              <rect x="0" y="42" width="36" height="2"></rect>
+            </svg>
+            <span class="cw-home-bar-label">Dec 7</span>
+          </a>
+        </li>
+
+      </ul>
     </div>
-    <div class="cw-panel-body">
-
-      <div class="cw-att-row" data-testid="attention-item" data-severity="expired">
-        <div class="cw-att-sev">
-  <span class="cw-status t-expired">
-  <span class="dot" aria-hidden="true"></span>Expired
-</span>
-
-</div>
-        <div class="cw-att-main">
-          <div class="cw-chiprow">
-
-              <a href="/certificates/{{CERT_3_ID}}" class="cw-id">legacy.demo.test</a>
-
-
-          </div>
-          <div class="cw-sub">expired 400 days ago · issuer certificate is not available · upload replacement certificate</div>
-        </div>
-        <div class="cw-chiprow">
-
-
-        </div>
-        <div class="cw-rowact">
-
-
-            <a href="/certificates/{{CERT_3_ID}}" class="cw-btn ghost sm">Review
-
-    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
-
-</a>
-
-        </div>
-      </div>
-
-      <div class="cw-att-row" data-testid="attention-item" data-severity="critical">
-        <div class="cw-att-sev">
-  <span class="cw-status t-crit">
-  <span class="dot" aria-hidden="true"></span>Critical
-</span>
-
-</div>
-        <div class="cw-att-main">
-          <div class="cw-chiprow">
-
-              <a href="/certificates/{{CERT_1_ID}}" class="cw-id">intranet.demo.test</a>
-
-
-          </div>
-          <div class="cw-sub">expires in 4 days · issuer certificate is not available · upload replacement certificate</div>
-        </div>
-        <div class="cw-chiprow">
-
-
-        </div>
-        <div class="cw-rowact">
-
-
-            <a href="/certificates/{{CERT_1_ID}}" class="cw-btn ghost sm">Review
-
-    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
-
-</a>
-
-        </div>
-      </div>
-
-      <div class="cw-att-row" data-testid="attention-item" data-severity="failing">
-        <div class="cw-att-sev">
-  <span class="cw-status t-warn">
-  <span class="dot" aria-hidden="true"></span>Scan failing
-</span>
-
-</div>
-        <div class="cw-att-main">
-          <div class="cw-chiprow">
-
-              <a href="/certificates/{{HOST_2_ID}}" class="cw-id">pending.demo.test:8443</a>
-
-
-          </div>
-          <div class="cw-sub">scan failing: TLS handshake failed</div>
-        </div>
-        <div class="cw-chiprow">
-          <span class="cw-chip">
-
-    <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-3-3.9"/><path d="M13 3.1a4 4 0 010 7.8"/><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
-
-Edge Team</span>
-
-        </div>
-        <div class="cw-rowact">
-
-            <form method="post" action="/hosts/{{HOST_2_ID}}/scan" class="cw-inline">
-              <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
-              <button type="submit" title="Scan now" class="cw-iconbtn sm">
-
-    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
-
-</button>
-            </form>
-
-
-            <a href="/certificates/{{HOST_2_ID}}" class="cw-btn ghost sm">Review
-
-    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
-
-</a>
-
-        </div>
-      </div>
-
-      <div class="cw-att-row" data-testid="attention-item" data-severity="warning">
-        <div class="cw-att-sev">
-  <span class="cw-status t-warn">
-  <span class="dot" aria-hidden="true"></span>Warning
-</span>
-
-</div>
-        <div class="cw-att-main">
-          <div class="cw-chiprow">
-
-              <a href="/certificates/{{CERT_5_ID}}" class="cw-id">vpn.demo.test</a>
-
-
-          </div>
-          <div class="cw-sub">expires in 10 days · issuer certificate is not available · upload replacement certificate</div>
-        </div>
-        <div class="cw-chiprow">
-
-
-        </div>
-        <div class="cw-rowact">
-
-
-            <a href="/certificates/{{CERT_5_ID}}" class="cw-btn ghost sm">Review
-
-    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
-
-</a>
-
-        </div>
-      </div>
-
-      <div class="cw-att-row" data-testid="attention-item" data-severity="warning">
-        <div class="cw-att-sev">
-  <span class="cw-status t-warn">
-  <span class="dot" aria-hidden="true"></span>Warning
-</span>
-
-</div>
-        <div class="cw-att-main">
-          <div class="cw-chiprow">
-
-              <a href="/certificates/{{CERT_4_ID}}" class="cw-id">mail.demo.test:443</a>
-
-
-          </div>
-          <div class="cw-sub">issuer certificate is not available</div>
-        </div>
-        <div class="cw-chiprow">
-          <span class="cw-chip">
-
-    <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-3-3.9"/><path d="M13 3.1a4 4 0 010 7.8"/><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
-
-Messaging Team</span>
-
-            <span class="cw-chip t-muted"
-                  title="Configured renewal method for this host">
-
-
-    <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-
-
-              manual renewal</span>
-
-        </div>
-        <div class="cw-rowact">
-
-            <form method="post" action="/hosts/{{HOST_1_ID}}/scan" class="cw-inline">
-              <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
-              <button type="submit" title="Scan now" class="cw-iconbtn sm">
-
-    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
-
-</button>
-            </form>
-
-
-            <a href="/certificates/{{CERT_4_ID}}" class="cw-btn ghost sm">Review
-
-    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
-
-</a>
-
-        </div>
-      </div>
-
-      <div class="cw-att-row" data-testid="attention-item" data-severity="warning">
-        <div class="cw-att-sev">
-  <span class="cw-status t-warn">
-  <span class="dot" aria-hidden="true"></span>Warning
-</span>
-
-</div>
-        <div class="cw-att-main">
-          <div class="cw-chiprow">
-
-              <a href="/certificates/{{CERT_2_ID}}" class="cw-id">ldaps.demo.test</a>
-
-
-          </div>
-          <div class="cw-sub">issuer certificate is not available</div>
-        </div>
-        <div class="cw-chiprow">
-
-
-        </div>
-        <div class="cw-rowact">
-
-
-            <a href="/certificates/{{CERT_2_ID}}" class="cw-btn ghost sm">Review
-
-    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
-
-</a>
-
-        </div>
-      </div>
-
-    </div>
-  </div>
-
-
-  <div class="cw-panel" data-testid="horizon-panel">
-    <div class="cw-panel-head">
-      <h2>
-
-    <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M8 2v4"/><path d="M16 2v4"/><path d="M3 10h18"/></svg>
-
- Expiry horizon</h2>
-      <div class="cw-chiprow">
-
-        <a class="cw-hint cw-link" href="/browse?view=calendar">full calendar →</a>
-      </div>
-    </div>
-    <div class="cw-panel-body">
-
-        <div class="cw-cal-row">
-          <div class="cw-cal-date">
-            <span class="tnum ">2026-09-21</span>
-            <div class="cw-cal-now">this week</div>
-          </div>
-
-          <div class="cw-chiprow">
-
-            <span class="cw-chip t-crit">1 cert</span>
-          </div>
-
-        </div>
-
-        <div class="cw-cal-row">
-          <div class="cw-cal-date">
-            <span class="tnum ">2026-09-28</span>
-
-          </div>
-
-          <div class="cw-chiprow">
-
-            <span class="cw-chip t-warn">1 cert</span>
-          </div>
-
-        </div>
-
-        <div class="cw-cal-row">
-          <div class="cw-cal-date">
-            <span class="tnum ">2026-11-16</span>
-
-          </div>
-
-          <div class="cw-chiprow">
-
-            <span class="cw-chip ">1 cert</span>
-          </div>
-
-        </div>
-
-    </div>
-  </div>
+  </section>
 </div>
 
     </main>

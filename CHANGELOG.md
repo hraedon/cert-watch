@@ -15,6 +15,11 @@ All notable changes to cert-watch are documented in this file.
 
 ### Changed
 
+- Home A (#126 S3) replaces the blended urgency cards and attention queue with
+  three scoped blocks for certificate risk, monitoring gaps, and alert
+  delivery/routing. Every count, issuer group, and twelve-week expiry bar opens
+  the exact filtered Browse rows it counts. The old pipeline-health banner and
+  renewal/host-count row noise are removed from Home.
 - Visual system (#126 S2): one type scale (12, 14, 16, 20, 28 px); colour
   means status only, so links, focus rings, active states and the wordmark
   are neutral ink and links carry a hairline underline instead of the bronze

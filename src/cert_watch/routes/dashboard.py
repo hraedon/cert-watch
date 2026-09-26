@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request
@@ -11,16 +11,13 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from cert_watch import __commit__, __version__
-from cert_watch.attention import attention_queue_page
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.auth.guards import get_auth_context, write_form_guard
 from cert_watch.auth.scope import ScopeDeniedError, writable_scope_tags
 from cert_watch.database import (
     AlertStore,
     dashboard_axis_stats,
-    dashboard_inventory_count,
     get_write_lock,
-    list_calendar,
 )
 from cert_watch.database.chain_status_cache import prepare_status
 from cert_watch.database.connection import _connect
@@ -34,7 +31,6 @@ from cert_watch.routes._deps import (
     get_templates,
 )
 from cert_watch.routes._scoped import scope_tags_from_auth
-from cert_watch.scan_freshness import load_scan_evidence, summarize_scan_evidence
 from cert_watch.security.csrf import get_csrf_context
 from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
 from cert_watch.services.alert_state import mark_all_alerts_read as mark_all_alerts_read_service
@@ -56,6 +52,7 @@ templates = get_templates()
 # for / carrying any of them is a legacy bookmark — redirect to /browse.
 _BROWSE_PARAMS = {
     "q", "urgency", "source", "condition", "monitoring", "renewal", "delivery",
+    "chain_problem", "issuer", "expiry_week",
     "sort_by", "sort_order", "page", "grouped", "view",
 }
 
@@ -75,44 +72,32 @@ def home(
     scope_tags = scope_tags_from_auth(auth_ctx)
 
     settings = _get_settings(request)
-    scan_evidence = load_scan_evidence(
-        db, scope_tags=scope_tags, hour=settings.sched_hour, minute=settings.sched_min,
-    )
-    # One status context for the page: the queue, the cards and the total
-    # are judged at one instant with one chain status per certificate.
-    status = prepare_status(db)
+    # One status context and one materialized aggregate pass for the page.
+    # The Home projection selects only bounded row keys after classifying the
+    # scoped estate, so display-row work cannot grow with estate size.
+    status = prepare_status(db, datetime.now(UTC))
     axis_settings = AxisSettings.from_settings(settings)
     axes = prepare_status_model_context(
         db, certificate_status=status, settings=axis_settings
-    )
-    items, queue_total = attention_queue_page(
-        db, scope_tags=scope_tags, window_days=settings.renewal_window_days,
-        scan_evidence=scan_evidence, status=status,
     )
     axis_stats = dashboard_axis_stats(
         db,
         scope_tags=scope_tags,
         status=status,
         axes=axes,
-        axis_columns=frozenset({"condition", "monitoring"}),
+        axis_columns=frozenset({"condition", "monitoring", "delivery", "chain"}),
+        home=True,
     )
-    stats = {
-        "expired": axis_stats["condition"]["expired"],
-        "critical": axis_stats["condition"]["le7"],
-        "warning": axis_stats["condition"]["8to30"],
-        "healthy": axis_stats["condition"]["ok"],
-    }
-    tracked_total = dashboard_inventory_count(db, scope_tags=scope_tags)
+    home_data = axis_stats.pop("_home")
 
     view = present_home(
-        queue=items,
-        queue_total=queue_total,
-        stats=stats,
         axis_stats=axis_stats,
-        tracked_total=tracked_total,
-        scan_coverage=summarize_scan_evidence(scan_evidence),
-        calendar=list_calendar(db, bucket="week", scope_tags=scope_tags),
-        now=datetime.now(UTC),
+        home_data=home_data,
+        smtp_configured=axis_settings.smtp_configured,
+        webhook_configured=axis_settings.webhook_configured,
+        sched_hour=settings.sched_hour,
+        sched_min=settings.sched_min,
+        now=status.now,
         error=error,
         warning=warning,
         saved=saved,
@@ -146,6 +131,9 @@ def dashboard(
     monitoring: str | None = None,
     renewal: str | None = None,
     delivery: str | None = None,
+    chain_problem: int = 0,
+    issuer: str | None = None,
+    expiry_week: str | None = None,
     sort_by: str = "days",
     sort_order: str = "asc",
     page: int = 1,
@@ -169,6 +157,15 @@ def dashboard(
             renewal = None
         if "delivery" in invalid_filters:
             delivery = None
+    if expiry_week:
+        try:
+            date.fromisoformat(expiry_week)
+        except ValueError:
+            notice = notice or f"Ignored invalid expiry week: {expiry_week}"
+            expiry_week = None
+    chain_problem = int(chain_problem == 1)
+    if not chain_problem:
+        issuer = None
     db = _db_path(request)
     auth_ctx = getattr(request.state, "auth_context", None)
     scope_tags = scope_tags_from_auth(auth_ctx)
@@ -182,6 +179,9 @@ def dashboard(
         monitoring=monitoring,
         renewal=renewal,
         delivery=delivery,
+        chain_problem=bool(chain_problem),
+        issuer=issuer,
+        expiry_week=expiry_week,
         sort_by=sort_by,
         sort_order=sort_order,
         page=page,

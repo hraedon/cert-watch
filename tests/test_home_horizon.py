@@ -33,6 +33,10 @@ def test_home_horizon_excludes_expiries_beyond_twelve_weeks(reload_app, tmp_path
                 conn.commit()
         response = client.get("/")
     assert response.status_code == 200
-    assert [bucket["bucket_start"] for bucket in response.context["horizon"]] == [
-        "2026-09-07", "2026-11-23",
-    ]
+    horizon = response.context["horizon"]
+    assert len(horizon) == 12
+    assert horizon[0]["bucket_start"] == "2026-09-07"
+    assert horizon[-1]["bucket_start"] == "2026-11-23"
+    assert horizon[0]["count"] == 1
+    assert horizon[-1]["count"] == 1
+    assert sum(bucket["count"] for bucket in horizon) == 2

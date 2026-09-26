@@ -102,7 +102,9 @@ def inventory_candidates_sql(
     if "overall" in requested:
         requested = requested | {"monitoring", "urgency"}
     need_effective_days = bool(requested & {"condition", "urgency"})
-    need_chain_status = "urgency" in requested
+    # ``chain`` is the Home projection's internal request for the canonical
+    # cached trust fact without also evaluating an overall urgency state.
+    need_chain_status = bool(requested & {"urgency", "chain"})
     need_monitoring = "monitoring" in requested and axes is not None
     need_renewal = "renewal" in requested and axes is not None
     need_delivery = "delivery" in requested and axes is not None
@@ -566,6 +568,9 @@ def list_dashboard_page(
     monitoring: str | None = None,
     renewal: str | None = None,
     delivery: str | None = None,
+    chain_problem: bool = False,
+    issuer: str | None = None,
+    expiry_week: str | None = None,
     entry_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Return a SQL-filtered, sorted, paginated page of unified dashboard rows.
@@ -613,6 +618,8 @@ def list_dashboard_page(
         )
         if value
     )
+    if chain_problem:
+        filter_axes = filter_axes | {"chain"}
     # COUNT and key selection use only the axes required by active filters.
     # The full four-axis projection is applied after LIMIT to the returned
     # keys, so an unfiltered 20k estate evaluates at most 25/50 display rows.
@@ -636,6 +643,29 @@ def list_dashboard_page(
         if value:
             base_sql = f"SELECT * FROM ({base_sql}) WHERE {column} = ?"
             params = [*params, value]
+    if chain_problem:
+        base_sql = (
+            f"SELECT * FROM ({base_sql}) WHERE etype = 'leaf' "
+            "AND chain_status IN ('incomplete','invalid','unknown',"
+            "'self-signed','unverified')"
+        )
+        if issuer is not None:
+            base_sql = f"SELECT * FROM ({base_sql}) WHERE grp_issuer = ?"
+            params = [*params, issuer]
+    if expiry_week:
+        try:
+            from datetime import date, timedelta
+
+            start = date.fromisoformat(expiry_week)
+        except ValueError:
+            start = None
+        if start is not None:
+            end = start + timedelta(days=7)
+            base_sql = (
+                f"SELECT * FROM ({base_sql}) WHERE etype = 'leaf' "
+                "AND sort_expiry >= ? AND sort_expiry < ?"
+            )
+            params = [*params, start.isoformat(), end.isoformat()]
 
     with _connect(db_path) as conn:
         register_status_model_functions(conn, axes)
