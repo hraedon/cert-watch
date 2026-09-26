@@ -25,7 +25,10 @@ from cert_watch.status_model import (
     renewal_state_for_row,
 )
 
-NOW = datetime(2026, 9, 25, 12, tzinfo=UTC)
+# The HTML/JSON filter test goes through routes that read the real clock, so
+# seeded scan times must be relative to it; a fixed date made the seeded hosts
+# go stale the day after it was written.
+NOW = datetime.now(UTC).replace(microsecond=0)
 
 
 def _cert(host: str, days: int, fingerprint: str) -> Certificate:
