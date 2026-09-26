@@ -25,7 +25,7 @@
       div.className = 'row';
       var name = entry.name || entry.host || '—';
       var urg = VALID_URGENCY[entry.urgency] ? entry.urgency : 'gray';
-      var tone = { expired: 't-expired', critical: 't-crit', warning: 't-warn', healthy: 't-ok', failing: 't-crit', gray: 't-muted' }[urg];
+      var tone = { expired: 't-expired', critical: 't-crit', warning: 't-warn', healthy: 't-ok', failing: 't-warn', gray: 't-muted' }[urg];
       var link;
       if (entry.id) {
         link = document.createElement('a');
@@ -45,7 +45,7 @@
       div.appendChild(pill);
       if (entry.days_remaining != null) {
         var days = document.createElement('span');
-        days.className = 'cw-muted mono';
+        days.className = 'cw-muted tnum';
         days.textContent = entry.days_remaining + ' days';
         div.appendChild(days);
       }

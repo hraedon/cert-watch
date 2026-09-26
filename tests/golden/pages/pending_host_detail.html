@@ -59,7 +59,7 @@
       </details>
 
     </header>
-    <div class="cw-page">
+    <main class="cw-page" id="main">
 
 
       <div id="cw-health" class="cw-health cw-hidden">
@@ -85,7 +85,7 @@
       <div class="cw-chiprow">
         <h1 class="mono" data-testid="host-detail-heading">pending.demo.test:8443</h1>
 
-          <span class="cw-status t-crit">
+          <span class="cw-status t-warn">
   <span class="dot" aria-hidden="true"></span>Scan failing
 </span>
 
@@ -98,7 +98,7 @@
 
 Monitored</span>
 
-        <span class="mono cw-muted">
+        <span class="cw-muted">
 
             last scan failed
 
@@ -133,14 +133,15 @@ Remove</button>
 
   <div class="cw-panel" data-testid="scan-failure-panel">
     <div class="cw-panel-body">
-      <div class="cw-note t-crit">
+
+      <div class="cw-note t-warn">
 
 
     <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
 
 
         <div>
-          <b>Scan failed</b> <span class="mono">· 2026-09-22 12:00 UTC</span>
+          <b>Scan failed</b> <span class="tnum">· 2026-09-22 12:00 UTC</span>
 
           <div data-testid="scan-failure-cause">The server rejected the TLS handshake.</div>
           <div data-testid="scan-failure-next-step"><b>Next step:</b> The server may require a client certificate, a specific server name, or ciphers cert-watch does not offer. Check the server&#39;s TLS configuration.</div>
@@ -214,17 +215,17 @@ Edit host details</summary>
                 <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
                 <div class="cw-form-grid">
                   <div class="cw-field">
-                    <label class="cw-label">Owner name</label>
-                    <input type="text" name="owner_name" class="cw-input" value="Edge Team" placeholder="Team or individual">
+                    <label class="cw-label" for="host-owner-name">Owner name</label>
+                    <input type="text" id="host-owner-name" name="owner_name" class="cw-input" value="Edge Team" placeholder="Team or individual">
                   </div>
                   <div class="cw-field">
-                    <label class="cw-label">Owner email</label>
-                    <input type="text" name="owner_email" class="cw-input" value="" placeholder="ops@example.com">
+                    <label class="cw-label" for="host-owner-email">Owner email</label>
+                    <input type="text" id="host-owner-email" name="owner_email" class="cw-input" value="" placeholder="ops@example.com">
                   </div>
 
                   <div class="cw-field">
-                    <label class="cw-label">Renewal method</label>
-                    <select name="renewal_method" class="cw-select">
+                    <label class="cw-label" for="host-renewal-method">Renewal method</label>
+                    <select id="host-renewal-method" name="renewal_method" class="cw-select">
                       <option value="" >—</option>
                       <option value="acme" >ACME</option>
                       <option value="cert-manager" selected>cert-manager</option>
@@ -232,8 +233,8 @@ Edit host details</summary>
                     </select>
                   </div>
                   <div class="cw-field wide">
-                    <label class="cw-label">Runbook URL</label>
-                    <input type="text" name="runbook_url" class="cw-input" value="" placeholder="https://wiki.example.com/cert-renewal">
+                    <label class="cw-label" for="host-runbook-url">Runbook URL</label>
+                    <input type="text" id="host-runbook-url" name="runbook_url" class="cw-input" value="" placeholder="https://wiki.example.com/cert-renewal">
                   </div>
                 </div>
                 <div class="cw-form-foot">
@@ -353,7 +354,7 @@ Edit host details</summary>
                 <form method="post" action="/hosts/{{HOST_2_ID}}/notes" class="cw-form">
                   <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
                   <label class="cw-label" for="host-notes">Host notes</label>
-                  <textarea id="host-notes" name="notes" class="cw-textarea mono" rows="5" maxlength="10000" spellcheck="false" data-testid="notes-editor">Waiting for the first successful observation.</textarea>
+                  <textarea id="host-notes" name="notes" class="cw-textarea" rows="5" maxlength="10000" spellcheck="false" data-testid="notes-editor">Waiting for the first successful observation.</textarea>
                   <div class="cw-form-foot"><button class="cw-btn primary sm" type="submit" data-testid="notes-save">Save notes</button></div>
                 </form>
               </div>
@@ -385,7 +386,7 @@ Edit tags</summary>
             <div class="cw-editor-body">
               <form method="post" action="/hosts/{{HOST_2_ID}}/tags" class="cw-form">
                 <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
-                <input class="cw-input" type="text" name="tags" value="staging, edge"
+                <input class="cw-input" type="text" name="tags" aria-label="Tags" value="staging, edge"
                        list="cw-all-tags" placeholder="comma-separated, e.g. prod, payments">
                 <datalist id="cw-all-tags">
                   <option value="edge"></option><option value="leaf-tag"></option><option value="mail"></option><option value="production"></option><option value="staging"></option>
@@ -440,7 +441,7 @@ Edit tags</summary>
   </div>
 </div>
 
-    </div>
+    </main>
   </div>
   <script src="/static/js/core.js" nonce="{{CSP_NONCE}}"></script>
 

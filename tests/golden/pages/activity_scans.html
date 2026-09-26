@@ -59,7 +59,7 @@
       </details>
 
     </header>
-    <div class="cw-page">
+    <main class="cw-page" id="main">
 
 
       <div id="cw-health" class="cw-health cw-hidden">
@@ -132,20 +132,21 @@ Run scan now</button>
             <th>Result</th>
             <th class="num">Endpoints</th>
             <th class="num">Attempts</th>
-            <th></th>
+            <th><span class="cw-sr">Details</span></th>
           </tr>
         </thead>
         <tbody>
 
 
+
           <tr data-expand="batch-1" tabindex="0" role="button" aria-expanded="false" aria-controls="batch-1">
-            <td class="mono tnum">2026-09-22 12:00</td>
+            <td class="tnum">2026-09-22 12:00</td>
             <td><span class="cw-status t-warn">
   <span class="dot" aria-hidden="true"></span>partial
 </span></td>
             <td class="num">
               1/2
-              <span class="cw-chip t-crit">1 failed</span>
+              <span class="cw-chip t-warn">1 failed</span>
             </td>
             <td class="num">2</td>
             <td class="num"><span class="chev">
@@ -169,10 +170,10 @@ Run scan now</button>
               <div class="row">
                 <span class="cw-id">pending.demo.test:8443</span>
 
-                  <span class="cw-status t-crit">
+                  <span class="cw-status t-warn">
   <span class="dot" aria-hidden="true"></span>failed
 </span>
-                  <span class="cw-chip t-crit">TLS handshake failed</span>
+                  <span class="cw-chip t-warn">TLS handshake failed</span>
 
               </div>
 
@@ -192,7 +193,7 @@ Run scan now</button>
 
 </div>
 
-    </div>
+    </main>
   </div>
   <script src="/static/js/core.js" nonce="{{CSP_NONCE}}"></script>
 

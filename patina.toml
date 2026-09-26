@@ -10,6 +10,14 @@ accent  = "cert-watch"
 prefix  = "cw"
 static  = "src/cert_watch/static"
 
+# Recorded local deviation (#126 S2, owner-approved 2026-09-25): cert-watch
+# does not use --accent. patina's token contract assigns the accent to links,
+# focus rings, the wordmark and active nav; cert-watch renders all of those as
+# neutral ink (links carry a hairline underline), because the bronze accent sat
+# beside amber --warn and read as a status. Colour in cert-watch means status
+# only. The contract tokens are untouched (no redefinition); cw.css simply
+# never references --accent. Candidate for upstream discussion in patina.
+
 [conformance.vendor]
 state = "enforced"
 

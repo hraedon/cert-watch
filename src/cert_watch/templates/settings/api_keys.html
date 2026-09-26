@@ -32,7 +32,7 @@
 
   {% if new_token %}
   <div class="cw-panel-body">
-    <div class="cw-note t-accent" data-testid="api-key-new">
+    <div class="cw-note t-ink" data-testid="api-key-new">
       {{ icons.svg_icon('key', 14) }}
       <div>
         <b>New key “{{ new_name }}” created.</b>
@@ -74,15 +74,15 @@
   <div class="cw-table-clip">
   <table class="cw-table" data-testid="api-keys-table">
     <thead>
-      <tr><th>Name</th><th>Scope</th><th>Created</th><th>Last used</th><th></th></tr>
+      <tr><th>Name</th><th>Scope</th><th>Created</th><th>Last used</th><th><span class="cw-sr">Actions</span></th></tr>
     </thead>
     <tbody>
       {% for k in api_keys %}
       <tr data-testid="api-key-row">
-        <td><span class="cw-id">{{ k.name }}</span></td>
-        <td><span class="cw-chip {{ 't-accent' if k.scope in ('write', 'admin') else '' }}">{{ k.scope }}</span></td>
-        <td class="mono">{{ k.created_at.strftime('%Y-%m-%d') }}</td>
-        <td class="mono">
+        <td><span class="cw-strong">{{ k.name }}</span></td>
+        <td><span class="cw-chip {{ 't-ink' if k.scope in ('write', 'admin') else '' }}">{{ k.scope }}</span></td>
+        <td class="tnum">{{ k.created_at.strftime('%Y-%m-%d') }}</td>
+        <td class="tnum">
           {% if k.last_used_at %}{{ k.last_used_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}
         </td>
         <td>

@@ -55,12 +55,12 @@
   {% if users %}
   <div class="cw-table-clip">
   <table class="cw-table">
-    <thead><tr><th>Username</th><th>Email</th><th>Role</th><th></th></tr></thead>
+    <thead><tr><th>Username</th><th>Email</th><th>Role</th><th><span class="cw-sr">Actions</span></th></tr></thead>
     <tbody>
       {% for u in users %}
       <tr>
-        <td class="cw-id">{{ u.username }}</td>
-        <td class="mono">{{ u.email or '—' }}</td>
+        <td class="cw-strong">{{ u.username }}</td>
+        <td>{{ u.email or '—' }}</td>
         <td>
           {% set ns = namespace(found='') %}
           {% for r in roles %}{% if r.id == u.role_id %}{% set ns.found = r.name %}{% endif %}{% endfor %}

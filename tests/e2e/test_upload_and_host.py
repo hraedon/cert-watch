@@ -125,6 +125,11 @@ def test_add_host_creates_row(page: Page, cert_watch_server: str) -> None:
     page.get_by_test_id("scan-hostname-input").fill(hostname)
     page.locator('[data-tab-pane="scan"] input[name="port"]').fill("443")
     page.get_by_test_id("scan-submit-btn").click()
+    # The add flow lands on the new host. Its failed first scan is a
+    # monitoring problem, so the failure box is warn, not crit (#126 S2).
+    panel = page.get_by_test_id("scan-failure-panel")
+    expect(panel.locator(".cw-note.t-warn")).to_be_visible()
+    expect(panel.locator(".t-crit")).to_have_count(0)
     # The scan will fail (host doesn't exist) — the app should still load
     # without 500. The host is stored even though no cert is captured.
     page.goto(f"{cert_watch_server}/browse")
@@ -138,7 +143,8 @@ def test_add_host_creates_row(page: Page, cert_watch_server: str) -> None:
     for toggle in page.locator("tr[data-expand^='batch-']").all():
         toggle.click()
     expect(page.get_by_text("nonexistent.invalid:443", exact=True).first).to_be_visible()
-    expect(page.locator(".cw-subrow .cw-chip.t-crit").first).to_be_visible()
+    # A failed scan is a monitoring problem, so it renders warn, not crit (#126).
+    expect(page.locator(".cw-subrow .cw-chip.t-warn").first).to_be_visible()
 
 
 def test_host_notes_editor_has_distinct_view_and_edit_states(

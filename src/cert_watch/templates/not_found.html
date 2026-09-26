@@ -3,13 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  {#- #98: the session cookie is SameSite=Strict and this page was reached by a
-      cross-site navigation from the IdP. Browsers withhold a Strict cookie
-      from a redirect that continues that navigation, so the hop into the app
-      is a fresh navigation started by this same-origin page. The target is
-      fixed by the server, never taken from the request. -#}
-  <meta http-equiv="refresh" content="0;url={{ next_url }}">
-  <title>cert-watch — signing in</title>
+  <title>cert-watch — page not found</title>
   <script nonce="{{ request.state.csp_nonce }}">
     try {
       var t = localStorage.getItem('cw-theme') || 'dark';
@@ -24,13 +18,10 @@
   <main class="cw-auth-center">
     <div class="cw-panel cw-auth-panel">
       <div class="cw-auth-intro">
-        <h1 data-testid="auth-continue-heading">Signed in</h1>
+        <h1 data-testid="not-found-heading">Page not found</h1>
       </div>
-      <div class="cw-form">
-        <div>
-          <a href="{{ next_url }}" class="cw-btn primary" data-testid="auth-continue-link">Continue to cert-watch</a>
-        </div>
-      </div>
+      <p class="cw-sub">There is nothing at this address. It may have been deleted, or the link may be mistyped.</p>
+      <p><a class="cw-link" href="/">Go to Home</a></p>
     </div>
   </main>
 </body>

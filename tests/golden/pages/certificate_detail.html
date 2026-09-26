@@ -59,7 +59,7 @@
       </details>
 
     </header>
-    <div class="cw-page">
+    <main class="cw-page" id="main">
 
 
       <div id="cw-health" class="cw-health cw-hidden">
@@ -100,7 +100,7 @@
 
 Scanned</span>
 
-        <span class="mono cw-muted">
+        <span class="cw-muted">
           scanned from mail.demo.test:443
 
         </span>
@@ -150,7 +150,7 @@ Download PEM</a>
         <div class="cw-panel-body">
           <div class="cw-kv-label">Time remaining</div>
           <div class="cw-hero">
-            <span class="mono t-warn cw-hero-num">60</span>
+            <span class="tnum t-warn cw-hero-num">60</span>
             <span class="cw-muted">days</span>
           </div>
 
@@ -161,7 +161,7 @@ Download PEM</a>
             <rect class="fill" width="83%" height="100%"/>
             <rect class="mark" x="83%" width="2" height="100%"/>
           </svg>
-          <div class="cw-validity-ends mono">
+          <div class="cw-validity-ends tnum">
             <span class="cw-muted">2025-11-21 · issued</span>
             <span class="cw-muted">2026-11-21 · expires</span>
           </div>
@@ -243,17 +243,17 @@ Edit host details</summary>
                 <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
                 <div class="cw-form-grid">
                   <div class="cw-field">
-                    <label class="cw-label">Owner name</label>
-                    <input type="text" name="owner_name" class="cw-input" value="Messaging Team" placeholder="Team or individual">
+                    <label class="cw-label" for="host-owner-name">Owner name</label>
+                    <input type="text" id="host-owner-name" name="owner_name" class="cw-input" value="Messaging Team" placeholder="Team or individual">
                   </div>
                   <div class="cw-field">
-                    <label class="cw-label">Owner email</label>
-                    <input type="text" name="owner_email" class="cw-input" value="messaging@example.test" placeholder="ops@example.com">
+                    <label class="cw-label" for="host-owner-email">Owner email</label>
+                    <input type="text" id="host-owner-email" name="owner_email" class="cw-input" value="messaging@example.test" placeholder="ops@example.com">
                   </div>
 
                   <div class="cw-field">
-                    <label class="cw-label">Renewal method</label>
-                    <select name="renewal_method" class="cw-select">
+                    <label class="cw-label" for="host-renewal-method">Renewal method</label>
+                    <select id="host-renewal-method" name="renewal_method" class="cw-select">
                       <option value="" >—</option>
                       <option value="acme" >ACME</option>
                       <option value="cert-manager" >cert-manager</option>
@@ -261,8 +261,8 @@ Edit host details</summary>
                     </select>
                   </div>
                   <div class="cw-field wide">
-                    <label class="cw-label">Runbook URL</label>
-                    <input type="text" name="runbook_url" class="cw-input" value="https://runbooks.example.test/mail-tls" placeholder="https://wiki.example.com/cert-renewal">
+                    <label class="cw-label" for="host-runbook-url">Runbook URL</label>
+                    <input type="text" id="host-runbook-url" name="runbook_url" class="cw-input" value="https://runbooks.example.test/mail-tls" placeholder="https://wiki.example.com/cert-renewal">
                   </div>
                 </div>
                 <div class="cw-form-foot">
@@ -403,7 +403,7 @@ Edit host details</summary>
                 <form method="post" action="/hosts/{{HOST_1_ID}}/notes" class="cw-form">
                   <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
                   <label class="cw-label" for="host-notes">Host notes</label>
-                  <textarea id="host-notes" name="notes" class="cw-textarea mono" rows="5" maxlength="10000" spellcheck="false" data-testid="notes-editor">Renew through the messaging runbook.</textarea>
+                  <textarea id="host-notes" name="notes" class="cw-textarea" rows="5" maxlength="10000" spellcheck="false" data-testid="notes-editor">Renew through the messaging runbook.</textarea>
                   <div class="cw-form-foot"><button class="cw-btn primary sm" type="submit" data-testid="notes-save">Save notes</button></div>
                 </form>
               </div>
@@ -521,13 +521,13 @@ Check endpoint reachability</button>
         <div class="cw-panel-body">
           <div class="cw-chiprow">
 
-              <span class="cw-chip inset">
+              <span class="cw-chip inset mono">
 
     <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/><path d="M3 12h18"/><path d="M12 3a14 14 0 000 18 14 14 0 000-18z"/></svg>
 
 mail.demo.test</span>
 
-              <span class="cw-chip inset">
+              <span class="cw-chip inset mono">
 
     <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/><path d="M3 12h18"/><path d="M12 3a14 14 0 000 18 14 14 0 000-18z"/></svg>
 
@@ -565,13 +565,13 @@ www.mail.demo.test</span>
 
   <div class="wide">
     <dt>Serial number</dt>
-    <dd>{{CERT_4_SERIAL}}</dd>
+    <dd class="mono">{{CERT_4_SERIAL}}</dd>
   </div>
 
 
   <div class="wide">
     <dt>SHA-256 fingerprint</dt>
-    <dd>{{CERT_4_FINGERPRINT_COLON}}</dd>
+    <dd class="mono">{{CERT_4_FINGERPRINT_COLON}}</dd>
   </div>
 
 
@@ -595,12 +595,12 @@ www.mail.demo.test</span>
 
           <div class="cw-tl">
 
-            <div class="cw-tl-node t-accent">
+            <div class="cw-tl-node t-ink">
               <span class="cw-tl-dot"></span><span class="cw-tl-line"></span>
               <div class="cw-chiprow">
-                <span class="mono">2025-11-21</span>
+                <span class="tnum">2025-11-21</span>
                 <span class="cw-chip t-ok">current</span>
-                <a href="/certificates/{{CERT_4_ID}}" class="cw-chip">{{CERT_4_FINGERPRINT_SHORT}}…</a>
+                <a href="/certificates/{{CERT_4_ID}}" class="cw-chip mono">{{CERT_4_FINGERPRINT_SHORT}}…</a>
               </div>
             </div>
 
@@ -631,7 +631,7 @@ Edit tags</summary>
             <div class="cw-editor-body">
               <form method="post" action="/certificates/{{CERT_4_ID}}/tags" class="cw-form">
                 <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
-                <input class="cw-input" type="text" name="tags" value="leaf-tag"
+                <input class="cw-input" type="text" name="tags" aria-label="Tags" value="leaf-tag"
                        list="cw-all-tags" placeholder="comma-separated, e.g. prod, payments">
                 <datalist id="cw-all-tags">
                   <option value="edge"></option><option value="leaf-tag"></option><option value="mail"></option><option value="production"></option><option value="staging"></option>
@@ -678,12 +678,12 @@ Edit tags</summary>
  Certificate chain</h2></div>
       <div class="cw-panel-body">
         <div class="cw-tl">
-          <div class="cw-tl-node t-accent">
+          <div class="cw-tl-node t-ink">
             <span class="cw-tl-dot"></span><span class="cw-tl-line"></span>
             <div class="cw-chaincard">
               <div class="cw-chiprow between">
                 <span class="cw-id">mail.demo.test</span>
-                <span class="cw-tl-role t-accent">Leaf · end-entity</span>
+                <span class="cw-tl-role t-ink">Leaf · end-entity</span>
               </div>
               <div class="cw-chiprow cw-metarow">
                 <span class="cw-chip">
@@ -691,7 +691,7 @@ Edit tags</summary>
     <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2"/><path d="M15 7a4 4 0 11-6 6l-6 6v3h3l6-6a4 4 0 016-6l1-1-3-3z"/></svg>
 
 RSA 2048</span>
-                <span class="mono cw-muted">exp 2026-11-21</span>
+                <span class="cw-muted tnum">exp 2026-11-21</span>
                 <span class="cw-spacer"></span>
                 <span class="cw-status t-warn">
   <span class="dot" aria-hidden="true"></span>60d
@@ -711,7 +711,7 @@ RSA 2048</span>
 <b>Unable to reach a trusted root</b></div>
           <p class="cw-sub">The stored chain ends at O=Demo Estate,CN=mail.demo.test. Its expected issuer is unavailable to this instance; it may be an intermediate or a root absent from its trust store.</p>
 
-          <dl class="cw-kv"><div class="wide"><dt>Expected issuer</dt><dd class="mono">CN=Demo Internal CA</dd></div></dl>
+          <dl class="cw-kv"><div class="wide"><dt>Expected issuer</dt><dd>CN=Demo Internal CA</dd></div></dl>
 
           <p class="cw-sub"><strong>Next step:</strong> Check the CA&#39;s chain bundle for the expected issuer. Configure the TLS endpoint with its leaf certificate and required intermediate certificates, in issuer order, then scan again. If the issuer is a private root, verify it and add it in Settings → Trust anchors instead. Public roots normally come from the system CA bundle.</p>
         </div>
@@ -721,7 +721,7 @@ RSA 2048</span>
   </div>
 </div>
 
-    </div>
+    </main>
   </div>
   <script src="/static/js/core.js" nonce="{{CSP_NONCE}}"></script>
 

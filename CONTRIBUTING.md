@@ -98,8 +98,15 @@ Each of these bugs shipped once, past a green suite:
 - `static/css/tokens.css` is vendored from the patina design system. Never
   edit it here; component styles and local tokens live in `cw.css`. Check that
   a utility class exists before relying on it.
-- Status colours are for status only. The accent is for links, focus and the
-  active state.
+- Colour means status, and only status: crit for expired, 7 days or less and
+  failing delivery; warn for 8–30 days and failing monitoring; ok for current.
+  Expired is crit plus the word "Expired". Links, focus rings and active states
+  are neutral ink (links get a hairline underline), never a status colour or
+  the patina accent.
+- One type scale: 12, 14, 16, 20 and 28 px (`--cw-fs-xs` to `--cw-fs-xl` in
+  `cw.css`). Monospace is for hostnames, serials, fingerprints and other
+  machine syntax such as raw errors, identifiers, API paths and headers,
+  and report hashes; chips, labels, dates and counts are sans.
 - If you add, move or remove an editing control, update `UI-INVENTORY.md` in
   the same pull request.
 - Visual baselines match GitHub's `ubuntu-latest` rendering. Regenerate them

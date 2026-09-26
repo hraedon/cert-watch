@@ -59,7 +59,7 @@
       </details>
 
     </header>
-    <div class="cw-page">
+    <main class="cw-page" id="main">
 
 
       <div id="cw-health" class="cw-health cw-hidden">
@@ -139,7 +139,7 @@ Add alert group</summary>
   </div>
   <div class="cw-field">
     <label class="cw-label" for="ag_match_tags">Match tags</label>
-    <input class="cw-input mono" type="text" id="ag_match_tags" name="match_tags"
+    <input class="cw-input" type="text" id="ag_match_tags" name="match_tags"
            value=""
            placeholder="e.g., platform-team, prod">
     <div class="cw-hint">Comma-separated. A cert routes to this group when any of its (cert or host) tags match.</div>
@@ -175,7 +175,7 @@ Add alert group</summary>
     <form method="get" action="/settings/alert-groups/preview" class="cw-form" data-testid="ag-preview-form">
       <div class="cw-field">
         <label class="cw-label" for="ag_preview_tags">Preview matches</label>
-        <input class="cw-input mono" type="text" id="ag_preview_tags" name="match_tags"
+        <input class="cw-input" type="text" id="ag_preview_tags" name="match_tags"
                value="" placeholder="tag-a, tag-b">
         <div class="cw-hint">Check how many certs carry a tag set before committing it (read-only, tag-based — manual cert assignments are not counted).</div>
       </div>
@@ -203,7 +203,7 @@ Add alert group</summary>
   </div>
 </div>
 
-    </div>
+    </main>
   </div>
   <script src="/static/js/core.js" nonce="{{CSP_NONCE}}"></script>
 

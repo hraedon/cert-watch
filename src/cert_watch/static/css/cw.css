@@ -6,17 +6,26 @@
    everything cert-watch: components, cw-local tokens, and the
    v2 grammar.
 
-   Voice: a warm-charcoal instrument panel with a bronze seal
-   accent. IBM Plex Mono carries every identity (hostname, CN,
-   serial, date, number); the sans face carries prose and chrome.
+   Voice: a warm-charcoal instrument panel. Colour is reserved for
+   status; everything else is ink on paper. IBM Plex Mono carries
+   hostnames, serials, fingerprints and other machine syntax (raw
+   errors, identifiers, API paths, report hashes) via `.mono`/`.cw-id`;
+   chips, labels, dates, counts, prose and chrome are sans.
 
    Grammar rules (enforced by review, so written down here):
    1. TONE IS A MODIFIER. `.t-ok/.t-warn/.t-crit/.t-expired/
-      .t-accent/.t-muted` set `--cw-tone`; components decide how to
-      render it. No per-component color variants.
-   2. STATUS COLORS ARE FOR STATUS. Chrome stays neutral; the
-      bronze accent marks links/focus/active only; a count of
-      zero renders neutral, never red.
+      .t-ink/.t-neutral/.t-muted` set `--cw-tone`; components decide
+      how to render it. No per-component color variants.
+   2. COLOUR MEANS STATUS, AND ONLY STATUS (#126 change 7):
+      crit = expired, <= 7 days, delivery failing; warn = 8-30 days,
+      monitoring failing; ok = current. Expired is crit plus the word
+      "Expired" (no separate hue). A zero count renders neutral.
+      Links, focus rings, active states and the wordmark are neutral
+      ink (links carry a hairline underline). cert-watch does not
+      use patina's --accent: the bronze sat beside amber warnings and
+      read as one. This is a recorded local deviation (patina.toml).
+   2a. ONE TYPE SCALE, five sizes: --cw-fs-xs 12 / sm 14 / md 16 /
+      lg 20 / xl 28. No other font-size values anywhere.
    3. COMPONENTS CARRY THEIR OWN SPACING. Templates compose
       components; there is no margin/padding utility layer.
    4. DYNAMIC VALUES GO IN SVG ATTRIBUTES (bar widths, chart
@@ -32,16 +41,23 @@
    patina token contract) ---------- */
 :root,
 :root[data-theme="dark"] {
-  --cw-accent-fg: #0e0d0b;
-  --cw-expired: #a78bfa; /* WI-145: measured expired-status separation */
+  /* Type scale (#126 change 7). patina's --fs-* ramp has seven steps
+     at fractional sizes; cert-watch uses these five and nothing else. */
+  --cw-fs-xs: 12px;   /* meta, labels, captions, chips */
+  --cw-fs-sm: 14px;   /* body, rows, controls */
+  --cw-fs-md: 16px;   /* section / panel headings */
+  --cw-fs-lg: 20px;   /* page title, stat values */
+  --cw-fs-xl: 28px;   /* the one hero number */
+  /* Neutral ink for links and focus (not a status hue). */
+  --cw-ink: var(--text);
+  --cw-ink-line: var(--text-3);
+  --cw-ink-soft: color-mix(in srgb, var(--text) 12%, transparent);
   --cw-backdrop: rgba(4, 3, 2, .55);
   --cw-pad-panel: 15px 18px;
   --cw-pad-page: 22px 26px;
   --cw-topbar-h: 58px;
 }
 :root[data-theme="light"] {
-  --cw-accent-fg: #ffffff;
-  --cw-expired: #6d28d9; /* WI-145: measured expired-status separation */
   --cw-backdrop: rgba(40, 32, 16, .35);
 }
 
@@ -67,17 +83,30 @@
    actually wins. `.cw-link:hover` is also (0,2,0) and still underlines.
    A NEW link component styled with a class-only selector must be added to
    the list below until patina's bare a:hover rule goes away.  */
-body { line-height: normal; }                    /* v2 shipped without 1.5 */
+body { line-height: normal; font-size: var(--cw-fs-sm); } /* v2 shipped without 1.5; one type scale */
 a { color: revert; text-decoration: revert; }    /* links are opt-in .cw-link */
 .cw-wordmark:hover, .cw-btn:hover, .cw-tab:hover,
 .cw-menu-item:hover, .cw-stat:hover { text-decoration: none; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: revert; }
+:focus-visible { outline: 2px solid var(--cw-ink); outline-offset: 1px; border-radius: revert; }
 
 /* ---------- BASE HELPERS (cert-watch's own) ---------- */
-a.cw-link, .cw-link { color: var(--accent); cursor: pointer; text-decoration: none; }
-.cw-link:hover { text-decoration: underline; }
+/* Links are ink with a hairline underline; the underline, not a hue,
+   is what marks them (WCAG 1.4.1). */
+a.cw-link, .cw-link {
+  color: var(--cw-ink); cursor: pointer;
+  text-decoration: underline; text-decoration-color: var(--cw-ink-line);
+  text-decoration-thickness: 1px; text-underline-offset: 3px;
+}
+.cw-link:hover { text-decoration: underline; text-decoration-color: var(--cw-ink); }
 .cw-muted { color: var(--text-2); }
-.cw-sub { font-size: var(--fs-sm); color: var(--text-2); margin-top: 3px; }
+.cw-sub { font-size: var(--cw-fs-xs); color: var(--text-2); margin-top: 3px; }
+/* Emphasised name that is not a hostname (API key, role, rule, group). */
+.cw-strong { font-weight: 500; color: var(--text); }
+/* Visually hidden, still announced (e.g. an actions column header). */
+.cw-sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
 .cw-delivery-details { min-width: 0; overflow-wrap: anywhere; }
 .cw-delivery-details > summary { white-space: normal; }
 .cw-divider { height: 1px; background: var(--border); border: none; margin: var(--space-4) 0; }
@@ -86,13 +115,21 @@ form.cw-inline { display: inline; }
 
 /* ---------- TONE SYSTEM ----------
    A tone class sets --cw-tone (+ --cw-tone-soft) and text color.
-   Components below consume --cw-tone for dots, fills, borders.   */
-.t-ok      { --cw-tone: var(--ok);      --cw-tone-soft: color-mix(in srgb, var(--ok) 13%, transparent);      color: var(--ok); }
-.t-warn    { --cw-tone: var(--warn);    --cw-tone-soft: color-mix(in srgb, var(--warn) 14%, transparent);    color: var(--warn); }
-.t-crit    { --cw-tone: var(--crit);    --cw-tone-soft: color-mix(in srgb, var(--crit) 14%, transparent);    color: var(--crit); }
-.t-expired { --cw-tone: var(--cw-expired); --cw-tone-soft: color-mix(in srgb, var(--cw-expired) 14%, transparent); color: var(--cw-expired); }
-.t-accent  { --cw-tone: var(--accent);  --cw-tone-soft: var(--accent-soft);                                  color: var(--accent); }
-.t-muted   { --cw-tone: var(--text-3);  --cw-tone-soft: transparent;                                          color: var(--text-3); }
+   Components below consume --cw-tone for dots, fills, borders.
+   Text that sits ON a tinted fill (notes, banners, flashes) is ink
+   (--cw-on-tint), with the tone on the icon, dot or fill: the status
+   hues clear 4.5:1 on plain surfaces but not on their own tints
+   (dark --crit is 3.95:1 on a 14% crit tint over --panel).        */
+.t-ok      { --cw-tone: var(--ok);      --cw-tone-soft: color-mix(in srgb, var(--ok) 13%, transparent);      color: var(--ok);   --cw-on-tint: var(--text); }
+.t-warn    { --cw-tone: var(--warn);    --cw-tone-soft: color-mix(in srgb, var(--warn) 14%, transparent);    color: var(--warn); --cw-on-tint: var(--text); }
+/* Expired is crit; the word "Expired" carries the difference. */
+.t-crit,
+.t-expired { --cw-tone: var(--crit);    --cw-tone-soft: color-mix(in srgb, var(--crit) 14%, transparent);    color: var(--crit); --cw-on-tint: var(--text); }
+/* Neutral emphasis (a current item, a privileged tier): ink, not a hue. */
+.t-ink     { --cw-tone: var(--text);    --cw-tone-soft: var(--panel-3);                                       color: var(--text); --cw-on-tint: var(--text); }
+/* Muted is --text-2, not --text-3: components render --cw-tone as text,
+   and --text-3 fails 4.5:1 on --panel in both themes. */
+.t-muted   { --cw-tone: var(--text-2);  --cw-tone-soft: transparent;                                          color: var(--text-2); }
 .t-neutral { --cw-tone: var(--text-2);  --cw-tone-soft: transparent;                                          color: var(--text-2); }
 
 /* ---------- APP FRAME ---------- */
@@ -112,16 +149,16 @@ form.cw-inline { display: inline; }
 .cw-mark {
   width: 28px; height: 28px; border-radius: 7px; flex: 0 0 auto;
   display: flex; align-items: center; justify-content: center;
-  color: var(--accent); background: var(--inset); border: 1px solid var(--border-2);
+  color: var(--text); background: var(--inset); border: 1px solid var(--border-2);
 }
-.cw-name { font-family: var(--font-mono); font-size: 14.5px; font-weight: 600; letter-spacing: -.2px; }
+.cw-name { font-size: var(--cw-fs-sm); font-weight: 600; letter-spacing: -.1px; }
 .cw-ver {
-  font-family: var(--font-mono); font-size: 10.5px; color: var(--text-3);
+  font-size: var(--cw-fs-xs); color: var(--text-2);
   border: 1px solid var(--border-2); border-radius: 5px; padding: 1px 5px;
 }
 .cw-nav, .cw-nav-desktop { display: flex; gap: 2px; margin-left: 8px; }
 .cw-nav a, .cw-nav-desktop a {
-  font-size: var(--fs-base); font-weight: 500; color: var(--text-2);
+  font-size: var(--cw-fs-sm); font-weight: 500; color: var(--text-2);
   padding: 7px 12px; border-radius: 7px; text-decoration: none;
   transition: background .12s, color .12s;
 }
@@ -129,15 +166,15 @@ form.cw-inline { display: inline; }
 .cw-nav a.active, .cw-nav-desktop a.active { color: var(--text); background: var(--panel-3); }
 .cw-mobile-nav { display: none; }
 .cw-spacer { flex: 1 1 auto; }
-.cw-user { display: flex; align-items: center; gap: 10px; font-size: var(--fs-base); color: var(--text-2); }
+.cw-user { display: flex; align-items: center; gap: 10px; font-size: var(--cw-fs-sm); color: var(--text-2); }
 
 /* Scope indicator: renders when the viewer's fleet is tag-scoped.
-   Bronze-bordered so it reads as chrome, not status.            */
+   Neutral chrome, not status.                                   */
 .cw-scope {
   display: inline-flex; align-items: center; gap: 6px;
-  font-family: var(--font-mono); font-size: var(--fs-xs);
-  color: var(--accent); background: var(--accent-soft);
-  border: 1px solid var(--accent-line); border-radius: 6px;
+  font-size: var(--cw-fs-xs);
+  color: var(--text-2); background: var(--inset);
+  border: 1px solid var(--border-2); border-radius: 6px;
   padding: 3px 8px; white-space: nowrap;
 }
 .cw-scope svg { width: 11px; height: 11px; }
@@ -147,17 +184,17 @@ form.cw-inline { display: inline; }
   display: flex; align-items: flex-end; justify-content: space-between;
   gap: var(--space-4); margin-bottom: 18px;
 }
-.cw-page-head h1 { margin: 0; font-size: var(--fs-xl); font-weight: 600; letter-spacing: -.4px; }
-.cw-page-head-sub { font-size: var(--fs-base); color: var(--text-2); margin-top: 4px; }
+.cw-page-head h1 { margin: 0; font-size: var(--cw-fs-lg); font-weight: 600; letter-spacing: -.2px; }
+.cw-page-head-sub { font-size: var(--cw-fs-sm); color: var(--text-2); margin-top: 4px; }
 .cw-page-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 
-.cw-crumbs { display: flex; align-items: center; gap: 7px; font-size: var(--fs-sm); color: var(--text-2); margin-bottom: 16px; }
+.cw-crumbs { display: flex; align-items: center; gap: 7px; font-size: var(--cw-fs-xs); color: var(--text-2); margin-bottom: 16px; }
 .cw-crumbs a { color: var(--text-2); text-decoration: none; }
 .cw-crumbs a:hover { color: var(--text-2); }
 
 /* In-page section header (replaces three per-template versions). */
 .cw-section { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-4); margin: var(--space-6) 0 var(--space-3); }
-.cw-section h2 { margin: 0; font-size: var(--fs-md); font-weight: 600; letter-spacing: -.2px; }
+.cw-section h2 { margin: 0; font-size: var(--cw-fs-md); font-weight: 600; letter-spacing: -.2px; }
 .cw-section .cw-sub { margin-top: 2px; }
 
 /* ---------- PANEL ---------- */
@@ -167,17 +204,17 @@ form.cw-inline { display: inline; }
   display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
   padding: 13px 18px; border-bottom: 1px solid var(--border);
 }
-.cw-panel-head h2, .cw-panel-head h3 { margin: 0; font-size: var(--fs-base); font-weight: 600; }
+.cw-panel-head h2, .cw-panel-head h3 { margin: 0; font-size: var(--cw-fs-md); font-weight: 600; }
 .cw-panel-body { padding: var(--cw-pad-panel); }
 .cw-panel-body + .cw-panel-body { border-top: 1px solid var(--border); }
 /* A tinted note panel (chain status, PQ note, callouts). */
 .cw-note {
   display: flex; align-items: flex-start; gap: 9px;
   padding: 10px 13px; border-radius: var(--radius);
-  font-size: var(--fs-sm); line-height: 1.5;
-  background: var(--cw-tone-soft, var(--inset)); color: var(--cw-tone, var(--text-2));
+  font-size: var(--cw-fs-sm); line-height: 1.5;
+  background: var(--cw-tone-soft, var(--inset)); color: var(--cw-on-tint, var(--text-2));
 }
-.cw-note svg { flex: 0 0 auto; margin-top: 1px; }
+.cw-note svg { flex: 0 0 auto; margin-top: 1px; color: var(--cw-tone, currentColor); }
 
 /* ---------- STAT STRIP ----------
    One bordered instrument strip, hairline dividers. Cells may be
@@ -193,27 +230,26 @@ form.cw-inline { display: inline; }
 }
 .cw-stat:first-child { border-left: none; }
 a.cw-stat:hover { background: var(--panel-2); }
-.cw-stat.active { box-shadow: inset 0 0 0 2px var(--accent); }
+.cw-stat.active { box-shadow: inset 0 0 0 2px var(--cw-ink); }
 .cw-stat-label {
   display: flex; align-items: center; gap: 7px;
-  font-family: var(--font-mono); font-size: 10.5px; font-weight: 500;
-  color: var(--text-2); text-transform: uppercase; letter-spacing: .07em;
+  font-size: var(--cw-fs-xs); font-weight: 600; color: var(--text-2);
 }
 .cw-stat-label svg { width: 13px; height: 13px; opacity: .85; }
 .cw-stat-val {
-  font-family: var(--font-mono); font-size: 24px; font-weight: 600;
-  letter-spacing: -.5px; margin-top: 7px; line-height: 1;
+  font-size: var(--cw-fs-lg); font-weight: 600;
+  letter-spacing: -.2px; margin-top: 7px; line-height: 1;
   font-variant-numeric: tabular-nums; color: var(--text);
 }
 /* Tone applies to the value only when the count is non-zero:
    templates put .t-* on the value span only when val > 0.       */
 .cw-stat-val.t-ok, .cw-stat-val.t-warn, .cw-stat-val.t-crit, .cw-stat-val.t-expired { color: var(--cw-tone); }
-.cw-stat-sub { font-size: var(--fs-xs); color: var(--text-2); margin-top: 6px; }
+.cw-stat-sub { font-size: var(--cw-fs-xs); color: var(--text-2); margin-top: 6px; }
 
 /* ---------- STATUS (dot + colored text) ---------- */
 .cw-status {
   display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
-  font-size: 11.5px; font-weight: 600; letter-spacing: .01em; line-height: 1.4;
+  font-size: var(--cw-fs-xs); font-weight: 600; letter-spacing: .01em; line-height: 1.4;
   color: var(--cw-tone, var(--text-2));
 }
 .cw-status .dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--cw-tone, var(--text-3)); }
@@ -221,17 +257,17 @@ a.cw-stat:hover { background: var(--panel-2); }
 /* ---------- CHIP (one system; tones via .t-*) ---------- */
 .cw-chip {
   display: inline-flex; align-items: center; gap: 5px;
-  font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 450;
+  font-size: var(--cw-fs-xs); font-weight: 500;
   padding: 1.5px 7px; border-radius: 4px; white-space: nowrap;
   border: 1px solid var(--border); color: var(--text-2); background: transparent;
 }
 .cw-chip svg { width: 11px; height: 11px; }
-.cw-chip.t-ok, .cw-chip.t-warn, .cw-chip.t-crit, .cw-chip.t-expired, .cw-chip.t-accent {
+.cw-chip.t-ok, .cw-chip.t-warn, .cw-chip.t-crit, .cw-chip.t-expired, .cw-chip.t-ink {
   color: var(--cw-tone);
-  border-color: color-mix(in srgb, var(--cw-tone) 32%, transparent);
-  background: var(--cw-tone-soft);
+  border-color: color-mix(in srgb, var(--cw-tone) 45%, transparent);
+  background: transparent; /* tone text on its own tint fails 4.5:1 */
 }
-.cw-chip.t-muted { color: var(--text-3); }
+.cw-chip.t-muted { color: var(--text-2); }
 .cw-chip.inset { background: var(--inset); }        /* SANs, values */
 a.cw-chip { text-decoration: none; cursor: pointer; }
 a.cw-chip:hover { border-color: var(--border-2); color: var(--text); }
@@ -242,23 +278,23 @@ a.cw-chip:hover { border-color: var(--border-2); color: var(--text); }
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 21px; height: 19px; padding: 0 5px; border-radius: var(--radius-sm);
   border: 1.5px solid currentColor; background: transparent;
-  font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 700; line-height: 1;
+  font-size: var(--cw-fs-xs); font-weight: 700; line-height: 1;
 }
-.cw-grade.lg { min-width: 38px; height: 34px; font-size: var(--fs-lg); border-radius: 9px; }
+.cw-grade.lg { min-width: 38px; height: 34px; font-size: var(--cw-fs-lg); border-radius: 9px; }
 
 /* ---------- BARS / METERS (SVG-based) ----------
    Markup: <svg class="cw-bar t-warn" ...><rect class="track"/><rect class="fill" width="63%"/></svg>
    Width lives in the SVG attribute — no inline style needed.    */
 svg.cw-bar { display: block; width: 100%; height: 5px; border-radius: 3px; overflow: hidden; }
 svg.cw-bar .track { fill: var(--inset); width: 100%; height: 100%; }
-svg.cw-bar .fill { fill: var(--cw-tone, var(--accent)); height: 100%; }
+svg.cw-bar .fill { fill: var(--cw-tone, var(--text-2)); height: 100%; }
 svg.cw-bar.thick { height: 8px; border-radius: 5px; }
 svg.cw-bar .mark { fill: var(--text); opacity: .6; }
 .cw-expiry-track { width: 130px; margin-top: 5px; }
 
 /* ---------- BUTTONS ---------- */
 .cw-btn {
-  font-family: var(--font-sans); font-size: 13px; font-weight: 500;
+  font-family: var(--font-sans); font-size: var(--cw-fs-sm); font-weight: 500;
   display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
   padding: 8px 13px; border-radius: var(--radius); border: 1px solid var(--border-2);
   background: var(--panel-2); color: var(--text); transition: all .12s;
@@ -270,13 +306,14 @@ svg.cw-bar .mark { fill: var(--text); opacity: .6; }
 :root[data-theme="dark"] .cw-btn.primary:hover { filter: brightness(1.1); }
 .cw-btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); padding: 6px 9px; }
 .cw-btn.ghost:hover { background: var(--panel-2); color: var(--text); }
-.cw-btn.sm { padding: 5px 10px; font-size: 12px; }
+.cw-btn.sm { padding: 5px 10px; font-size: var(--cw-fs-xs); }
+/* Outlined, not tinted: --crit text on a crit tint fails 4.5:1 in dark. */
 .cw-btn.danger {
-  background: color-mix(in srgb, var(--crit) 14%, transparent);
-  border-color: color-mix(in srgb, var(--crit) 30%, transparent);
+  background: transparent;
+  border-color: color-mix(in srgb, var(--crit) 55%, transparent);
   color: var(--crit);
 }
-.cw-btn.danger:hover { background: color-mix(in srgb, var(--crit) 22%, transparent); }
+.cw-btn.danger:hover { background: transparent; border-color: var(--crit); }
 .cw-btn[disabled], .cw-btn[aria-disabled="true"] { opacity: .45; pointer-events: none; }
 
 .cw-iconbtn {
@@ -289,19 +326,19 @@ svg.cw-bar .mark { fill: var(--text); opacity: .6; }
 
 /* ---------- FORMS ---------- */
 .cw-field { display: flex; flex-direction: column; gap: 6px; }
-.cw-label { font-size: 11.5px; font-weight: 500; color: var(--text-2); letter-spacing: .02em; }
+.cw-label { font-size: var(--cw-fs-xs); font-weight: 600; color: var(--text-2); }
 .cw-input, .cw-select, .cw-textarea {
-  font-family: var(--font-sans); font-size: 13px; color: var(--text); width: 100%;
+  font-family: var(--font-sans); font-size: var(--cw-fs-sm); color: var(--text); width: 100%;
   background: var(--inset); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 8px 11px; outline: none; transition: border-color .12s, box-shadow .12s;
 }
-.cw-input::placeholder, .cw-textarea::placeholder { color: var(--text-3); }
+.cw-input::placeholder, .cw-textarea::placeholder { color: var(--text-2); opacity: .8; }
 .cw-input:focus, .cw-select:focus, .cw-textarea:focus {
-  border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+  border-color: var(--text-2); box-shadow: 0 0 0 3px var(--cw-ink-soft);
 }
-.cw-input.mono, .cw-textarea.mono { font-family: var(--font-mono); font-size: var(--fs-sm); }
+.cw-input.mono, .cw-textarea.mono { font-family: var(--font-mono); font-size: var(--cw-fs-xs); }
 .cw-textarea { min-height: 110px; resize: vertical; line-height: 1.6; }
-.cw-hint { font-size: var(--fs-xs); color: var(--text-2); line-height: 1.5; }
+.cw-hint { font-size: var(--cw-fs-xs); color: var(--text-2); line-height: 1.5; }
 .cw-form { display: flex; flex-direction: column; gap: var(--space-4); }
 .cw-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
 .cw-form-grid .wide { grid-column: 1 / -1; }
@@ -311,7 +348,7 @@ svg.cw-bar .mark { fill: var(--text); opacity: .6; }
 }
 .cw-check {
   display: flex; align-items: center; gap: 9px;
-  font-size: 13px; color: var(--text-2); cursor: pointer;
+  font-size: var(--cw-fs-sm); color: var(--text-2); cursor: pointer;
 }
 
 /* ONE toggle switch. */
@@ -322,16 +359,16 @@ svg.cw-bar .mark { fill: var(--text); opacity: .6; }
   content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px;
   border-radius: 50%; background: #fff; transition: transform .2s;
 }
-.cw-toggle input:checked + .track { background: var(--accent); }
-.cw-toggle input:checked + .track::after { transform: translateX(18px); }
-.cw-toggle input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cw-toggle input:checked + .track { background: var(--btn-strong-bg); }
+.cw-toggle input:checked + .track::after { transform: translateX(18px); background: var(--btn-strong-text); }
+.cw-toggle input:focus-visible + .track { outline: 2px solid var(--cw-ink); outline-offset: 2px; }
 
 /* Env-var override badge (settings). */
 .cw-envbadge {
   display: inline-flex; align-items: center; gap: 4px;
-  font-family: var(--font-mono); font-size: 10px; font-weight: 600;
-  color: var(--accent); background: var(--accent-soft);
-  border: 1px solid var(--accent-line); border-radius: 5px; padding: 1px 6px;
+  font-size: var(--cw-fs-xs); font-weight: 600;
+  color: var(--text-2); background: var(--inset);
+  border: 1px solid var(--border-2); border-radius: 5px; padding: 1px 6px;
 }
 
 /* ---------- SEGMENTED CONTROL (the only one) ----------
@@ -342,7 +379,7 @@ svg.cw-bar .mark { fill: var(--text); opacity: .6; }
   border-radius: var(--radius); padding: 3px; gap: 2px;
 }
 .cw-seg > a, .cw-seg > button {
-  font-family: var(--font-sans); font-size: var(--fs-sm); font-weight: 500;
+  font-family: var(--font-sans); font-size: var(--cw-fs-xs); font-weight: 500;
   color: var(--text-2); border: none; background: transparent;
   padding: 5px 11px; border-radius: var(--radius-sm); cursor: pointer;
   transition: all .12s; display: inline-flex; align-items: center; gap: 6px;
@@ -350,7 +387,7 @@ svg.cw-bar .mark { fill: var(--text); opacity: .6; }
 }
 .cw-seg > a:hover, .cw-seg > button:hover { color: var(--text); }
 .cw-seg > .on { background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
-.cw-seg .cnt { font-family: var(--font-mono); font-size: var(--fs-xs); opacity: .65; }
+.cw-seg .cnt { font-size: var(--cw-fs-xs); font-variant-numeric: tabular-nums; }
 
 /* ---------- FILTER BAR (the one filter paradigm) ----------
    search + segments + spacer + secondary controls.              */
@@ -364,45 +401,44 @@ svg.cw-bar .mark { fill: var(--text); opacity: .6; }
 .cw-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: var(--space-5); }
 .cw-tab {
   padding: 9px 16px; cursor: pointer; border-bottom: 2px solid transparent;
-  color: var(--text-3); text-decoration: none; font-size: var(--fs-base); font-weight: 500;
+  color: var(--text-2); text-decoration: none; font-size: var(--cw-fs-sm); font-weight: 500;
   display: inline-flex; align-items: center; gap: 7px;
 }
 .cw-tab:hover { color: var(--text); }
-.cw-tab.active { color: var(--text); border-bottom-color: var(--accent); }
-.cw-tab .cnt { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-3); }
+.cw-tab.active { color: var(--text); border-bottom-color: var(--cw-ink); }
+.cw-tab .cnt { font-size: var(--cw-fs-xs); color: var(--text-2); font-variant-numeric: tabular-nums; }
 
 /* ---------- SIDE NAV (settings) ---------- */
 .cw-sidegrid { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: var(--space-6); align-items: start; }
 .cw-sidenav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: var(--space-4); }
 .cw-sidenav a {
   display: block; padding: 8px 12px; border-radius: 7px; text-decoration: none;
-  color: var(--text-2); font-size: var(--fs-base); font-weight: 500;
+  color: var(--text-2); font-size: var(--cw-fs-sm); font-weight: 500;
   transition: background .12s, color .12s;
 }
 .cw-sidenav a:hover { background: var(--panel-2); color: var(--text); }
 .cw-sidenav a.active { background: var(--panel-3); color: var(--text); }
 .cw-sidenav .grp {
-  font-family: var(--font-mono); font-size: 10px; font-weight: 600;
-  color: var(--text-2); text-transform: uppercase; letter-spacing: .07em;
+  font-size: var(--cw-fs-xs); font-weight: 600; color: var(--text-2);
   padding: 12px 12px 4px;
 }
 
 /* ---------- TABLE (one recipe) ---------- */
 .cw-table { width: 100%; border-collapse: separate; border-spacing: 0; }
 .cw-table th {
-  text-align: left; font-family: var(--font-mono); font-size: 10.5px; font-weight: 500;
-  color: var(--text-2); letter-spacing: .07em; text-transform: uppercase;
+  text-align: left; font-size: var(--cw-fs-xs); font-weight: 600; color: var(--text-2);
   padding: 12px 14px 9px; border-bottom: 1px solid var(--border);
   white-space: nowrap; user-select: none;
 }
-.cw-table td { padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; font-size: var(--fs-sm); }
+.cw-table td { padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; font-size: var(--cw-fs-sm); }
 .cw-table tr:last-child > td { border-bottom: none; }
 .cw-table tbody tr { transition: background .1s; }
 .cw-table tbody tr:hover { background: var(--row-hover); }
-.cw-table th.num, .cw-table td.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.cw-table th.num, .cw-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .cw-table .cw-row-link { cursor: pointer; }
-/* identity cell: mono name + muted sub-line */
-.cw-id { font-family: var(--font-mono); font-size: var(--fs-base); font-weight: 500; letter-spacing: -.2px; color: var(--text); }
+/* identity cell: a hostname / CN in mono + muted sub-line. Names that are
+   not hostnames (keys, roles, groups) use .cw-strong instead. */
+.cw-id { font-family: var(--font-mono); font-size: var(--cw-fs-sm); font-weight: 500; letter-spacing: -.2px; color: var(--text); }
 /* sortable headers */
 .cw-table th a.sort { color: inherit; text-decoration: none; cursor: pointer; }
 .cw-table th a.sort:hover { color: var(--text-2); }
@@ -433,14 +469,11 @@ tr[data-expand] { cursor: pointer; }
 .cw-cal-row { display: flex; align-items: center; gap: 14px; padding: 9px 0; border-top: 1px solid var(--border); }
 .cw-cal-row:first-child { border-top: none; }
 .cw-cal-row.quiet { padding: 5px 0; }
-.cw-cal-date { min-width: 136px; font-size: var(--fs-sm); }
-.cw-cal-now {
-  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
-  color: var(--accent); text-transform: uppercase; letter-spacing: .04em;
-}
+.cw-cal-date { min-width: 136px; font-size: var(--cw-fs-xs); }
+.cw-cal-now { font-size: var(--cw-fs-xs); font-weight: 700; color: var(--text); }
 
 /* ---------- PAGINATION ---------- */
-.cw-pager { display: flex; align-items: center; gap: var(--space-4); margin: var(--space-4) 0; font-size: var(--fs-base); color: var(--text-2); }
+.cw-pager { display: flex; align-items: center; gap: var(--space-4); margin: var(--space-4) 0; font-size: var(--cw-fs-sm); color: var(--text-2); }
 
 /* ---------- DISCLOSURE (native <details>, the only mechanism) ---------- */
 details.cw-disclose > summary {
@@ -461,33 +494,28 @@ details.cw-editor[open] .when-open { display: inline; }
 /* ---------- KV GRID (detail-page fields) ---------- */
 .cw-kv { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 22px; margin: 0; }
 .cw-kv > div.wide { grid-column: 1 / -1; }
-.cw-kv dt {
-  font-size: var(--fs-xs); color: var(--text-3); font-weight: 500;
-  letter-spacing: .03em; text-transform: uppercase; font-family: var(--font-mono); margin-bottom: 5px;
-}
-.cw-kv dd { margin: 0; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--text); word-break: break-word; line-height: 1.5; }
+.cw-kv dt { font-size: var(--cw-fs-xs); color: var(--text-2); font-weight: 600; margin-bottom: 5px; }
+/* Values are sans; a serial, fingerprint or hostname value adds .mono. */
+.cw-kv dd { margin: 0; font-size: var(--cw-fs-sm); color: var(--text); word-break: break-word; line-height: 1.5; }
 
 /* ---------- DETAIL-PAGE PIECES ---------- */
-.cw-kv-label {
-  font-size: var(--fs-xs); color: var(--text-3); font-weight: 500;
-  letter-spacing: .03em; text-transform: uppercase; font-family: var(--font-mono);
-  margin-bottom: 5px;
-}
+.cw-kv-label { font-size: var(--cw-fs-xs); color: var(--text-2); font-weight: 600; margin-bottom: 5px; }
 .cw-hero { display: flex; align-items: baseline; gap: 8px; margin-bottom: var(--space-3); }
-.cw-hero-num { font-size: var(--fs-2xl); font-weight: 600; letter-spacing: -.5px; line-height: 1; }
-.cw-validity-ends { display: flex; justify-content: space-between; margin-top: 8px; font-size: 11.5px; }
+.cw-hero-num { font-size: var(--cw-fs-xl); font-weight: 600; letter-spacing: -.5px; line-height: 1; }
+.cw-validity-ends { display: flex; justify-content: space-between; margin-top: 8px; font-size: var(--cw-fs-xs); }
 .cw-findings { display: flex; flex-direction: column; gap: 7px; }
-.cw-finding { display: flex; align-items: flex-start; gap: 8px; font-size: var(--fs-sm); }
+.cw-finding { display: flex; align-items: flex-start; gap: 8px; font-size: var(--cw-fs-sm); }
 .cw-finding > span:first-child { flex: 0 0 16px; display: inline-flex; margin-top: 1px; }
 .cw-finding .fail { font-weight: 600; }
 .cw-panel-head-inline { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-2); }
-.cw-notes-view { white-space: pre-wrap; word-break: break-word; font-size: var(--fs-sm); line-height: 1.6; color: var(--text-2); }
+.cw-notes-view { white-space: pre-wrap; word-break: break-word; font-size: var(--cw-fs-sm); line-height: 1.6; color: var(--text-2); }
 .cw-panel-body:has(details.cw-editor[open]) > .cw-notes-view { display: none; }
 .cw-panel-body:has(details.cw-editor[open]) .cw-panel-head-inline { display: block; }
 .cw-panel-body:has(details.cw-editor[open]) details.cw-editor { width: 100%; }
 .cw-panel-body:has(details.cw-editor[open]) details.cw-editor > summary { margin-left: auto; }
+/* --inset, not --panel-2: dark --crit is 4.28:1 on --panel-2. */
 .cw-chaincard {
-  background: var(--panel-2); border: 1px solid var(--border);
+  background: var(--inset); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 11px 13px;
 }
 .cw-chiprow.between { justify-content: space-between; }
@@ -499,12 +527,12 @@ details.cw-editor[open] .when-open { display: inline; }
 .cw-tl-node:last-child { padding-bottom: 0; }
 .cw-tl-dot {
   position: absolute; left: 9px; top: 5px; width: 14px; height: 14px;
-  border-radius: 50%; border: 2px solid var(--cw-tone, var(--accent)); background: var(--panel); z-index: 2;
+  border-radius: 50%; border: 2px solid var(--cw-tone, var(--text-2)); background: var(--panel); z-index: 2;
 }
 .cw-tl-line { position: absolute; left: 15px; top: 19px; bottom: 0; width: 2px; background: var(--border-2); }
 .cw-tl-node:last-child .cw-tl-line { display: none; }
 .cw-tl-role {
-  font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em;
+  font-size: var(--cw-fs-xs); font-weight: 600;
   white-space: nowrap; color: var(--cw-tone, var(--text-2));
 }
 
@@ -525,7 +553,7 @@ details.cw-editor[open] .when-open { display: inline; }
   box-shadow: -16px 0 48px rgba(0,0,0,.4);
 }
 .cw-drawer-head { display: flex; align-items: flex-start; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid var(--border); }
-.cw-drawer-title { margin: 0; font-size: var(--fs-md); font-weight: 600; }
+.cw-drawer-title { margin: 0; font-size: var(--cw-fs-md); font-weight: 600; }
 .cw-drawer-body { flex: 1; overflow: auto; padding: 20px; }
 .cw-drawer-foot { display: flex; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--border); }
 .cw-drawer-tabs { padding: 16px 20px 0; }
@@ -538,11 +566,11 @@ details.cw-editor[open] .when-open { display: inline; }
   text-align: center; background: var(--inset); cursor: pointer;
   transition: border-color .14s, background .14s;
 }
-.cw-drop:hover { border-color: var(--accent); background: var(--accent-soft); }
+.cw-drop:hover { border-color: var(--text-3); background: var(--panel-2); }
 .cw-drop-icon {
   width: 38px; height: 38px; border-radius: 10px; background: var(--panel-2);
   display: inline-flex; align-items: center; justify-content: center;
-  color: var(--accent); margin-bottom: 10px;
+  color: var(--text-2); margin-bottom: 10px;
 }
 
 /* ---------- MENU (dropdown) ---------- */
@@ -553,12 +581,11 @@ details.cw-editor[open] .when-open { display: inline; }
   box-shadow: var(--shadow); z-index: 50; padding: 6px 0;
 }
 .cw-menu-label {
-  padding: 6px 14px; font-family: var(--font-mono); font-size: 10px; font-weight: 600;
-  color: var(--text-2); letter-spacing: .05em; text-transform: uppercase;
+  padding: 6px 14px; font-size: var(--cw-fs-xs); font-weight: 600; color: var(--text-2);
 }
 .cw-menu-item {
   display: flex; align-items: center; gap: 10px; width: 100%;
-  padding: 8px 14px; font-size: 13px; color: var(--text-2);
+  padding: 8px 14px; font-size: var(--cw-fs-sm); color: var(--text-2);
   background: none; border: none; cursor: pointer; font-family: var(--font-sans);
   text-align: left; transition: all .12s; text-decoration: none;
 }
@@ -571,36 +598,36 @@ details.cw-editor[open] .when-open { display: inline; }
   background: var(--cw-tone-soft, var(--inset)); color: var(--cw-tone, var(--text-3));
   display: inline-flex; align-items: center; justify-content: center; margin-bottom: 12px;
 }
-.cw-empty-title { font-size: 14px; font-weight: 600; color: var(--text); }
-.cw-empty-sub { font-size: var(--fs-sm); color: var(--text-2); margin-top: 4px; }
+.cw-empty-title { font-size: var(--cw-fs-md); font-weight: 600; color: var(--text); }
+.cw-empty-sub { font-size: var(--cw-fs-xs); color: var(--text-2); margin-top: 4px; }
 .cw-empty-act { margin-top: var(--space-4); }
 
 /* ---------- FLASH / BANNERS ---------- */
 .cw-flash {
   display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
-  padding: 10px 26px; font-size: 13px; border-bottom: 1px solid var(--border);
-  background: var(--cw-tone-soft, var(--bg-soft)); color: var(--cw-tone, var(--text-2));
+  padding: 10px 26px; font-size: var(--cw-fs-sm); border-bottom: 1px solid var(--border);
+  background: var(--cw-tone-soft, var(--bg-soft)); color: var(--cw-on-tint, var(--text-2));
 }
-.cw-flash .x {
-  background: none; border: none; font-size: 16px; line-height: 1; cursor: pointer;
+.cw-flash .x, .cw-health .x {
+  background: none; border: none; font-size: var(--cw-fs-md); line-height: 1; cursor: pointer;
   color: inherit; opacity: .7; padding: 0 4px;
 }
-.cw-flash .x:hover { opacity: 1; }
+.cw-flash .x:hover, .cw-health .x:hover { opacity: 1; }
 /* in-panel feedback (settings save, async test results) */
 .cw-inline-flash {
-  padding: 9px 12px; border-radius: var(--radius); font-size: var(--fs-sm); line-height: 1.5;
-  background: var(--cw-tone-soft, var(--inset)); color: var(--cw-tone, var(--text-2));
+  padding: 9px 12px; border-radius: var(--radius); font-size: var(--cw-fs-sm); line-height: 1.5;
+  background: var(--cw-tone-soft, var(--inset)); color: var(--cw-on-tint, var(--text-2));
 }
-.cw-testres { font-size: var(--fs-sm); display: inline-flex; align-items: center; gap: 6px; color: var(--cw-tone, var(--text-3)); }
+.cw-testres { font-size: var(--cw-fs-xs); display: inline-flex; align-items: center; gap: 6px; color: var(--cw-tone, var(--text-2)); }
 
 /* Health strip: quiet when ok, tinted when degraded. */
 .cw-health {
   display: flex; align-items: center; justify-content: space-between;
   padding: 6px 26px; border-bottom: 1px solid var(--border);
-  font-size: 12px; font-weight: 450;
-  background: var(--cw-tone-soft, var(--bg-soft)); color: var(--cw-tone, var(--text-3));
+  font-size: var(--cw-fs-xs); font-weight: 500;
+  background: var(--cw-tone-soft, var(--bg-soft)); color: var(--cw-on-tint, var(--text-2));
 }
-.cw-health .cw-status { font-size: 12px; font-weight: 450; }
+.cw-health .cw-status { font-size: var(--cw-fs-xs); font-weight: 500; color: inherit; }
 
 /* ---------- AUTH PAGES (login / setup) ---------- */
 .cw-auth-center { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
@@ -608,16 +635,16 @@ details.cw-editor[open] .when-open { display: inline; }
 .cw-auth-mark {
   width: 40px; height: 40px; border-radius: 10px; margin: 0 auto 12px;
   display: flex; align-items: center; justify-content: center;
-  color: var(--accent); background: var(--inset); border: 1px solid var(--border-2);
+  color: var(--text); background: var(--inset); border: 1px solid var(--border-2);
 }
 .cw-auth-intro { text-align: center; margin-bottom: var(--space-6); }
-.cw-auth-intro h1 { margin: 0; font-size: var(--fs-lg); font-weight: 600; }
+.cw-auth-intro h1 { margin: 0; font-size: var(--cw-fs-lg); font-weight: 600; }
 
 /* ---------- BADGES ---------- */
 .cw-badge-new {
   display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 4px;
-  background: var(--accent); color: var(--cw-accent-fg);
-  font-size: 10px; font-weight: 700; letter-spacing: .05em;
+  background: var(--btn-strong-bg); color: var(--btn-strong-text);
+  font-size: var(--cw-fs-xs); font-weight: 700; letter-spacing: .02em;
 }
 
 /* ---------- SKELETON / SPINNER ---------- */
@@ -635,12 +662,10 @@ details.cw-editor[open] .when-open { display: inline; }
    Fixed rendered height; width follows the viewBox aspect and shrinks
    to fit narrow panels. Centered so sparse months don't hug the left. */
 .cw-chart { display: block; height: 190px; max-width: 100%; margin: 0 auto; }
-.cw-chart text {
-  font-family: var(--font-mono); font-size: 10px; fill: var(--text-3);
-}
+.cw-chart text { font-size: var(--cw-fs-xs); fill: var(--text-2); }
 .cw-chart .grid { stroke: var(--border); stroke-width: 1; }
 .cw-chart rect.seg { fill: var(--cw-tone, var(--text-3)); }
-.cw-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: var(--fs-xs); color: var(--text-2); }
+.cw-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: var(--cw-fs-xs); color: var(--text-2); }
 .cw-legend .swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin-right: 5px; vertical-align: -1px; background: var(--cw-tone, var(--text-3)); }
 
 /* ---------- PRINT (reports print from the page; no per-template CSS) ---------- */
@@ -668,7 +693,7 @@ details.cw-editor[open] .when-open { display: inline; }
   .cw-topbar { gap: 8px; padding: 0 12px; height: var(--cw-topbar-h); min-height: var(--cw-topbar-h); }
   .cw-nav-desktop { display: none; }
   .cw-mobile-nav { display: block; position: relative; margin-left: auto; }
-  .cw-mobile-nav > summary { list-style: none; cursor: pointer; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius); font-size: var(--fs-sm); white-space: nowrap; }
+  .cw-mobile-nav > summary { list-style: none; cursor: pointer; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius); font-size: var(--cw-fs-xs); white-space: nowrap; }
   .cw-mobile-nav > summary::-webkit-details-marker { display: none; }
   .cw-nav-mobile { position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; min-width: 180px; margin: 0; padding: 6px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow); }
   .cw-ver { display: none; }
@@ -687,7 +712,7 @@ details.cw-editor[open] .when-open { display: inline; }
   .cw-inventory-table tbody > tr:not(.cw-subrow) { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 16px; padding: 14px; border-bottom: 1px solid var(--border); }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 0; border: 0; min-width: 0; }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td:first-child { grid-column: 1 / -1; display: block; padding-right: 36px; }
-  .cw-inventory-table tbody > tr:not(.cw-subrow) > td::before { content: attr(data-label); margin-right: auto; font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-2); }
+  .cw-inventory-table tbody > tr:not(.cw-subrow) > td::before { content: attr(data-label); margin-right: auto; font-size: var(--cw-fs-xs); font-weight: 600; color: var(--text-2); }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td:first-child::before { display: none; }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td[data-label="Expires"] { grid-column: 1 / -1; }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td:last-child { position: absolute; right: 14px; top: 12px; }

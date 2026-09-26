@@ -83,11 +83,11 @@
     <div class="cw-panel-body">
       <div class="cw-tl">
         {% for ms in report.milestones %}
-        <div class="cw-tl-node t-accent">
+        <div class="cw-tl-node t-ink">
           <span class="cw-tl-dot"></span><span class="cw-tl-line"></span>
           <div class="cw-chiprow">
             <span class="cw-tl-role">{{ ms.label }} maximum</span>
-            <span class="mono cw-sub">Effective {{ ms.date }}</span>
+            <span class="cw-sub tnum">Effective {{ ms.date }}</span>
           </div>
         </div>
         {% endfor %}

@@ -39,7 +39,7 @@
         <td>
           {% if row.roles %}
           <div class="cw-chiprow">
-            {% for rr in row.roles %}<span class="cw-chip {{ 't-accent' if rr.tier in ('operator', 'admin') else '' }}">{{ rr.name }} · {{ rr.tier }}</span>{% endfor %}
+            {% for rr in row.roles %}<span class="cw-chip {{ 't-ink' if rr.tier in ('operator', 'admin') else '' }}">{{ rr.name }} · {{ rr.tier }}</span>{% endfor %}
           </div>
           {% else %}<span class="cw-muted">—</span>{% endif %}
         </td>

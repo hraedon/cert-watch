@@ -59,7 +59,7 @@
       </details>
 
     </header>
-    <div class="cw-page">
+    <main class="cw-page" id="main">
 
 
       <div id="cw-health" class="cw-health cw-hidden">
@@ -138,7 +138,7 @@
           <td>
             <input type="hidden" name="rule_id" value="key_size_rsa">
             <input type="hidden" name="category_key_size_rsa" value="key">
-            <span class="cw-id">Key Size RSA</span>
+            <span class="cw-strong">Key Size RSA</span>
             <div class="cw-sub">key</div>
           </td>
           <td>
@@ -171,7 +171,7 @@
           <td>
             <input type="hidden" name="rule_id" value="key_size_ec">
             <input type="hidden" name="category_key_size_ec" value="key">
-            <span class="cw-id">Key Size EC</span>
+            <span class="cw-strong">Key Size EC</span>
             <div class="cw-sub">key</div>
           </td>
           <td>
@@ -193,7 +193,7 @@
 
               <div class="cw-field">
                 <label class="cw-label" for="allowed_curves_key_size_ec">Allowed curves (comma-separated)</label>
-                <input class="cw-input mono" type="text" id="allowed_curves_key_size_ec" name="allowed_curves_key_size_ec"
+                <input class="cw-input" type="text" id="allowed_curves_key_size_ec" name="allowed_curves_key_size_ec"
                        value="secp256r1, secp384r1, secp521r1"
                        placeholder="secp256r1, secp384r1, secp521r1">
               </div>
@@ -205,7 +205,7 @@
           <td>
             <input type="hidden" name="rule_id" value="hash_algorithm">
             <input type="hidden" name="category_hash_algorithm" value="hash">
-            <span class="cw-id">Hash Algorithm</span>
+            <span class="cw-strong">Hash Algorithm</span>
             <div class="cw-sub">hash</div>
           </td>
           <td>
@@ -234,7 +234,7 @@
           <td>
             <input type="hidden" name="rule_id" value="chain_completeness">
             <input type="hidden" name="category_chain_completeness" value="chain">
-            <span class="cw-id">Chain Completeness</span>
+            <span class="cw-strong">Chain Completeness</span>
             <div class="cw-sub">chain</div>
           </td>
           <td>
@@ -263,7 +263,7 @@
           <td>
             <input type="hidden" name="rule_id" value="tls_version">
             <input type="hidden" name="category_tls_version" value="tls">
-            <span class="cw-id">TLS Version</span>
+            <span class="cw-strong">TLS Version</span>
             <div class="cw-sub">tls</div>
           </td>
           <td>
@@ -298,7 +298,7 @@
           <td>
             <input type="hidden" name="rule_id" value="validity_max_days">
             <input type="hidden" name="category_validity_max_days" value="validity">
-            <span class="cw-id">Validity Max Days</span>
+            <span class="cw-strong">Validity Max Days</span>
             <div class="cw-sub">validity</div>
           </td>
           <td>
@@ -331,7 +331,7 @@
           <td>
             <input type="hidden" name="rule_id" value="self_signed">
             <input type="hidden" name="category_self_signed" value="issuer">
-            <span class="cw-id">Self Signed</span>
+            <span class="cw-strong">Self Signed</span>
             <div class="cw-sub">issuer</div>
           </td>
           <td>
@@ -360,7 +360,7 @@
           <td>
             <input type="hidden" name="rule_id" value="issuer_allowlist">
             <input type="hidden" name="category_issuer_allowlist" value="issuer">
-            <span class="cw-id">Issuer Allowlist</span>
+            <span class="cw-strong">Issuer Allowlist</span>
             <div class="cw-sub">issuer</div>
           </td>
           <td>
@@ -394,7 +394,7 @@
           <td>
             <input type="hidden" name="rule_id" value="sans_required">
             <input type="hidden" name="category_sans_required" value="custom">
-            <span class="cw-id">SANs Required</span>
+            <span class="cw-strong">SANs Required</span>
             <div class="cw-sub">custom</div>
           </td>
           <td>
@@ -423,7 +423,7 @@
           <td>
             <input type="hidden" name="rule_id" value="ocsp_must_staple">
             <input type="hidden" name="category_ocsp_must_staple" value="tls">
-            <span class="cw-id">OCSP Must Staple</span>
+            <span class="cw-strong">OCSP Must Staple</span>
             <div class="cw-sub">tls</div>
           </td>
           <td>
@@ -452,7 +452,7 @@
           <td>
             <input type="hidden" name="rule_id" value="hsts_required">
             <input type="hidden" name="category_hsts_required" value="tls">
-            <span class="cw-id">HSTS Required</span>
+            <span class="cw-strong">HSTS Required</span>
             <div class="cw-sub">tls</div>
           </td>
           <td>
@@ -493,7 +493,7 @@
   </div>
 </div>
 
-    </div>
+    </main>
   </div>
   <script src="/static/js/core.js" nonce="{{CSP_NONCE}}"></script>
 

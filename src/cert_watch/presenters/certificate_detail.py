@@ -463,7 +463,7 @@ def _posture_view(
 def _chain_note(status: str) -> ChainNoteView:
     tone, icon, label = {
         "public": ("t-muted", "link", "public chain"),
-        "private": ("t-accent", "shield", "private root"),
+        "private": ("t-ink", "shield", "private root"),
         "incomplete": ("t-warn", "alert", "chain incomplete"),
         "self-signed": ("t-muted", "key", "self-signed"),
         "invalid": ("t-crit", "alert", "chain invalid"),
@@ -502,7 +502,7 @@ def _axis_display(
     renewal = str((model.get("renewal") or {}).get("state") or "unknown")
     delivery = str((model.get("delivery") or {}).get("state") or "unrouted")
     if endpoint and monitoring == "failing":
-        label, tone = "Scan failing", "t-crit"
+        label, tone = "Scan failing", "t-warn"
     elif endpoint and monitoring == "never_scanned":
         label, tone = "Never scanned", "t-muted"
     else:

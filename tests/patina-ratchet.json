@@ -4,18 +4,6 @@
   "undefined_classes": [],
   "color_literals": [
     {
-      "fp": "9b5d15c9f3d3693d",
-      "n": 1,
-      "where": "cw.css",
-      "sample": "--cw-accent-fg: #0e0d0b;"
-    },
-    {
-      "fp": "0bc554c6c6284755",
-      "n": 1,
-      "where": "cw.css",
-      "sample": "--cw-accent-fg: #ffffff;"
-    },
-    {
       "fp": "5159d7fc42c417b7",
       "n": 1,
       "where": "cw.css",
@@ -26,18 +14,6 @@
       "n": 1,
       "where": "cw.css",
       "sample": "--cw-backdrop: rgba(40, 32, 16, .35);"
-    },
-    {
-      "fp": "f23287e141c6b6fc",
-      "n": 1,
-      "where": "cw.css",
-      "sample": "--cw-expired: #6d28d9;"
-    },
-    {
-      "fp": "0a35fe45db6ce8f3",
-      "n": 1,
-      "where": "cw.css",
-      "sample": "--cw-expired: #a78bfa;"
     },
     {
       "fp": "cf63084ff2e4ece3",

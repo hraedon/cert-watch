@@ -85,7 +85,7 @@
             <rect class="track" width="100%" height="100%"/>
             <rect class="fill" width="{{ ((cnt / fleet_grade.total * 100) | round | int) if fleet_grade.total else 0 }}%" height="100%"/>
           </svg>
-          <span class="mono tnum cw-gradecount">{{ cnt }}</span>
+          <span class="tnum cw-gradecount">{{ cnt }}</span>
         </div>
         {% endif %}
       {% endfor %}
@@ -107,7 +107,7 @@
         <thead><tr><th>Algorithm</th><th class="num">Count</th></tr></thead>
         <tbody>
         {% for row in posture.key_algorithms %}
-          <tr><td class="mono">{{ row.label }}</td><td class="num">{{ row.count }}</td></tr>
+          <tr><td>{{ row.label }}</td><td class="num">{{ row.count }}</td></tr>
         {% endfor %}
         </tbody>
       </table>
@@ -118,7 +118,7 @@
         <thead><tr><th>Hash</th><th class="num">Count</th></tr></thead>
         <tbody>
         {% for row in posture.sig_hashes %}
-          <tr><td class="mono">{{ row.label }}</td><td class="num">{{ row.count }}</td></tr>
+          <tr><td>{{ row.label }}</td><td class="num">{{ row.count }}</td></tr>
         {% endfor %}
         </tbody>
       </table>
@@ -129,7 +129,7 @@
         <thead><tr><th>Family</th><th class="num">Count</th></tr></thead>
         <tbody>
         {% for row in posture.families %}
-          <tr><td class="mono">{{ row.label }}</td><td class="num">{{ row.count }}</td></tr>
+          <tr><td>{{ row.label }}</td><td class="num">{{ row.count }}</td></tr>
         {% endfor %}
         </tbody>
       </table>
@@ -150,7 +150,7 @@
         <tr>
           <td class="mono">{{ c.hostname }}{% if c.port and c.port != 443 %}:{{ c.port }}{% endif %}</td>
           <td>{{ c.subject }}</td>
-          <td class="mono">{{ c.key_label }}</td>
+          <td>{{ c.key_label }}</td>
           <td class="cw-sub">{{ c.reason }}</td>
         </tr>
       {% endfor %}
