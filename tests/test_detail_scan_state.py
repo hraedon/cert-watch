@@ -181,6 +181,27 @@ def test_flash_messages_render_on_the_detail_page(tmp_path, reload_app, self_sig
          "not allowed to scan"),
         ("no certificate presented", "without the server presenting"),
         ("TLS handshake failed", "rejected the TLS handshake"),
+        (
+            "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: "
+            "unable to get local issuer certificate",
+            "does not lead to an issuer cert-watch trusts",
+        ),
+        (
+            "[SSL: CERTIFICATE_VERIFY_FAILED] self-signed certificate",
+            "self-signed certificate that cert-watch does not trust",
+        ),
+        (
+            "[SSL: CERTIFICATE_VERIFY_FAILED] certificate has expired",
+            "presented an expired certificate",
+        ),
+        (
+            "[SSL: CERTIFICATE_VERIFY_FAILED] hostname mismatch",
+            "does not cover the host name",
+        ),
+        (
+            "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed",
+            "could not verify the server's certificate",
+        ),
     ],
 )
 def test_known_scan_errors_have_plain_language_guidance(message, fragment):

@@ -857,5 +857,8 @@ details.cw-editor[open] .when-open { display: inline; }
   .cw-home-horizon-body { padding-inline: 10px; }
   .cw-home-strip { gap: 3px; min-width: 0; }
   .cw-home-bar-label { font-size: var(--cw-fs-xs); }
+  .cw-home-strip > li:nth-child(odd) .cw-home-bar-label {
+    width: calc(200% + 3px); max-width: none; justify-self: start; text-align: center;
+  }
   .cw-home-strip > li:nth-child(even) .cw-home-bar-label { visibility: hidden; }
 }

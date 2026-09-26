@@ -35,10 +35,12 @@ All notable changes to cert-watch are documented in this file.
   4.5:1 contrast. Text on tinted status fills is now ink with the status
   colour on the icon or fill; chips and the danger button are outlined.
 - Home no longer overflows a 390 px viewport, keeps all twelve expiry weeks in
-  view, and gives its compact wordmark an accessible name. Its monitoring and
-  delivery copy now distinguishes overdue scans from failed attempts, describes
-  certificate route failures accurately, and includes scoped routing gaps and
-  webhook failure evidence without exposing recipient identities (#126 S3).
+  view with distinct, unclipped week labels, and gives its compact wordmark an
+  accessible name. Its monitoring and delivery copy now distinguishes overdue
+  scans from failed attempts, explains certificate-verification failures, and
+  includes scoped routing gaps and webhook failure evidence without exposing
+  recipient identities. Pending hosts now use the same owner, tag-group, and
+  global delivery routes as scanned endpoints (#126 S3).
 
 - An endpoint with a failed, overdue or never-successful scan is no longer
   labelled Healthy/OK because its last stored certificate was fine. Chain

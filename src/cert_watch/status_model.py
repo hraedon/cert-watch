@@ -338,10 +338,10 @@ def register_status_model_functions(
     conn.create_function("cw_delivery_state", 7, delivery_state)
 
 
-def alert_group_match_sql(cert_alias: str, host_alias: str | None) -> str:
+def alert_group_match_sql(cert_alias: str | None, host_alias: str | None) -> str:
     """Return an identity-free predicate for any matching alert group."""
-    cert_id = f"{cert_alias}.id"
-    cert_tags = f"{cert_alias}.tags"
+    cert_id = f"{cert_alias}.id" if cert_alias else "NULL"
+    cert_tags = f"{cert_alias}.tags" if cert_alias else "''"
     host_tags = f"{host_alias}.tags" if host_alias else "''"
     return (
         "EXISTS(SELECT 1 FROM alert_groups ag WHERE "
@@ -369,7 +369,7 @@ def delivery_state_sql(
     cert_tags = f"{c}.tags" if c else "''"
     host_tags = f"{h}.tags" if h else "''"
     owner_route = f"NULLIF(TRIM(COALESCE({h}.owner_email, '')), '') IS NOT NULL" if h else "0"
-    group_match = alert_group_match_sql(c, h) if c else "0"
+    group_match = alert_group_match_sql(c, h)
     group_recipients = (
         "EXISTS(SELECT 1 FROM alert_groups ag WHERE "
         "NULLIF(TRIM(REPLACE(COALESCE(ag.recipients, ''), ',', '')), '') "
@@ -405,6 +405,20 @@ def delivery_state_sql(
         f"cw_delivery_state({any_route}, {int(settings.smtp_configured)}, {smtp_can}, "
         f"{global_webhook}, {global_webhook}, {latest_outcome('smtp')}, "
         f"{latest_outcome(webhook_channel)})"
+    )
+
+
+def routing_gap_sql(cert_alias: str | None, host_alias: str | None) -> str:
+    """Return whether a row has neither an owner nor a matching alert group."""
+    owner_route = (
+        f"NULLIF(TRIM(COALESCE({host_alias}.owner_name, '')), '') IS NOT NULL OR "
+        f"NULLIF(TRIM(COALESCE({host_alias}.owner_email, '')), '') IS NOT NULL"
+        if host_alias
+        else "0"
+    )
+    return (
+        f"CASE WHEN NOT ({owner_route}) AND NOT "
+        f"{alert_group_match_sql(cert_alias, host_alias)} THEN 1 ELSE 0 END"
     )
 
 
@@ -566,9 +580,23 @@ def attach_status_models(
         days = row.get("effective_days")
         condition = str(row.get("condition") or condition_state(days) or "") or None
         chain_status = row.get("chain_status")
-        delivery = context.delivery.get(
-            str(row.get("id") or ""),
-            {"state": "unrouted", "recipients": [], "matching_groups": [], "channels": []},
+        delivery = (
+            {
+                "state": str(row.get("delivery") or "unrouted"),
+                "recipients": [],
+                "matching_groups": [],
+                "channels": [],
+            }
+            if row.get("kind") == "pending"
+            else context.delivery.get(
+                str(row.get("id") or ""),
+                {
+                    "state": "unrouted",
+                    "recipients": [],
+                    "matching_groups": [],
+                    "channels": [],
+                },
+            )
         )
         row["status"] = {
             "condition": {"state": condition, "effective_days": days},

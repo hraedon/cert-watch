@@ -71,6 +71,16 @@ def _assert_no_horizontal_page_scroll(page: Page, base: str) -> None:
     assert page.locator(".cw-home-horizon-body").evaluate(
         "el => el.scrollWidth === el.clientWidth"
     )
+    visible_labels = page.locator(
+        ".cw-home-strip > li:nth-child(odd) .cw-home-bar-label"
+    )
+    expect(visible_labels).to_have_count(6)
+    labels = visible_labels.evaluate_all(
+        "els => els.map(el => ({text: el.textContent.trim(), "
+        "clipped: el.scrollWidth > el.clientWidth}))"
+    )
+    assert all(not label["clipped"] for label in labels)
+    assert len({label["text"] for label in labels}) == len(labels)
     expect(page.locator(".cw-wordmark")).to_have_attribute(
         "aria-label", "cert-watch home"
     )
