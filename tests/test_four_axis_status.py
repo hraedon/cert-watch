@@ -466,10 +466,10 @@ def test_delivery_uses_latest_outcome_per_normalized_channel(tmp_path):
     assert generic["last_outcome"] == "accepted"
     assert list_dashboard_page(
         db, delivery="ok", per_page=0, now=NOW, axis_settings=settings
-    )[1] == len([item for item in rows if item.get("kind") != "pending"])
+    )[1] == len(rows)
     assert dashboard_axis_stats(
         db, status=prepare_status(db, NOW), axis_settings=settings
-    )["delivery"]["ok"] == len([item for item in rows if item.get("kind") != "pending"])
+    )["delivery"]["ok"] == len(rows)
 
     # Legacy ``generic`` and unified ``webhook:generic`` are one channel; the
     # later legacy failure must win in both the row and SQL count/filter path.
@@ -677,16 +677,68 @@ def test_delivery_requires_a_working_channel_and_accepts_global_routes(tmp_path)
 
     pending_rows, total = list_dashboard_page(
         db,
-        delivery="unrouted",
+        delivery="ok",
         per_page=0,
         now=NOW,
         axis_settings=AxisSettings(
             smtp_configured=True, global_recipients=("fleet@example.test",)
         ),
     )
+    assert total == 7
+    pending = next(item for item in pending_rows if item.get("kind") == "pending")
+    assert pending["host"].startswith("progress.example.test")
+    assert pending["delivery"] == "ok"
+
+
+@pytest.mark.parametrize("route", ["owner", "tag-group", "global"])
+def test_pending_delivery_and_routing_gap_share_route_rules(tmp_path, route):
+    from cert_watch.database.dashboard_axes import dashboard_axis_stats
+
+    db = tmp_path / f"pending-{route}.sqlite3"
+    init_schema(db)
+    host_id = SqliteHostRepository(db).add("pending.example.test", 443, tags="team-a")
+    settings = AxisSettings(smtp_configured=True)
+    if route == "owner":
+        with _connect(db) as conn:
+            conn.execute(
+                "UPDATE hosts SET owner_email = ? WHERE id = ?",
+                ("owner@example.test", host_id),
+            )
+            conn.commit()
+    elif route == "tag-group":
+        SqliteAlertGroupRepository(db).create(
+            name="Team A route",
+            recipients=["team-a@example.test"],
+            match_tags=["team-a"],
+        )
+    else:
+        settings = AxisSettings(
+            smtp_configured=True,
+            global_recipients=("fleet@example.test",),
+        )
+
+    rows, total = list_dashboard_page(
+        db, delivery="ok", per_page=0, now=NOW, axis_settings=settings
+    )
     assert total == 1
-    assert pending_rows[0]["host"].startswith("progress.example.test")
-    assert pending_rows[0]["delivery"] == "unrouted"
+    assert rows[0]["delivery"] == "ok"
+
+    gaps, gap_total = list_dashboard_page(
+        db, routing_gap=True, per_page=0, now=NOW, axis_settings=settings
+    )
+    expected_gap = int(route == "global")
+    assert gap_total == expected_gap
+    assert len(gaps) == expected_gap
+
+    stats = dashboard_axis_stats(
+        db,
+        status=prepare_status(db, NOW),
+        axis_settings=settings,
+        axis_columns=frozenset({"delivery", "routing"}),
+        home=True,
+    )
+    assert stats["delivery"] == {"ok": 1, "failing": 0, "unrouted": 0}
+    assert stats["_home"]["routing_gap_total"] == expected_gap
 
 
 def test_axis_settings_require_an_smtp_sender(tmp_path):

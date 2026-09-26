@@ -50,7 +50,9 @@ def test_dashboard_shows_uploaded_cert(reload_app, leaf_pem_file):
     assert "leaf.example.com" in r.text
 
 
-def test_dashboard_sorted_by_urgency(reload_app, tmp_path, leaf_pem_file, chain_pem_file):
+def test_home_separates_long_lived_chain_problems_from_expiry_risk(
+    reload_app, tmp_path, leaf_pem_file, chain_pem_file
+):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     # Upload both.
@@ -62,14 +64,10 @@ def test_dashboard_sorted_by_urgency(reload_app, tmp_path, leaf_pem_file, chain_
     with TestClient(app_mod.app) as client:
         r = client.get("/")
     assert r.status_code == 200
-    # chain leaf is 90d, self_signed leaf is 365d — chain leaf should appear first.
-    body = r.text
-    idx_chain = body.find("chain-leaf.example.com")
-    idx_leaf = body.find("leaf.example.com")
-    # If both appear, chain-leaf row should come earlier in the document.
-    assert idx_chain != -1
-    assert idx_leaf != -1
-    assert idx_chain < idx_leaf
+    assert r.context["axis_stats"]["condition"]["ok"] == 2
+    assert r.context["risk_rows"] == []
+    assert r.context["chain_problem_total"] == 2
+    assert 'data-testid="home-chain-row"' in r.text
 
 
 def test_healthz():

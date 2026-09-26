@@ -11,17 +11,18 @@ first-class consumers of the application services named below. State inventoried
 branch `review/product-coherence-20260912`, 2026-09-12 (V1 + V2 implemented;
 notes are host-scoped only; inactive group-webhook controls removed).
 
-IA note: the landing page is now **Home** (`/`, `templates/home.html` — ranked
-attention queue + expiry horizon) and the inventory table lives at
+IA note: the landing page is now **Home** (`/`, `templates/home.html` —
+certificate risk, monitoring gaps, delivery/routing, and expiry horizon) and
+the inventory table lives at
 **/browse** (`templates/dashboard.html`, including the add-certificates
-drawer). Home introduces **no new editing controls** — its only mutating
-surface is the per-item "scan now" button, which posts to the pre-existing
-`POST /hosts/{id}/scan` (same endpoint the detail page and Browse rows use).
-Home status cards now use Browse's expiry-and-trust definitions and link to
-individual inventory entries so their counts match the destination. Browse's
-search retains the selected status, source, sort, and grouping; a clear-filters
-link resets the selection. Fleet grouping and calendar links open their full
-visible population, with the scope stated on the selected view.
+drawer). Home introduces **no editing controls**. The old per-item "scan now"
+control moved off Home; endpoint detail remains its owner through
+`POST /hosts/{id}/scan`. Every Home count and twelve-week bucket links to the
+same scoped SQL population in Browse. Chain-trust problems are read-only,
+collapsed by issuer, and link to an exact issuer filter. Browse's search
+retains the selected status, source, sort, and grouping; a clear-filters link
+resets the selection. Fleet grouping and calendar links open their full visible
+population, with the scope stated on the selected view.
 
 ## Certificate (`certificates` table)
 
@@ -122,8 +123,10 @@ stalled notices and the Home stalled status. It never suppresses expiry or
 expired alerts. Completion is observed only when a scan sees a successor
 certificate; operators cannot report a completed renewal manually.
 
-Home's **Scan coverage** panel counts the visible registered endpoints, excluding
-uploads. Browse shows per-endpoint scan evidence, including grouped deployments.
+Home's **Monitoring gaps** block counts the visible registered endpoints,
+excluding uploads, and shows bounded failed, overdue, and never-scanned rows
+plus the latest scoped scan activity and next scheduler run. Browse shows
+per-endpoint scan evidence, including grouped deployments.
 The detail **Scan evidence** panel distinguishes last success, latest attempt,
 observation due time and retry eligibility. It replaces the ambiguous old
 “Last scanned” field. These are read-only views.

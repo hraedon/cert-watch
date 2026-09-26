@@ -34,6 +34,7 @@ from cert_watch.status_model import (
     prepare_status_model_context,
     register_status_model_functions,
     renewal_state_for_row,
+    routing_gap_sql,
 )
 from cert_watch.status_rule import effective_days_sql
 
@@ -102,10 +103,13 @@ def inventory_candidates_sql(
     if "overall" in requested:
         requested = requested | {"monitoring", "urgency"}
     need_effective_days = bool(requested & {"condition", "urgency"})
-    need_chain_status = "urgency" in requested
+    # ``chain`` is the Home projection's internal request for the canonical
+    # cached trust fact without also evaluating an overall urgency state.
+    need_chain_status = bool(requested & {"urgency", "chain"})
     need_monitoring = "monitoring" in requested and axes is not None
     need_renewal = "renewal" in requested and axes is not None
     need_delivery = "delivery" in requested and axes is not None
+    need_routing = "routing" in requested
     delivery_settings = axes.settings if axes is not None else AxisSettings()
 
     status_cols = (
@@ -224,14 +228,19 @@ def inventory_candidates_sql(
         if need_delivery and sql_delivery
         else "'unrouted'"
     )
-    # Pending hosts have no certificate alert identity yet, so the canonical
-    # display model leaves them unrouted even when global fallbacks exist.
-    pending_delivery_col = "'unrouted'"
+    pending_delivery_col = (
+        delivery_state_sql(None, "h", delivery_settings)
+        if need_delivery and sql_delivery
+        else "'unrouted'"
+    )
     uploaded_delivery_col = (
         delivery_state_sql("c", None, delivery_settings)
         if need_delivery and sql_delivery
         else "'unrouted'"
     )
+    scanned_routing_gap_col = routing_gap_sql("c", "h") if need_routing else "0"
+    pending_routing_gap_col = routing_gap_sql(None, "h") if need_routing else "0"
+    uploaded_routing_gap_col = routing_gap_sql("c", None) if need_routing else "0"
 
     select_parts: list[str] = []
     params: list[Any] = []
@@ -253,6 +262,7 @@ def inventory_candidates_sql(
                        WHERE succ.replaces_cert_id = c.id AND succ.id != c.id)
                        AS has_successor,
                    {delivery_col} AS delivery,
+                   {scanned_routing_gap_col} AS routing_gap,
                    COALESCE(c.issuer, '') AS grp_issuer,
                    COALESCE(h.owner_name, '') AS grp_owner,
                    COALESCE(h.renewal_method, '') AS grp_method,
@@ -305,6 +315,7 @@ def inventory_candidates_sql(
                    {renewal_analytics_col} AS renewal_analytics,
                    0 AS has_successor,
                    {pending_delivery_col} AS delivery,
+                   {pending_routing_gap_col} AS routing_gap,
                    '' AS grp_issuer,
                    COALESCE(h.owner_name, '') AS grp_owner,
                    COALESCE(h.renewal_method, '') AS grp_method,
@@ -362,6 +373,7 @@ def inventory_candidates_sql(
                    'unknown' AS renewal_analytics,
                    0 AS has_successor,
                    {uploaded_delivery_col} AS delivery,
+                   {uploaded_routing_gap_col} AS routing_gap,
                    COALESCE(c.issuer, '') AS grp_issuer,
                    '' AS grp_owner,
                    '' AS grp_method,
@@ -566,6 +578,10 @@ def list_dashboard_page(
     monitoring: str | None = None,
     renewal: str | None = None,
     delivery: str | None = None,
+    routing_gap: bool = False,
+    chain_problem: bool = False,
+    issuer: str | None = None,
+    expiry_week: str | None = None,
     entry_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Return a SQL-filtered, sorted, paginated page of unified dashboard rows.
@@ -610,9 +626,12 @@ def list_dashboard_page(
             ("monitoring", monitoring),
             ("renewal", renewal),
             ("delivery", delivery),
+            ("routing", routing_gap),
         )
         if value
     )
+    if chain_problem:
+        filter_axes = filter_axes | {"chain"}
     # COUNT and key selection use only the axes required by active filters.
     # The full four-axis projection is applied after LIMIT to the returned
     # keys, so an unfiltered 20k estate evaluates at most 25/50 display rows.
@@ -636,6 +655,31 @@ def list_dashboard_page(
         if value:
             base_sql = f"SELECT * FROM ({base_sql}) WHERE {column} = ?"
             params = [*params, value]
+    if routing_gap:
+        base_sql = f"SELECT * FROM ({base_sql}) WHERE routing_gap = 1"
+    if chain_problem:
+        base_sql = (
+            f"SELECT * FROM ({base_sql}) WHERE etype = 'leaf' "
+            "AND chain_status IN ('incomplete','invalid','unknown',"
+            "'self-signed','unverified')"
+        )
+        if issuer is not None:
+            base_sql = f"SELECT * FROM ({base_sql}) WHERE grp_issuer = ?"
+            params = [*params, issuer]
+    if expiry_week:
+        try:
+            from datetime import date, timedelta
+
+            start = date.fromisoformat(expiry_week)
+        except ValueError:
+            start = None
+        if start is not None:
+            end = start + timedelta(days=7)
+            base_sql = (
+                f"SELECT * FROM ({base_sql}) WHERE etype = 'leaf' "
+                "AND sort_expiry >= ? AND sort_expiry < ?"
+            )
+            params = [*params, start.isoformat(), end.isoformat()]
 
     with _connect(db_path) as conn:
         register_status_model_functions(conn, axes)

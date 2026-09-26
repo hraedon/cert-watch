@@ -142,7 +142,7 @@
     {% if filter_condition %}<input type="hidden" name="condition" value="{{ filter_condition }}">{% endif %}
     {% if filter_monitoring %}<input type="hidden" name="monitoring" value="{{ filter_monitoring }}">{% endif %}
     {% if filter_renewal %}<input type="hidden" name="renewal" value="{{ filter_renewal }}">{% endif %}
-    {% if filter_delivery %}<input type="hidden" name="delivery" value="{{ filter_delivery }}">{% endif %}
+    {% if filter_delivery %}<input type="hidden" name="delivery" value="{{ filter_delivery }}">{% endif %}{% if filter_chain_problem %}<input type="hidden" name="chain_problem" value="1">{% endif %}{% if filter_routing_gap %}<input type="hidden" name="routing_gap" value="1">{% endif %}{% if filter_issuer %}<input type="hidden" name="issuer" value="{{ filter_issuer }}">{% endif %}{% if filter_expiry_week %}<input type="hidden" name="expiry_week" value="{{ filter_expiry_week }}">{% endif %}
     <input type="hidden" name="sort_by" value="{{ sort_by }}">
     <input type="hidden" name="sort_order" value="{{ sort_order }}">
     <input type="hidden" name="grouped" value="{{ grouped }}">
@@ -166,7 +166,7 @@
   </div>
   {% if pivot_view %}
     <p class="cw-hint">{% if pivot_view == 'calendar' %}Calendar covers scanned and uploaded certificates in your scope.{% else %}Group views cover every endpoint and uploaded file in your scope, the same rows as Inventory.{% endif %} Inventory filters do not apply.</p>
-  {% elif filter_q or filter_urgency or filter_source or filter_condition or filter_monitoring or filter_renewal or filter_delivery %}
+  {% elif filter_q or filter_urgency or filter_source or filter_condition or filter_monitoring or filter_renewal or filter_delivery or filter_chain_problem or filter_routing_gap or filter_expiry_week %}
     <div class="cw-chiprow" data-testid="active-inventory-filters">
       <span class="cw-hint">Filters:</span>
       {% if filter_q %}<span class="cw-chip">Search: {{ filter_q }}</span>{% endif %}
@@ -176,7 +176,10 @@
       {% if filter_monitoring %}<span class="cw-chip">Monitoring: {{ filter_monitoring }}</span>{% endif %}
       {% if filter_renewal %}<span class="cw-chip">Renewal: {{ filter_renewal }}</span>{% endif %}
       {% if filter_delivery %}<span class="cw-chip">Delivery: {{ filter_delivery }}</span>{% endif %}
-      <a class="cw-link" href="{{ browse_url(q=none, urgency=none, source=none, condition=none, monitoring=none, renewal=none, delivery=none) }}">Clear filters</a>
+      {% if filter_chain_problem %}<span class="cw-chip">Chain trust problem{% if filter_issuer %}: {{ filter_issuer | issuer_cn }}{% endif %}</span>{% endif %}
+      {% if filter_routing_gap %}<span class="cw-chip">No owner or alert group</span>{% endif %}
+      {% if filter_expiry_week %}<span class="cw-chip">Expiry week: {{ filter_expiry_week }}</span>{% endif %}
+      <a class="cw-link" href="{{ browse_url(q=none, urgency=none, source=none, condition=none, monitoring=none, renewal=none, delivery=none, chain_problem=none, routing_gap=none, issuer=none, expiry_week=none) }}">Clear filters</a>
     </div>
   {% endif %}
 
@@ -348,7 +351,7 @@
     {% if pivot_groups is not none and not pivot_groups %}
       {{ ui.empty('Nothing to group yet', 'Add a host or upload a certificate file to use group views.', testid='empty-pivot') }}
     {% elif not entries and pivot_groups is none %}
-      {% if filter_q or filter_urgency or filter_source or filter_condition or filter_monitoring or filter_renewal or filter_delivery %}
+      {% if filter_q or filter_urgency or filter_source or filter_condition or filter_monitoring or filter_renewal or filter_delivery or filter_chain_problem or filter_routing_gap or filter_expiry_week %}
         {{ ui.empty('No matching certificates', 'Try a different search or filter.') }}
       {% else %}
         {% call ui.empty('No certificates yet', 'Scan a host, upload a certificate file, or import a list of hosts to start watching your estate.', icon='plus', tone='t-ink', testid='empty-onboarding') %}

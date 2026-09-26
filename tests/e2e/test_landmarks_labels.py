@@ -108,10 +108,14 @@ _FONT_SIZES = """() => {
 }"""
 
 
-def test_visible_text_uses_the_type_scale(page: Page, cert_watch_server: str) -> None:
+@pytest.mark.parametrize("width", [1440, 390])
+def test_visible_text_uses_the_type_scale(
+    page: Page, cert_watch_server: str, width: int
+) -> None:
     """#126 S2: five sizes only. Catches unstyled controls too (a bare
     <button> renders at the browser default 13.33px)."""
     offenders: list[str] = []
+    page.set_viewport_size({"width": width, "height": 900})
     for path in _PAGES:
         page.goto(f"{cert_watch_server}{path}")
         # The health strip is shown asynchronously; reveal it so its

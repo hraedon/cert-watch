@@ -283,15 +283,14 @@ def sqlite3_conn(db: Path):
 
 
 class TestHomeAndBrowseRoutes:
-    @pytest.mark.parametrize("window_days", [0, 10, 30, 45])
-    def test_home_uses_configured_renewal_window(self, tmp_path, window_days):
+    def test_home_keeps_renewal_state_out_of_certificate_risk(self, tmp_path):
         from dataclasses import replace
 
         from cert_watch.app import create_app
         from cert_watch.config import Settings
 
         application = create_app(
-            settings=replace(Settings.from_env(), renewal_window_days=window_days),
+            settings=replace(Settings.from_env(), renewal_window_days=30),
         )
         db = tmp_path / "cert-watch.sqlite3"
         init_schema(db)
@@ -302,7 +301,9 @@ class TestHomeAndBrowseRoutes:
         with TestClient(application) as client:
             response = client.get("/")
         assert response.status_code == 200
-        assert ('data-severity="stalled"' in response.text) is (window_days >= 20)
+        assert 'data-testid="home-risk-row"' in response.text
+        assert "window.example.com" in response.text
+        assert "renewal_stalled" not in response.text
 
     def test_home_renders_empty_state(self, reload_app):
         app_mod = reload_app()
@@ -325,7 +326,7 @@ class TestHomeAndBrowseRoutes:
         assert r.status_code == 200
         assert 'data-testid="dashboard-heading"' in r.text
 
-    def test_home_shows_attention_item(self, reload_app, tmp_path):
+    def test_home_shows_ranked_certificate_risk(self, reload_app, tmp_path):
         app_mod = reload_app()
         db = tmp_path / "cert-watch.sqlite3"
         init_schema(db)
@@ -333,10 +334,10 @@ class TestHomeAndBrowseRoutes:
         with TestClient(app_mod.app) as client:
             r = client.get("/")
         assert r.status_code == 200
-        assert 'data-testid="attention-item"' in r.text
+        assert 'data-testid="home-risk-row"' in r.text
         assert "crit.example.com" in r.text
-        assert "manual renewal" in r.text
         assert "ops" in r.text
+        assert "manual renewal" not in r.text
 
     def test_home_tracked_summary_includes_expired_outside_future_horizon(
         self, reload_app, tmp_path
@@ -348,6 +349,8 @@ class TestHomeAndBrowseRoutes:
         with TestClient(app_mod.app) as client:
             r = client.get("/")
         assert r.status_code == 200
-        tracked = r.text.split('data-testid="home-tracked-stat"', 1)[1].split("</a>", 1)[0]
-        assert '<div class="cw-stat-val">1</div>' in tracked
-        assert "No expirations in the next 12 weeks" in r.text
+        tracked = r.text.split('data-testid="home-tracked-count"', 1)[1].split("</a>", 1)[0]
+        assert ">1 tracked item" in tracked
+        assert "Expired" in r.text
+        assert "expired.example.com" in r.text
+        assert r.text.count('data-count="0"') == 12

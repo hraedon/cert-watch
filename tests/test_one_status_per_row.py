@@ -89,7 +89,8 @@ def test_every_surface_shows_the_status_the_counts_used(unwritable, reload_app):
         home = client.get("/").text
         body = client.get(f"/api/pivot/owner/{quote(group['key'])}").json()
     assert "Nothing needs attention" not in home
-    assert 'data-testid="attention-item"' in home
+    assert 'data-testid="home-chain-row"' in home
+    assert ">View 1</a>" in home
     by_key = {_row_key(e): e["urgency"] for e in body["entries"]}
     assert by_key[KEY] == "warning"
 

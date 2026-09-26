@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from cert_watch.database.connection import _connect, _sql_now
 
@@ -92,15 +92,18 @@ def dashboard_overall_stats(
     """Count honest overall display states via the canonical aggregate pass."""
     from cert_watch.database.dashboard_axes import dashboard_axis_stats
 
-    return dashboard_axis_stats(
-        db_path,
-        q=q,
-        source=source,
-        scope_tags=scope_tags,
-        status=status,
-        axes=axes,
-        axis_settings=axis_settings,
-    )["overall"]
+    return cast(
+        dict[str, int],
+        dashboard_axis_stats(
+            db_path,
+            q=q,
+            source=source,
+            scope_tags=scope_tags,
+            status=status,
+            axes=axes,
+            axis_settings=axis_settings,
+        )["overall"],
+    )
 
 
 def dashboard_expiry_stats(

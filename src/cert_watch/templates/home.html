@@ -4,136 +4,152 @@
 {% import "macros/icons.html" as icons %}
 {% import "macros/ui.html" as ui %}
 
-{# Severity semantics are supplied by the Home presenter. #}
-{% macro sev_pill(item) %}
-  {{ ui.status(item.severity_tone, label=item.severity_label) }}
-
-{% endmacro %}
-
 {% block content %}
 <div class="cw-wrap">
-  {% call ui.page_head('Home', 'What needs a human, ranked by time-to-impact.', testid='home-heading') %}
+  {% call ui.page_head('Home', 'Certificate risk, monitoring gaps, and alert delivery.', testid='home-heading') %}
     <a href="/browse" class="cw-btn">{{ icons.svg_icon('search', 14) }}Browse inventory</a>
   {% endcall %}
 
-  {% if saved %}
-  <div class="cw-flash t-ok"><span>{{ saved }}</span></div>
-  {% endif %}
+  {% if saved %}<div class="cw-flash t-ok"><span>{{ saved }}</span></div>{% endif %}
+  {% if warning %}<div class="cw-flash t-warn"><span>{{ warning }}</span></div>{% endif %}
+  {% if error %}<div class="cw-flash t-crit"><span>{{ error }}</span></div>{% endif %}
 
-  {# ---- Stat strip: the cells deep-link into Browse filters ---- #}
-  <div class="cw-stats">
-    {{ ui.stat('Tracked', tracked_total, 'endpoints / files', icon='shield',
-                href='/browse?grouped=0', tone='', testid='home-tracked-stat') }}
-    {{ ui.stat('Expired', axis_stats.condition.expired, 'needs attention' if axis_stats.condition.expired else 'none', tone='t-expired', icon='alert',
-                href='/browse?condition=expired&grouped=0') }}
-    {{ ui.stat('≤7 days', axis_stats.condition.le7, 'expiry condition', tone='t-crit', icon='alert',
-                href='/browse?condition=le7&grouped=0') }}
-    {{ ui.stat('8–30 days', axis_stats.condition['8to30'], 'expiry condition', tone='t-warn', icon='clock',
-                href='/browse?condition=8to30&grouped=0') }}
-    {{ ui.stat('OK', axis_stats.condition.ok, 'more than 30 days', tone='t-ok', icon='check-circle',
-                href='/browse?condition=ok&grouped=0') }}
-  </div>
+  <p class="cw-home-scope">
+    <a class="cw-link" href="/browse?grouped=0" data-testid="home-tracked-count">{{ tracked_total }} tracked item{{ 's' if tracked_total != 1 }}</a>
+    · {{ monitored_total }} monitored endpoint{{ 's' if monitored_total != 1 }}
+  </p>
 
-  <div class="cw-panel" data-testid="scan-coverage">
-    <div class="cw-panel-body">
-      <div class="cw-chiprow">
-        <b>Scan coverage</b>
-        {% if scan_coverage.total %}
-        {% set monitored_total = axis_stats.monitoring.current + axis_stats.monitoring.failing + axis_stats.monitoring.never_scanned %}
-        <span><a class="cw-link" href="/browse?monitoring=current&grouped=0">{{ axis_stats.monitoring.current }} of {{ monitored_total }} monitored endpoints have current observations</a></span>
-        {% else %}<span class="cw-muted">No monitored endpoints</span>{% endif %}
+  <div class="cw-home-grid" data-testid="home-blocks">
+    <section class="cw-home-block" data-testid="certificate-risk-block">
+      <div class="cw-home-head">
+        <h2>Certificate risk</h2>
+        <div class="cw-home-counts">
+          <a href="/browse?condition=expired&amp;grouped=0" data-testid="home-condition-count-expired"><b class="{{ 't-crit' if axis_stats.condition.expired else '' }}">{{ axis_stats.condition.expired }}</b> expired</a>
+          <a href="/browse?condition=le7&amp;grouped=0" data-testid="home-condition-count-le7"><b class="{{ 't-crit' if axis_stats.condition.le7 else '' }}">{{ axis_stats.condition.le7 }}</b> ≤7 days</a>
+          <a href="/browse?condition=8to30&amp;grouped=0" data-testid="home-condition-count-8to30"><b class="{{ 't-warn' if axis_stats.condition['8to30'] else '' }}">{{ axis_stats.condition['8to30'] }}</b> 8–30 days</a>
+          <a href="/browse?condition=ok&amp;grouped=0" data-testid="home-condition-count-ok"><b>{{ axis_stats.condition.ok }}</b> OK</a>
+        </div>
       </div>
-      <p class="cw-hint">Current means a successful scan within its configured cadence, with no later incomplete attempt. Uploaded files are excluded.</p>
-      {% if scan_coverage.total %}
-      <div class="cw-chiprow">
-        <a class="cw-chip {{ 't-warn' if axis_stats.monitoring.failing else 't-muted' }}" href="/browse?monitoring=failing&grouped=0">{{ axis_stats.monitoring.failing }} failing or overdue</a>
-        <a class="cw-chip t-muted" href="/browse?monitoring=never_scanned&grouped=0">{{ axis_stats.monitoring.never_scanned }} without a successful scan</a>
-      </div>
+
+      {% if risk_rows %}
+      <ul class="cw-home-rows">
+        {% for row in risk_rows %}
+        <li class="cw-home-row" data-testid="home-risk-row" data-condition="{{ row.condition }}">
+          <div class="cw-home-row-main">
+            <span class="cw-home-state {{ row.tone }}"><span class="cw-home-dot"></span>{{ row.condition_label }}</span>
+            <a class="cw-id cw-home-id" href="{{ row.detail_url }}">{{ row.name }}</a>
+            {% if row.difference %}<span class="cw-home-detail">{{ row.difference }}</span>{% endif %}
+          </div>
+          <span class="cw-home-side{% if not row.owner_name %} cw-muted{% endif %}">{{ row.owner_name or 'No owner' }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% elif tracked_total %}
+        <p class="cw-home-calm">No certificates expire in the next 30 days.</p>
+      {% else %}
+        {% call ui.empty('No certificates yet', 'Scan a host, upload a certificate file, or import a list to start watching your estate.', icon='plus', tone='t-ink', testid='empty-onboarding') %}
+          {% if may_write %}<a href="/browse" class="cw-btn primary">{{ icons.svg_icon('plus', 15, 2) }}Add certificates</a>{% endif %}
+        {% endcall %}
       {% endif %}
-    </div>
-  </div>
 
-  {# ---- Attention queue ---- #}
-  <div class="cw-panel" data-testid="attention-panel">
-    <div class="cw-panel-head">
-      <h2>{{ icons.svg_icon('alert', 15) }} Needs attention</h2>
-      {% if queue %}<span class="cw-hint">{% if queue_total > queue | length %}{{ queue | length }} most urgent of {{ queue_total }} items{% else %}{{ queue | length }} item{{ 's' if queue | length != 1 }}{% endif %}</span>{% endif %}
-    </div>
-    <div class="cw-panel-body">
-      {% for it in queue %}
-      <div class="cw-att-row" data-testid="attention-item" data-severity="{{ it.severity }}">
-        <div class="cw-att-sev">{{ sev_pill(it) }}</div>
-        <div class="cw-att-main">
-          <div class="cw-chiprow">
-            {% if it.detail_url %}
-              <a href="{{ it.detail_url }}" class="cw-id">{{ it.endpoint }}</a>
-            {% else %}<span class="cw-id">{{ it.endpoint }}</span>{% endif %}
-            {% if it.host_count > 1 %}<span class="cw-chip t-ink">{{ it.host_count }} hosts</span>{% endif %}
+      {% if chain_problem_total %}
+      <div class="cw-home-subhead">
+        <span>Chain can’t be verified · <a class="cw-link" href="/browse?chain_problem=1&amp;grouped=0" data-testid="home-chain-total-link">{{ chain_problem_total }} certificate{{ 's' if chain_problem_total != 1 }}</a>, {{ chain_issuer_total }} issuer{{ 's' if chain_issuer_total != 1 }}</span>
+      </div>
+      <ul class="cw-home-rows">
+        {% for group in chain_groups %}
+        <li class="cw-home-row cw-home-row--stack" data-testid="home-chain-row">
+          <div class="cw-home-row-main">
+            <span><strong>{{ group.issuer }}</strong> <span class="cw-muted">· {{ group.count }} certificate{{ 's' if group.count != 1 }}</span></span>
+            {% if group.examples %}<span class="cw-id cw-home-detail">{{ group.examples | join(', ') }}</span>{% endif %}
+            <span class="cw-home-detail">{{ group.guidance }}</span>
           </div>
-          <div class="cw-sub">{{ it.reasons | join(' · ') }}</div>
-        </div>
-        <div class="cw-chiprow">
-          {% if it.owner_name %}<span class="cw-chip">{{ icons.svg_icon('users', 11, 1.6) }}{{ it.owner_name }}</span>{% endif %}
-          {% if it.days_remaining is not none and it.host_id %}
-            <span class="cw-chip {{ 't-ok' if it.confidence == 'auto' else 't-muted' }}"
-                  title="Configured renewal method for this host">
-              {% if it.confidence == 'auto' %}{{ icons.svg_icon('refresh', 11, 1.6) }}{% else %}{{ icons.svg_icon('user', 11, 1.6) }}{% endif %}
-              {{ it.confidence_label }}</span>
-          {% endif %}
-        </div>
-        <div class="cw-rowact">
-          {% if may_write and it.host_id %}
-            <form method="post" action="/hosts/{{ it.host_id }}/scan" class="cw-inline">
-              <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-              <button type="submit" title="Scan now" class="cw-iconbtn sm">{{ icons.svg_icon('refresh', 14) }}</button>
-            </form>
-          {% endif %}
-          {% if it.detail_url %}
-            <a href="{{ it.detail_url }}" class="cw-btn ghost sm">Review{{ icons.svg_icon('chevron-right', 14) }}</a>
-          {% endif %}
+          <a class="cw-link cw-home-side" href="{{ group.browse_url }}">View {{ group.count }}</a>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </section>
+
+    <section class="cw-home-block" data-testid="monitoring-gaps-block">
+      <div class="cw-home-head">
+        <h2>Monitoring gaps</h2>
+        <div class="cw-home-counts">
+          <a href="/browse?monitoring=failing&amp;grouped=0" data-testid="home-monitoring-count-failing"><b class="{{ 't-warn' if axis_stats.monitoring.failing else '' }}">{{ axis_stats.monitoring.failing }}</b> failing</a>
+          <a href="/browse?monitoring=never_scanned&amp;grouped=0" data-testid="home-monitoring-count-never"><b class="{{ 't-warn' if axis_stats.monitoring.never_scanned else '' }}">{{ axis_stats.monitoring.never_scanned }}</b> never scanned</a>
+          <a href="/browse?monitoring=current&amp;grouped=0" data-testid="home-monitoring-count-current"><b>{{ axis_stats.monitoring.current }}</b> of {{ monitored_total }} current</a>
         </div>
       </div>
+
+      {% if monitoring_rows %}
+      <ul class="cw-home-rows">
+        {% for row in monitoring_rows %}
+        <li class="cw-home-row cw-home-row--stack" data-testid="home-monitoring-row" data-monitoring="{{ row.state }}">
+          <div class="cw-home-row-main">
+            <span class="cw-home-state {{ row.tone }}"><span class="cw-home-dot"></span>{{ row.state_label }}{% if row.when_label %} <span class="cw-home-when">{{ row.when_label }}</span>{% endif %}</span>
+            <a class="cw-id cw-home-id" href="{{ row.detail_url }}">{{ row.name }}</a>
+            <span class="cw-home-detail{% if row.cause_is_raw %} cw-id{% endif %}">{{ row.cause }}</span>
+            {% if row.last_success_label != 'Not yet' %}<span class="cw-home-detail cw-muted">Last good scan {{ row.last_success_label }}</span>{% endif %}
+          </div>
+          <span class="cw-home-side{% if not row.owner_name %} cw-muted{% endif %}">{{ row.owner_name or 'No owner' }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% elif monitored_total %}
+        <p class="cw-home-calm">All monitored endpoints have current observations.</p>
       {% else %}
-        {% if tracked_total %}
-          {{ ui.empty('Nothing needs attention', 'No expiring, stalled, or failing endpoints right now. New problems land here first.',
-                      icon='check-circle', tone='t-ok', testid='queue-calm') }}
-        {% else %}
-          {% call ui.empty('No certificates yet', 'Scan a host, upload a certificate file, or import a list of hosts to start watching your estate.',
-                      icon='plus', tone='t-ink', testid='empty-onboarding') %}
-            {% if may_write %}<a href="/browse" class="cw-btn primary">{{ icons.svg_icon('plus', 15, 2) }}Add certificates</a>{% endif %}
-          {% endcall %}
-        {% endif %}
-      {% endfor %}
-    </div>
+        <p class="cw-home-calm">No monitored endpoints yet. Uploaded files are not monitored.</p>
+      {% endif %}
+
+      <footer class="cw-home-foot">
+        <span>{{ last_scan_activity_label }}</span>
+        <span>Next daily run {{ next_run_label }}</span>
+        <a class="cw-link" href="/scan-history">Scan history</a>
+      </footer>
+    </section>
+
+    <section class="cw-home-block" data-testid="delivery-routing-block">
+      <div class="cw-home-head">
+        <h2>Delivery &amp; routing</h2>
+        <div class="cw-home-counts">
+          <a href="/browse?delivery=failing&amp;grouped=0" data-testid="home-delivery-count-failing"><b class="{{ 't-crit' if axis_stats.delivery.failing else '' }}">{{ axis_stats.delivery.failing }}</b> can’t be delivered</a>
+          <a href="/browse?delivery=unrouted&amp;grouped=0" data-testid="home-delivery-count-unrouted"><b>{{ axis_stats.delivery.unrouted }}</b> unrouted</a>
+        </div>
+      </div>
+      <ul class="cw-home-rows">
+        {% for line in delivery_lines %}
+        <li class="cw-home-row cw-home-row--stack" data-testid="home-delivery-line">
+          <div class="cw-home-row-main">
+            <span class="cw-home-state {{ line.tone }}"><span class="cw-home-dot{% if not line.tone %} hollow{% endif %}"></span>{{ line.label }}</span>
+            <span class="cw-home-detail">{{ line.detail }}</span>
+          </div>
+          {% if line.action_url and (not line.admin_only or is_admin) %}<a class="cw-link cw-home-side" href="{{ line.action_url }}">{{ line.action_label }}</a>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
   </div>
 
-  {# ---- Expiry horizon: the next 12 weeks at a glance ---- #}
-  <div class="cw-panel" data-testid="horizon-panel">
-    <div class="cw-panel-head">
-      <h2>{{ icons.svg_icon('calendar', 15) }} Expiry horizon</h2>
-      <div class="cw-chiprow">
-        {% if horizon_storms %}<span class="cw-chip t-crit">{{ icons.svg_icon('alert', 11, 1.8) }}{{ horizon_storms }} renewal storm{{ 's' if horizon_storms != 1 }}</span>{% endif %}
-        <a class="cw-hint cw-link" href="/browse?view=calendar">full calendar →</a>
-      </div>
+  <section class="cw-home-horizon" data-testid="horizon-panel">
+    <div class="cw-home-head">
+      <h2>Expiring by week</h2>
+      <span class="cw-hint">next 12 weeks · select a week to open it in Browse · <a class="cw-link" href="/browse?view=calendar">calendar</a></span>
     </div>
-    <div class="cw-panel-body">
-      {% for b in horizon %}
-        <div class="cw-cal-row{% if b.is_empty %} quiet{% endif %}">
-          <div class="cw-cal-date">
-            <span class="tnum {{ 'cw-muted' if b.is_empty }}">{{ b.bucket_start }}</span>
-            {% if b.bucket_start == current_week_start %}<div class="cw-cal-now">this week</div>{% endif %}
-          </div>
-          {% if not b.is_empty %}
-          <div class="cw-chiprow">
-            {% if b.is_storm %}<span class="cw-chip t-crit">{{ icons.svg_icon('alert', 11, 1.8) }}storm</span>{% endif %}
-            <span class="cw-chip {{ b.tone }}">{{ b.count }} cert{{ 's' if b.count != 1 }}</span>
-          </div>
-          {% endif %}
-        </div>
-      {% else %}
-        {{ ui.empty('No expirations in the next 12 weeks', 'Future expirations will appear here as they enter the horizon.', icon='calendar', tone='t-ink') }}
-      {% endfor %}
+    <div class="cw-home-horizon-body">
+      <ul class="cw-home-strip" aria-label="Certificate expirations by week">
+        {% for bucket in horizon %}
+        <li>
+          <a href="{{ bucket.browse_url }}" title="{{ bucket.title }}" aria-label="{{ bucket.title }}" data-testid="home-week-link" data-count="{{ bucket.count }}">
+            <span class="cw-home-bar-count">{% if bucket.count %}{{ bucket.count }}{% else %}<span class="cw-sr">0</span>{% endif %}</span>
+            <svg class="cw-home-bar {{ bucket.tone }}{% if not bucket.count %} empty{% endif %}" viewBox="0 0 36 44" preserveAspectRatio="none" aria-hidden="true">
+              <rect x="0" y="{{ 44 - bucket.bar_height }}" width="36" height="{{ bucket.bar_height }}"></rect>
+            </svg>
+            <span class="cw-home-bar-label">{{ bucket.bucket_label }}</span>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
     </div>
-  </div>
+  </section>
 </div>
 {% endblock %}

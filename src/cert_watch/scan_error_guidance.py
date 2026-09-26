@@ -81,6 +81,45 @@ _RULES: tuple[tuple[tuple[str, ...], ScanErrorGuidance], ...] = (
         ),
     ),
     (
+        ("unable to get local issuer certificate",),
+        ScanErrorGuidance(
+            "The server's certificate chain does not lead to an issuer cert-watch trusts.",
+            "Check that the server sends its intermediate certificates. For a private CA, "
+            "add the CA certificate in Trust anchors, then scan again.",
+        ),
+    ),
+    (
+        ("self-signed certificate", "self signed certificate"),
+        ScanErrorGuidance(
+            "The server presented a self-signed certificate that cert-watch does not trust.",
+            "Replace it with a certificate from a trusted issuer, or add the expected "
+            "private CA certificate in Trust anchors, then scan again.",
+        ),
+    ),
+    (
+        ("certificate has expired", "certificate expired"),
+        ScanErrorGuidance(
+            "The server presented an expired certificate.",
+            "Renew and install the certificate on this endpoint, then scan again.",
+        ),
+    ),
+    (
+        ("hostname mismatch", "doesn't match", "does not match", "not valid for"),
+        ScanErrorGuidance(
+            "The certificate does not cover the host name cert-watch scanned.",
+            "Install a certificate whose subject or SAN includes this host name, or correct "
+            "the host name in cert-watch, then scan again.",
+        ),
+    ),
+    (
+        ("certificate_verify_failed", "certificate verify failed"),
+        ScanErrorGuidance(
+            "cert-watch could not verify the server's certificate.",
+            "Check the certificate dates, host name, and chain. Install any missing "
+            "intermediates or the expected private CA in Trust anchors, then scan again.",
+        ),
+    ),
+    (
         ("tlsv1_alert_protocol_version", "unsupported protocol", "no protocols available"),
         ScanErrorGuidance(
             "The server and cert-watch share no TLS version.",
