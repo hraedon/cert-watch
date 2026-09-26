@@ -728,7 +728,8 @@ details.cw-editor[open] .when-open { display: inline; }
   .cw-att-row > .cw-rowact { margin-left: auto; opacity: 1; }
 
   .cw-user > [data-testid="auth-user"] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  .cw-scope { max-width: 56px; overflow: hidden; text-overflow: ellipsis; }
+  .cw-scope { max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
+  .cw-scope-prefix { display: none; }
   .cw-topbar:has(.cw-user) .cw-name { display: none; }
 }
 
@@ -803,7 +804,7 @@ details.cw-editor[open] .when-open { display: inline; }
 .cw-home-row--stack { align-items: start; }
 .cw-home-state {
   display: inline-flex; align-items: center; gap: 7px; width: fit-content;
-  color: var(--cw-tone, var(--text)); font-size: var(--cw-fs-xs); font-weight: 600;
+  color: var(--text); font-size: var(--cw-fs-xs); font-weight: 600;
 }
 .cw-home-dot {
   width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
@@ -829,10 +830,7 @@ details.cw-editor[open] .when-open { display: inline; }
   display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 10px 16px;
   border-top: 1px solid var(--border); color: var(--text-2); font-size: var(--cw-fs-xs);
 }
-.cw-home-horizon-body { padding: 0 16px 14px; overflow-x: auto; }
-.cw-home-horizon-body:focus-visible {
-  outline: 2px solid var(--cw-ink); outline-offset: -2px;
-}
+.cw-home-horizon-body { position: relative; padding: 0 16px 14px; }
 .cw-home-strip {
   display: grid; grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 4px; min-height: 78px; align-items: end; list-style: none; margin: 0; padding: 0;
@@ -857,6 +855,7 @@ details.cw-editor[open] .when-open { display: inline; }
   .cw-home-row { padding: 10px 14px; }
   .cw-home-head { padding-inline: 14px; }
   .cw-home-horizon-body { padding-inline: 10px; }
-  .cw-home-strip { gap: 4px; min-width: 620px; }
-  .cw-home-bar-label { font-size: 10px; }
+  .cw-home-strip { gap: 3px; min-width: 0; }
+  .cw-home-bar-label { font-size: var(--cw-fs-xs); }
+  .cw-home-strip > li:nth-child(even) .cw-home-bar-label { visibility: hidden; }
 }

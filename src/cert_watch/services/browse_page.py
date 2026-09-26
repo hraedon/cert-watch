@@ -49,6 +49,7 @@ class BrowsePageData:
     filter_renewal: str = ""
     filter_delivery: str = ""
     filter_chain_problem: bool = False
+    filter_routing_gap: bool = False
     filter_issuer: str = ""
     filter_expiry_week: str = ""
 
@@ -64,6 +65,7 @@ def load_browse_page(
     renewal: str | None = None,
     delivery: str | None = None,
     chain_problem: bool = False,
+    routing_gap: bool = False,
     issuer: str | None = None,
     expiry_week: str | None = None,
     sort_by: str,
@@ -80,8 +82,9 @@ def load_browse_page(
     if view in _GLOBAL_VIEWS:
         q = urgency = source = condition = monitoring = renewal = delivery = None
         chain_problem = False
+        routing_gap = False
         issuer = expiry_week = None
-    if chain_problem or expiry_week:
+    if chain_problem or routing_gap or expiry_week:
         grouped = 0
     grouped = int(bool(grouped))
     # One status context for the whole render: every count, group, filter and
@@ -151,6 +154,7 @@ def load_browse_page(
             renewal=renewal,
             delivery=delivery,
             chain_problem=chain_problem,
+            routing_gap=routing_gap,
             issuer=issuer,
             expiry_week=expiry_week,
         )
@@ -176,7 +180,7 @@ def load_browse_page(
         tracked_total = dashboard_inventory_count(db_path, scope_tags=scope_tags)
     elif not any((
         urgency, condition, monitoring, renewal, delivery,
-        chain_problem, expiry_week,
+        chain_problem, routing_gap, expiry_week,
     )):
         tracked_total = total
     else:
@@ -207,6 +211,7 @@ def load_browse_page(
         filter_renewal=renewal or "",
         filter_delivery=delivery or "",
         filter_chain_problem=chain_problem,
+        filter_routing_gap=routing_gap,
         filter_issuer=issuer or "",
         filter_expiry_week=expiry_week or "",
         sort_by=sort_by,

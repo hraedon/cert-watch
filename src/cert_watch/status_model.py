@@ -338,6 +338,21 @@ def register_status_model_functions(
     conn.create_function("cw_delivery_state", 7, delivery_state)
 
 
+def alert_group_match_sql(cert_alias: str, host_alias: str | None) -> str:
+    """Return an identity-free predicate for any matching alert group."""
+    cert_id = f"{cert_alias}.id"
+    cert_tags = f"{cert_alias}.tags"
+    host_tags = f"{host_alias}.tags" if host_alias else "''"
+    return (
+        "EXISTS(SELECT 1 FROM alert_groups ag WHERE "
+        f"EXISTS(SELECT 1 FROM alert_group_certs agc WHERE agc.cert_id = {cert_id} "
+        "AND agc.group_id = ag.id) OR "
+        f"cw_tags_overlap({cert_tags}, {host_tags}, ag.match_tags) OR "
+        "EXISTS(SELECT 1 FROM roles ro WHERE ro.alert_group_id = ag.id "
+        f"AND cw_tags_overlap({cert_tags}, {host_tags}, ro.scope_tag)))"
+    )
+
+
 def delivery_state_sql(
     cert_alias: str | None,
     host_alias: str | None,
@@ -354,14 +369,7 @@ def delivery_state_sql(
     cert_tags = f"{c}.tags" if c else "''"
     host_tags = f"{h}.tags" if h else "''"
     owner_route = f"NULLIF(TRIM(COALESCE({h}.owner_email, '')), '') IS NOT NULL" if h else "0"
-    group_match = (
-        "EXISTS(SELECT 1 FROM alert_groups ag WHERE "
-        f"EXISTS(SELECT 1 FROM alert_group_certs agc WHERE agc.cert_id = {cert_id} "
-        "AND agc.group_id = ag.id) OR "
-        f"cw_tags_overlap({cert_tags}, {host_tags}, ag.match_tags) OR "
-        "EXISTS(SELECT 1 FROM roles ro WHERE ro.alert_group_id = ag.id "
-        f"AND cw_tags_overlap({cert_tags}, {host_tags}, ro.scope_tag)))"
-    )
+    group_match = alert_group_match_sql(c, h) if c else "0"
     group_recipients = (
         "EXISTS(SELECT 1 FROM alert_groups ag WHERE "
         "NULLIF(TRIM(REPLACE(COALESCE(ag.recipients, ''), ',', '')), '') "

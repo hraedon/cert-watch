@@ -19,7 +19,7 @@
 
   <div class="cw-app">
     <header class="cw-topbar">
-      <a href="/" class="cw-wordmark">
+      <a href="/" class="cw-wordmark" aria-label="cert-watch home">
         <div class="cw-mark">
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/>
@@ -42,7 +42,7 @@
 
       <span class="cw-scope" data-testid="scope-indicator" title="Your view is limited to resources tagged: production">
         <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18"/><path d="M6 12h12"/><path d="M10 19h4"/></svg>
-        scope: production
+        <span class="cw-scope-prefix">scope: </span>production
       </span>
 
 
@@ -122,13 +122,14 @@ Browse inventory</a>
 
 
       <div class="cw-home-subhead">
-        <span>Chain can’t be verified · <a class="cw-link" href="/browse?chain_problem=1&amp;grouped=0" data-testid="home-chain-total-link">1 certificate</a> · grouped by issuer</span>
+        <span>Chain can’t be verified · <a class="cw-link" href="/browse?chain_problem=1&amp;grouped=0" data-testid="home-chain-total-link">1 certificate</a>, 1 issuer</span>
       </div>
       <ul class="cw-home-rows">
 
         <li class="cw-home-row cw-home-row--stack" data-testid="home-chain-row">
           <div class="cw-home-row-main">
-            <strong>Demo Internal CA</strong>
+            <span><strong>Demo Internal CA</strong> <span class="cw-muted">· 1 certificate</span></span>
+            <span class="cw-id cw-home-detail">mail.demo.test</span>
             <span class="cw-home-detail">Serve the intermediate with the leaf, or add a private CA in Trust anchors.</span>
           </div>
           <a class="cw-link cw-home-side" href="/browse?chain_problem=1&amp;issuer=CN%3DDemo+Internal+CA&amp;grouped=0">View 1</a>
@@ -153,7 +154,7 @@ Browse inventory</a>
 
 
       <footer class="cw-home-foot">
-        <span>Last run 2026-09-22 12:00 UTC</span>
+        <span>Last scan activity 2026-09-22 12:00 UTC</span>
         <span>Next daily run 2026-09-23 06:00 UTC</span>
         <a class="cw-link" href="/scan-history">Scan history</a>
       </footer>
@@ -163,7 +164,7 @@ Browse inventory</a>
       <div class="cw-home-head">
         <h2>Delivery &amp; routing</h2>
         <div class="cw-home-counts">
-          <a href="/browse?delivery=failing&amp;grouped=0" data-testid="home-delivery-count-failing"><b class="t-crit">1</b> alerts undelivered</a>
+          <a href="/browse?delivery=failing&amp;grouped=0" data-testid="home-delivery-count-failing"><b class="t-crit">1</b> can’t be delivered</a>
           <a href="/browse?delivery=unrouted&amp;grouped=0" data-testid="home-delivery-count-unrouted"><b>0</b> unrouted</a>
         </div>
       </div>
@@ -186,7 +187,7 @@ Browse inventory</a>
       <h2>Expiring by week</h2>
       <span class="cw-hint">next 12 weeks · select a week to open it in Browse · <a class="cw-link" href="/browse?view=calendar">calendar</a></span>
     </div>
-    <div class="cw-home-horizon-body" tabindex="0" aria-label="Scrollable twelve-week expiry chart">
+    <div class="cw-home-horizon-body">
       <ul class="cw-home-strip" aria-label="Certificate expirations by week">
 
         <li>

@@ -19,7 +19,7 @@
 
   <div class="cw-app">
     <header class="cw-topbar">
-      <a href="/" class="cw-wordmark">
+      <a href="/" class="cw-wordmark" aria-label="cert-watch home">
         <div class="cw-mark">
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/>
@@ -142,7 +142,7 @@ Add certificates</a>
 
 
       <footer class="cw-home-foot">
-        <span>Last run Not yet</span>
+        <span>No scans yet</span>
         <span>Next daily run 2026-09-23 06:00 UTC</span>
         <a class="cw-link" href="/scan-history">Scan history</a>
       </footer>
@@ -152,7 +152,7 @@ Add certificates</a>
       <div class="cw-home-head">
         <h2>Delivery &amp; routing</h2>
         <div class="cw-home-counts">
-          <a href="/browse?delivery=failing&amp;grouped=0" data-testid="home-delivery-count-failing"><b class="">0</b> alerts undelivered</a>
+          <a href="/browse?delivery=failing&amp;grouped=0" data-testid="home-delivery-count-failing"><b class="">0</b> can’t be delivered</a>
           <a href="/browse?delivery=unrouted&amp;grouped=0" data-testid="home-delivery-count-unrouted"><b>0</b> unrouted</a>
         </div>
       </div>
@@ -175,7 +175,7 @@ Add certificates</a>
       <h2>Expiring by week</h2>
       <span class="cw-hint">next 12 weeks · select a week to open it in Browse · <a class="cw-link" href="/browse?view=calendar">calendar</a></span>
     </div>
-    <div class="cw-home-horizon-body" tabindex="0" aria-label="Scrollable twelve-week expiry chart">
+    <div class="cw-home-horizon-body">
       <ul class="cw-home-strip" aria-label="Certificate expirations by week">
 
         <li>

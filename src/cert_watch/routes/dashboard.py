@@ -52,7 +52,7 @@ templates = get_templates()
 # for / carrying any of them is a legacy bookmark — redirect to /browse.
 _BROWSE_PARAMS = {
     "q", "urgency", "source", "condition", "monitoring", "renewal", "delivery",
-    "chain_problem", "issuer", "expiry_week",
+    "chain_problem", "routing_gap", "issuer", "expiry_week",
     "sort_by", "sort_order", "page", "grouped", "view",
 }
 
@@ -85,7 +85,9 @@ def home(
         scope_tags=scope_tags,
         status=status,
         axes=axes,
-        axis_columns=frozenset({"condition", "monitoring", "delivery", "chain"}),
+        axis_columns=frozenset(
+            {"condition", "monitoring", "delivery", "chain", "routing"}
+        ),
         home=True,
     )
     home_data = axis_stats.pop("_home")
@@ -95,6 +97,7 @@ def home(
         home_data=home_data,
         smtp_configured=axis_settings.smtp_configured,
         webhook_configured=axis_settings.webhook_configured,
+        webhook_kind=settings.webhook_kind,
         sched_hour=settings.sched_hour,
         sched_min=settings.sched_min,
         now=status.now,
@@ -132,6 +135,7 @@ def dashboard(
     renewal: str | None = None,
     delivery: str | None = None,
     chain_problem: int = 0,
+    routing_gap: int = 0,
     issuer: str | None = None,
     expiry_week: str | None = None,
     sort_by: str = "days",
@@ -164,6 +168,7 @@ def dashboard(
             notice = notice or f"Ignored invalid expiry week: {expiry_week}"
             expiry_week = None
     chain_problem = int(chain_problem == 1)
+    routing_gap = int(routing_gap == 1)
     if not chain_problem:
         issuer = None
     db = _db_path(request)
@@ -180,6 +185,7 @@ def dashboard(
         renewal=renewal,
         delivery=delivery,
         chain_problem=bool(chain_problem),
+        routing_gap=bool(routing_gap),
         issuer=issuer,
         expiry_week=expiry_week,
         sort_by=sort_by,

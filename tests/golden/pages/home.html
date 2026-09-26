@@ -19,7 +19,7 @@
 
   <div class="cw-app">
     <header class="cw-topbar">
-      <a href="/" class="cw-wordmark">
+      <a href="/" class="cw-wordmark" aria-label="cert-watch home">
         <div class="cw-mark">
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/>
@@ -110,24 +110,27 @@ Browse inventory</a>
           <div class="cw-home-row-main">
             <span class="cw-home-state t-crit"><span class="cw-home-dot"></span>Expired 400 days ago</span>
             <a class="cw-id cw-home-id" href="/certificates/{{CERT_3_ID}}">legacy.demo.test</a>
+            <span class="cw-home-detail">Uploaded file — replace by upload · chain also unverified</span>
           </div>
-
+          <span class="cw-home-side cw-muted">No owner</span>
         </li>
 
         <li class="cw-home-row" data-testid="home-risk-row" data-condition="le7">
           <div class="cw-home-row-main">
             <span class="cw-home-state t-crit"><span class="cw-home-dot"></span>4 days left</span>
             <a class="cw-id cw-home-id" href="/certificates/{{CERT_1_ID}}">intranet.demo.test</a>
+            <span class="cw-home-detail">Uploaded file — replace by upload · chain also unverified</span>
           </div>
-
+          <span class="cw-home-side cw-muted">No owner</span>
         </li>
 
         <li class="cw-home-row" data-testid="home-risk-row" data-condition="8to30">
           <div class="cw-home-row-main">
             <span class="cw-home-state t-warn"><span class="cw-home-dot"></span>10 days left</span>
             <a class="cw-id cw-home-id" href="/certificates/{{CERT_5_ID}}">vpn.demo.test</a>
+            <span class="cw-home-detail">Uploaded file — replace by upload · chain also unverified</span>
           </div>
-
+          <span class="cw-home-side cw-muted">No owner</span>
         </li>
 
       </ul>
@@ -135,13 +138,14 @@ Browse inventory</a>
 
 
       <div class="cw-home-subhead">
-        <span>Chain can’t be verified · <a class="cw-link" href="/browse?chain_problem=1&amp;grouped=0" data-testid="home-chain-total-link">5 certificates</a> · grouped by issuer</span>
+        <span>Chain can’t be verified · <a class="cw-link" href="/browse?chain_problem=1&amp;grouped=0" data-testid="home-chain-total-link">5 certificates</a>, 2 issuers</span>
       </div>
       <ul class="cw-home-rows">
 
         <li class="cw-home-row cw-home-row--stack" data-testid="home-chain-row">
           <div class="cw-home-row-main">
-            <strong>Demo Internal CA</strong>
+            <span><strong>Demo Internal CA</strong> <span class="cw-muted">· 4 certificates</span></span>
+            <span class="cw-id cw-home-detail">intranet.demo.test (uploaded), ldaps.demo.test (uploaded)</span>
             <span class="cw-home-detail">Serve the intermediate with the leaf, or add a private CA in Trust anchors.</span>
           </div>
           <a class="cw-link cw-home-side" href="/browse?chain_problem=1&amp;issuer=CN%3DDemo+Internal+CA&amp;grouped=0">View 4</a>
@@ -149,7 +153,8 @@ Browse inventory</a>
 
         <li class="cw-home-row cw-home-row--stack" data-testid="home-chain-row">
           <div class="cw-home-row-main">
-            <strong>Demo Legacy CA</strong>
+            <span><strong>Demo Legacy CA</strong> <span class="cw-muted">· 1 certificate</span></span>
+            <span class="cw-id cw-home-detail">legacy.demo.test (uploaded)</span>
             <span class="cw-home-detail">Serve the intermediate with the leaf, or add a private CA in Trust anchors.</span>
           </div>
           <a class="cw-link cw-home-side" href="/browse?chain_problem=1&amp;issuer=CN%3DDemo+Legacy+CA&amp;grouped=0">View 1</a>
@@ -186,7 +191,7 @@ Browse inventory</a>
 
 
       <footer class="cw-home-foot">
-        <span>Last run 2026-09-22 12:00 UTC</span>
+        <span>Last scan activity 2026-09-22 12:00 UTC</span>
         <span>Next daily run 2026-09-23 06:00 UTC</span>
         <a class="cw-link" href="/scan-history">Scan history</a>
       </footer>
@@ -196,7 +201,7 @@ Browse inventory</a>
       <div class="cw-home-head">
         <h2>Delivery &amp; routing</h2>
         <div class="cw-home-counts">
-          <a href="/browse?delivery=failing&amp;grouped=0" data-testid="home-delivery-count-failing"><b class="t-crit">1</b> alerts undelivered</a>
+          <a href="/browse?delivery=failing&amp;grouped=0" data-testid="home-delivery-count-failing"><b class="t-crit">1</b> can’t be delivered</a>
           <a href="/browse?delivery=unrouted&amp;grouped=0" data-testid="home-delivery-count-unrouted"><b>5</b> unrouted</a>
         </div>
       </div>
@@ -207,7 +212,23 @@ Browse inventory</a>
             <span class="cw-home-state t-warn"><span class="cw-home-dot"></span>Email not configured</span>
             <span class="cw-home-detail">SMTP is not configured; email routes cannot deliver.</span>
           </div>
-          <a class="cw-link cw-home-side" href="/settings/channels">Channels</a>
+          <a class="cw-link cw-home-side" href="/settings/channels">Set up SMTP</a>
+        </li>
+
+        <li class="cw-home-row cw-home-row--stack" data-testid="home-delivery-line">
+          <div class="cw-home-row-main">
+            <span class="cw-home-state "><span class="cw-home-dot hollow"></span>4 certificates have no owner and no alert group</span>
+            <span class="cw-home-detail">Their alerts use only globally configured delivery channels.</span>
+          </div>
+          <a class="cw-link cw-home-side" href="/browse?routing_gap=1&amp;grouped=0">View 4</a>
+        </li>
+
+        <li class="cw-home-row cw-home-row--stack" data-testid="home-delivery-line">
+          <div class="cw-home-row-main">
+            <span class="cw-home-state "><span class="cw-home-dot hollow"></span>Scan failures aren’t alerted</span>
+            <span class="cw-home-detail">1 endpoint is failing, overdue, or unscanned; certificate alerts do not cover scan failures.</span>
+          </div>
+          <a class="cw-link cw-home-side" href="/settings/events">Alert settings</a>
         </li>
 
       </ul>
@@ -219,7 +240,7 @@ Browse inventory</a>
       <h2>Expiring by week</h2>
       <span class="cw-hint">next 12 weeks · select a week to open it in Browse · <a class="cw-link" href="/browse?view=calendar">calendar</a></span>
     </div>
-    <div class="cw-home-horizon-body" tabindex="0" aria-label="Scrollable twelve-week expiry chart">
+    <div class="cw-home-horizon-body">
       <ul class="cw-home-strip" aria-label="Certificate expirations by week">
 
         <li>

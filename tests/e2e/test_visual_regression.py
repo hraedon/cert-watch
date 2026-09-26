@@ -247,3 +247,29 @@ def test_home_a_blocks_layout_and_every_filtered_link(
     )]
     assert all(box is not None for box in boxes)
     assert [box["y"] for box in boxes if box] == sorted(box["y"] for box in boxes if box)
+    assert page.evaluate("document.documentElement.scrollWidth === innerWidth")
+    page.evaluate("window.scrollTo(500, 0)")
+    assert page.evaluate("window.scrollX") == 0
+
+
+def _assert_home_mobile_never_scrolls(page: Page, base: str) -> None:
+    page.set_viewport_size({"width": 390, "height": 900})
+    page.goto(base)
+    expect(page.get_by_test_id("home-week-link")).to_have_count(12)
+    assert page.evaluate("document.documentElement.scrollWidth === innerWidth")
+    page.evaluate("window.scrollTo(500, 0)")
+    assert page.evaluate("window.scrollX") == 0
+    strip = page.locator(".cw-home-horizon-body")
+    assert strip.evaluate("el => el.scrollWidth === el.clientWidth")
+
+
+def test_empty_home_mobile_never_scrolls_the_document(
+    page: Page, visual_server: str
+) -> None:
+    _assert_home_mobile_never_scrolls(page, visual_server)
+
+
+def test_populated_home_mobile_never_scrolls_the_document(
+    page: Page, populated_server: str
+) -> None:
+    _assert_home_mobile_never_scrolls(page, populated_server)

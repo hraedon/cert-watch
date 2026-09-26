@@ -116,6 +116,7 @@ class BrowseView:
     filter_renewal: str
     filter_delivery: str
     filter_chain_problem: bool
+    filter_routing_gap: bool
     filter_issuer: str
     filter_expiry_week: str
     sort_by: str
@@ -145,6 +146,7 @@ class BrowseView:
             "renewal": self.filter_renewal or None,
             "delivery": self.filter_delivery or None,
             "chain_problem": "1" if self.filter_chain_problem else None,
+            "routing_gap": "1" if self.filter_routing_gap else None,
             "issuer": self.filter_issuer or None,
             "expiry_week": self.filter_expiry_week or None,
             "sort_by": self.sort_by,
@@ -179,6 +181,7 @@ class BrowseView:
             "filter_renewal": self.filter_renewal,
             "filter_delivery": self.filter_delivery,
             "filter_chain_problem": self.filter_chain_problem,
+            "filter_routing_gap": self.filter_routing_gap,
             "filter_issuer": self.filter_issuer,
             "filter_expiry_week": self.filter_expiry_week,
             "sort_by": self.sort_by,
@@ -385,6 +388,7 @@ def present_browse(data: BrowsePageData, *, now: datetime | None = None) -> Brow
         filter_renewal=data.filter_renewal,
         filter_delivery=data.filter_delivery,
         filter_chain_problem=data.filter_chain_problem,
+        filter_routing_gap=data.filter_routing_gap,
         filter_issuer=data.filter_issuer,
         filter_expiry_week=data.filter_expiry_week,
         sort_by=data.sort_by,

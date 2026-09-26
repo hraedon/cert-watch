@@ -29,6 +29,7 @@ from cert_watch.database.schema import init_schema
 from cert_watch.status_model import (
     AxisSettings,
     StatusModelContext,
+    alert_group_match_sql,
     attach_status_models,
     delivery_state_sql,
     prepare_status_model_context,
@@ -108,6 +109,7 @@ def inventory_candidates_sql(
     need_monitoring = "monitoring" in requested and axes is not None
     need_renewal = "renewal" in requested and axes is not None
     need_delivery = "delivery" in requested and axes is not None
+    need_routing = "routing" in requested
     delivery_settings = axes.settings if axes is not None else AxisSettings()
 
     status_cols = (
@@ -234,6 +236,18 @@ def inventory_candidates_sql(
         if need_delivery and sql_delivery
         else "'unrouted'"
     )
+    scanned_routing_gap_col = (
+        "CASE WHEN NULLIF(TRIM(COALESCE(h.owner_name, '')), '') IS NULL "
+        "AND NULLIF(TRIM(COALESCE(h.owner_email, '')), '') IS NULL AND NOT "
+        f"{alert_group_match_sql('c', 'h')} THEN 1 ELSE 0 END"
+        if need_routing
+        else "0"
+    )
+    uploaded_routing_gap_col = (
+        f"CASE WHEN NOT {alert_group_match_sql('c', None)} THEN 1 ELSE 0 END"
+        if need_routing
+        else "0"
+    )
 
     select_parts: list[str] = []
     params: list[Any] = []
@@ -255,6 +269,7 @@ def inventory_candidates_sql(
                        WHERE succ.replaces_cert_id = c.id AND succ.id != c.id)
                        AS has_successor,
                    {delivery_col} AS delivery,
+                   {scanned_routing_gap_col} AS routing_gap,
                    COALESCE(c.issuer, '') AS grp_issuer,
                    COALESCE(h.owner_name, '') AS grp_owner,
                    COALESCE(h.renewal_method, '') AS grp_method,
@@ -307,6 +322,7 @@ def inventory_candidates_sql(
                    {renewal_analytics_col} AS renewal_analytics,
                    0 AS has_successor,
                    {pending_delivery_col} AS delivery,
+                   0 AS routing_gap,
                    '' AS grp_issuer,
                    COALESCE(h.owner_name, '') AS grp_owner,
                    COALESCE(h.renewal_method, '') AS grp_method,
@@ -364,6 +380,7 @@ def inventory_candidates_sql(
                    'unknown' AS renewal_analytics,
                    0 AS has_successor,
                    {uploaded_delivery_col} AS delivery,
+                   {uploaded_routing_gap_col} AS routing_gap,
                    COALESCE(c.issuer, '') AS grp_issuer,
                    '' AS grp_owner,
                    '' AS grp_method,
@@ -568,6 +585,7 @@ def list_dashboard_page(
     monitoring: str | None = None,
     renewal: str | None = None,
     delivery: str | None = None,
+    routing_gap: bool = False,
     chain_problem: bool = False,
     issuer: str | None = None,
     expiry_week: str | None = None,
@@ -615,6 +633,7 @@ def list_dashboard_page(
             ("monitoring", monitoring),
             ("renewal", renewal),
             ("delivery", delivery),
+            ("routing", routing_gap),
         )
         if value
     )
@@ -643,6 +662,8 @@ def list_dashboard_page(
         if value:
             base_sql = f"SELECT * FROM ({base_sql}) WHERE {column} = ?"
             params = [*params, value]
+    if routing_gap:
+        base_sql = f"SELECT * FROM ({base_sql}) WHERE routing_gap = 1"
     if chain_problem:
         base_sql = (
             f"SELECT * FROM ({base_sql}) WHERE etype = 'leaf' "

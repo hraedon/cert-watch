@@ -28,6 +28,7 @@ class HomeRiskRow:
     condition_label: str
     tone: str
     owner_name: str
+    difference: str
 
 
 @dataclass(frozen=True)
@@ -37,9 +38,10 @@ class HomeMonitoringRow:
     state: str
     state_label: str
     tone: str
-    since_label: str
+    when_label: str
     last_success_label: str
     cause: str
+    cause_is_raw: bool
     owner_name: str
 
 
@@ -49,6 +51,7 @@ class HomeChainGroup:
     count: int
     browse_url: str
     guidance: str
+    examples: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -56,7 +59,9 @@ class DeliveryLine:
     label: str
     detail: str
     tone: str
-    settings_url: str | None
+    action_url: str | None
+    action_label: str
+    admin_only: bool
 
 
 @dataclass(frozen=True)
@@ -85,7 +90,7 @@ class HomeView:
     chain_problem_total: int
     chain_issuer_total: int
     delivery_lines: tuple[DeliveryLine, ...]
-    last_run_label: str
+    last_scan_activity_label: str
     next_run_label: str
     horizon: tuple[HorizonBucketView, ...]
     error: str | None
@@ -104,7 +109,7 @@ class HomeView:
             "chain_problem_total": self.chain_problem_total,
             "chain_issuer_total": self.chain_issuer_total,
             "delivery_lines": list(self.delivery_lines),
-            "last_run_label": self.last_run_label,
+            "last_scan_activity_label": self.last_scan_activity_label,
             "next_run_label": self.next_run_label,
             "horizon": list(self.horizon),
             "error": self.error,
@@ -133,6 +138,34 @@ def _endpoint_name(row: dict[str, Any]) -> str:
     if row.get("source") == "uploaded" or not row.get("host_id"):
         return subject_cn(str(row.get("subject") or "")) or host or "Uploaded certificate"
     return host.removesuffix(":443")
+
+
+_TRUST_PROBLEMS = {"incomplete", "invalid", "unknown", "self-signed", "unverified"}
+
+
+def _renewal_method_label(value: object) -> str:
+    method = str(value or "")
+    return {"acme": "ACME", "cert-manager": "cert-manager"}.get(
+        method.casefold(), method
+    )
+
+
+def _risk_difference(row: dict[str, Any]) -> str:
+    details: list[str] = []
+    if row.get("source") == "uploaded" or not row.get("host_id"):
+        details.append("Uploaded file — replace by upload")
+    else:
+        renewal = str(row.get("renewal") or "")
+        method = _renewal_method_label(row.get("renewal_method"))
+        if renewal == "manual":
+            details.append("Manual renewal")
+        elif renewal == "in_progress":
+            details.append("Renewal in progress (operator report)")
+        elif renewal == "stalled" and method:
+            details.append(f"{method} configured — no new certificate yet")
+    if str(row.get("chain_status") or "") in _TRUST_PROBLEMS:
+        details.append("chain also unverified")
+    return " · ".join(details)
 
 
 def _condition_label(days: int | None) -> str:
@@ -171,6 +204,7 @@ def _risk_rows(raw_rows: dict[str, list[dict[str, Any]]]) -> tuple[HomeRiskRow, 
                 else Tone.WARNING
             ),
             owner_name=str(row.get("owner_name") or ""),
+            difference=_risk_difference(row),
         )
         for row in rows
     )
@@ -184,22 +218,46 @@ def _monitoring_rows(
         for row in raw_rows.get(f"monitoring:{state}", []):
             raw_error = row.get("monitoring_error") or row.get("scan_error")
             guidance = describe_scan_error(str(raw_error)) if raw_error else None
-            cause = guidance.cause if guidance is not None else (
-                "No scan attempt has been recorded; check the endpoint and scan settings."
-                if state == "never_scanned"
-                else "The endpoint has no current successful observation."
-            )
             since = row.get("monitoring_since") or row.get("added_at")
+            overdue = (
+                state == "failing"
+                and row.get("monitoring_attempt_status") == "success"
+                and bool(row.get("monitoring_last_success"))
+            )
+            if overdue:
+                cause = f"Scan overdue since {_format_datetime(since)}."
+            elif guidance is not None:
+                cause = guidance.cause
+            elif raw_error:
+                compact = " ".join(str(raw_error).split())
+                cause = compact if len(compact) <= 160 else compact[:159].rstrip() + "…"
+            elif state == "never_scanned":
+                cause = (
+                    "No scan attempt has been recorded; check the endpoint and scan settings."
+                )
+            else:
+                cause = "The latest scan attempt failed."
+            when_label = ""
+            if not overdue:
+                prefix = "added" if state == "never_scanned" else "since"
+                when_label = f"{prefix} {_format_datetime(since)}"
             result.append(
                 HomeMonitoringRow(
                     detail_url=f"/certificates/{row['id']}",
                     name=_endpoint_name(row),
                     state=state,
-                    state_label="Failing" if state == "failing" else "Never scanned",
+                    state_label=(
+                        "Overdue"
+                        if overdue
+                        else "Failing"
+                        if state == "failing"
+                        else "Never scanned"
+                    ),
                     tone=Tone.WARNING,
-                    since_label=_format_datetime(since),
+                    when_label=when_label,
                     last_success_label=_format_datetime(row.get("monitoring_last_success")),
                     cause=cause,
+                    cause_is_raw=bool(raw_error) and guidance is None and not overdue,
                     owner_name=str(row.get("owner_name") or ""),
                 )
             )
@@ -217,6 +275,15 @@ def _chain_groups(raw: list[dict[str, Any]]) -> tuple[HomeChainGroup, ...]:
             guidance = "Replace the invalid chain, then scan again."
         else:
             guidance = "Serve the intermediate with the leaf, or add a private CA in Trust anchors."
+        examples: list[str] = []
+        for index in (1, 2):
+            hostname = str(group.get(f"example_{index}_hostname") or "")
+            port = group.get(f"example_{index}_port")
+            subject = str(group.get(f"example_{index}_subject") or "")
+            if hostname:
+                examples.append(hostname if port in (None, 443) else f"{hostname}:{port}")
+            elif subject:
+                examples.append(f"{subject_cn(subject) or 'Uploaded certificate'} (uploaded)")
         result.append(
             HomeChainGroup(
                 issuer=issuer_cn(raw_issuer) or "Unknown issuer",
@@ -225,9 +292,10 @@ def _chain_groups(raw: list[dict[str, Any]]) -> tuple[HomeChainGroup, ...]:
                     {"chain_problem": "1", "issuer": raw_issuer, "grouped": 0}
                 ),
                 guidance=guidance,
+                examples=tuple(examples),
             )
         )
-    return tuple(result)
+    return tuple(sorted(result, key=lambda group: (-group.count, group.issuer.casefold())))
 
 
 def _delivery_lines(
@@ -236,7 +304,11 @@ def _delivery_lines(
     failing: int,
     smtp_configured: bool,
     webhook_configured: bool,
+    webhook_kind: str,
     webhook_outcome: object,
+    webhook_failed_at: object,
+    routing_gap_total: int,
+    monitoring_gap_total: int,
 ) -> tuple[DeliveryLine, ...]:
     if tracked_total == 0:
         return (
@@ -244,26 +316,38 @@ def _delivery_lines(
                 label="No alerts to route yet",
                 detail="Add a monitored endpoint or uploaded certificate to begin.",
                 tone=Tone.NEUTRAL,
-                settings_url=None,
+                action_url=None,
+                action_label="",
+                admin_only=False,
             ),
         )
     lines: list[DeliveryLine] = []
+    if webhook_configured and webhook_outcome in {"failed", "partial", "unknown"}:
+        kind = str(webhook_kind or "generic").replace("_", " ").title()
+        failed_at = _format_datetime(webhook_failed_at)
+        lines.append(
+            DeliveryLine(
+                label=f"{kind} webhook failing",
+                detail=(
+                    f"Last failed {failed_at}."
+                    if failed_at != "Not yet"
+                    else "The latest delivery was not accepted."
+                ),
+                tone=Tone.CRITICAL,
+                action_url="/settings/channels",
+                action_label="Channels",
+                admin_only=True,
+            )
+        )
     if not smtp_configured:
         lines.append(
             DeliveryLine(
                 label="Email not configured",
                 detail="SMTP is not configured; email routes cannot deliver.",
                 tone=Tone.WARNING,
-                settings_url="/settings/channels",
-            )
-        )
-    if webhook_configured and webhook_outcome in {"failed", "partial", "unknown"}:
-        lines.append(
-            DeliveryLine(
-                label="Webhook last delivery failed",
-                detail="The most recent webhook delivery was not fully accepted.",
-                tone=Tone.CRITICAL,
-                settings_url="/settings/channels",
+                action_url="/settings/channels",
+                action_label="Set up SMTP",
+                admin_only=True,
             )
         )
     if failing and not lines:
@@ -272,7 +356,9 @@ def _delivery_lines(
                 label="Some routes cannot deliver",
                 detail="Open the filtered certificate list to review the affected routes.",
                 tone=Tone.CRITICAL,
-                settings_url=None,
+                action_url=None,
+                action_label="",
+                admin_only=False,
             )
         )
     if not lines:
@@ -281,7 +367,37 @@ def _delivery_lines(
                 label="All configured channels are delivering",
                 detail="No delivery failure is recorded for the visible estate.",
                 tone=Tone.NEUTRAL,
-                settings_url=None,
+                action_url=None,
+                action_label="",
+                admin_only=False,
+            )
+        )
+    if routing_gap_total:
+        noun = "certificate" if routing_gap_total == 1 else "certificates"
+        verb = "has" if routing_gap_total == 1 else "have"
+        lines.append(
+            DeliveryLine(
+                label=f"{routing_gap_total} {noun} {verb} no owner and no alert group",
+                detail="Their alerts use only globally configured delivery channels.",
+                tone=Tone.NEUTRAL,
+                action_url="/browse?routing_gap=1&grouped=0",
+                action_label=f"View {routing_gap_total}",
+                admin_only=False,
+            )
+        )
+    if monitoring_gap_total:
+        noun = "endpoint is" if monitoring_gap_total == 1 else "endpoints are"
+        lines.append(
+            DeliveryLine(
+                label="Scan failures aren\u2019t alerted",
+                detail=(
+                    f"{monitoring_gap_total} {noun} failing, overdue, or unscanned; "
+                    "certificate alerts do not cover scan failures."
+                ),
+                tone=Tone.NEUTRAL,
+                action_url="/settings/events",
+                action_label="Alert settings",
+                admin_only=True,
             )
         )
     return tuple(lines)
@@ -331,6 +447,7 @@ def present_home(
     home_data: dict[str, Any],
     smtp_configured: bool,
     webhook_configured: bool,
+    webhook_kind: str,
     sched_hour: int,
     sched_min: int,
     now: datetime | None = None,
@@ -368,9 +485,19 @@ def present_home(
             failing=int(delivery["failing"]),
             smtp_configured=smtp_configured,
             webhook_configured=webhook_configured,
+            webhook_kind=webhook_kind,
             webhook_outcome=home_data.get("webhook_outcome"),
+            webhook_failed_at=home_data.get("webhook_failed_at"),
+            routing_gap_total=int(home_data.get("routing_gap_total") or 0),
+            monitoring_gap_total=(
+                int(monitoring["failing"]) + int(monitoring["never_scanned"])
+            ),
         ),
-        last_run_label=_format_datetime(home_data.get("last_scan")),
+        last_scan_activity_label=(
+            f"Last scan activity {_format_datetime(home_data.get('last_scan'))}"
+            if home_data.get("last_scan")
+            else "No scans yet"
+        ),
         next_run_label=next_run.strftime("%Y-%m-%d %H:%M UTC"),
         horizon=_horizon(list(home_data.get("calendar") or []), current),
         error=error,

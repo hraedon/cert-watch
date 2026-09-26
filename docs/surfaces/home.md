@@ -14,9 +14,11 @@ routing. A clickable twelve-week expiry strip follows them.
 
 Every count and week opens the exact flat Browse population it counts. Expiry
 rows are ranked by days; chain-trust problems are collapsed to one row per
-issuer instead of competing with expiry. Monitoring rows explain failures in
-plain language and state when the problem began. Delivery shows only problem
-channels, or one neutral all-delivering line. Empty state explains how to begin.
+issuer instead of competing with expiry. Monitoring rows distinguish failed,
+overdue, and never-scanned endpoints, explain failures in plain language, and
+state when the problem began. Delivery shows problem channels and scoped
+owner/group routing gaps, or one neutral all-delivering line. Empty state
+explains how to begin.
 
 ## Ownership and boundaries
 

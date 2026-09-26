@@ -106,10 +106,21 @@ def dashboard_axis_stats(
             )
         stats_json_args.extend(
             [
+                "'routing_gap_total'",
+                "SUM(routing_gap)",
                 "'last_scan'",
                 "MAX(monitoring_last_attempt)",
                 "'webhook_outcome'",
                 "(SELECT json_extract(e.details, '$.outcome') "
+                " FROM alert_delivery_events e JOIN alerts a ON a.id = e.alert_id "
+                " JOIN inventory visible ON visible.etype = 'leaf' "
+                "   AND visible.ekey = a.cert_id "
+                " WHERE e.event_kind = 'completed' "
+                "   AND cw_normalize_channel(e.channel) = "
+                f"'webhook:{axes.settings.webhook_kind.replace(chr(39), chr(39) * 2)}' "
+                " ORDER BY e.id DESC LIMIT 1)",
+                "'webhook_failed_at'",
+                "(SELECT e.occurred_at "
                 " FROM alert_delivery_events e JOIN alerts a ON a.id = e.alert_id "
                 " JOIN inventory visible ON visible.etype = 'leaf' "
                 "   AND visible.ekey = a.cert_id "
@@ -144,12 +155,32 @@ def dashboard_axis_stats(
                 FROM inventory
                 WHERE monitoring IN ('failing', 'never_scanned')
             ),
-            chain_grouped AS (
-                SELECT grp_issuer AS issuer, COUNT(*) AS cert_count,
-                       GROUP_CONCAT(DISTINCT chain_status) AS statuses
+            chain_ranked AS (
+                SELECT grp_issuer AS issuer, chain_status, hostname, port, subject,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY grp_issuer ORDER BY sort_name, ekey
+                       ) AS member_number,
+                       COUNT(*) OVER (PARTITION BY grp_issuer) AS cert_count
                 FROM inventory
                 WHERE etype = 'leaf' AND chain_status IN ({trust_states})
-                GROUP BY grp_issuer
+            ),
+            chain_grouped AS (
+                SELECT issuer, MAX(cert_count) AS cert_count,
+                       GROUP_CONCAT(DISTINCT chain_status) AS statuses,
+                       MAX(CASE WHEN member_number = 1 THEN hostname END)
+                           AS example_1_hostname,
+                       MAX(CASE WHEN member_number = 1 THEN port END)
+                           AS example_1_port,
+                       MAX(CASE WHEN member_number = 1 THEN subject END)
+                           AS example_1_subject,
+                       MAX(CASE WHEN member_number = 2 THEN hostname END)
+                           AS example_2_hostname,
+                       MAX(CASE WHEN member_number = 2 THEN port END)
+                           AS example_2_port,
+                       MAX(CASE WHEN member_number = 2 THEN subject END)
+                           AS example_2_subject
+                FROM chain_ranked
+                GROUP BY issuer
             ),
             chain_counted AS (
                 SELECT *, SUM(cert_count) OVER () AS total_certs,
@@ -185,7 +216,13 @@ def dashboard_axis_stats(
                        'count', cert_count,
                        'statuses', statuses,
                        'total_certs', total_certs,
-                       'total_issuers', total_issuers
+                       'total_issuers', total_issuers,
+                       'example_1_hostname', example_1_hostname,
+                       'example_1_port', example_1_port,
+                       'example_1_subject', example_1_subject,
+                       'example_2_hostname', example_2_hostname,
+                       'example_2_port', example_2_port,
+                       'example_2_subject', example_2_subject
                    ), '', '', '', NULL, NULL
             FROM chain_counted
             ORDER BY cert_count DESC, issuer ASC
@@ -251,7 +288,9 @@ def dashboard_axis_stats(
                 axes=axes,
                 entry_keys=unique_keys,
                 history_endpoints=endpoints,
-                axis_columns=frozenset({"condition", "monitoring", "chain"}),
+                axis_columns=frozenset(
+                    {"condition", "monitoring", "chain", "renewal"}
+                ),
             )
             assert bounded is not None
             bounded_sql, bounded_params = bounded
@@ -281,6 +320,8 @@ def dashboard_axis_stats(
             "tracked_total": int(home_stats.get("tracked") or 0),
             "last_scan": home_stats.get("last_scan"),
             "webhook_outcome": home_stats.get("webhook_outcome"),
+            "webhook_failed_at": home_stats.get("webhook_failed_at"),
+            "routing_gap_total": int(home_stats.get("routing_gap_total") or 0),
             "rows": categorized,
             "chain_groups": chain_groups,
             "calendar": sorted(calendar, key=lambda item: str(item["bucket_start"])),

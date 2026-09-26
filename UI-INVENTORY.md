@@ -124,8 +124,9 @@ expired alerts. Completion is observed only when a scan sees a successor
 certificate; operators cannot report a completed renewal manually.
 
 Home's **Monitoring gaps** block counts the visible registered endpoints,
-excluding uploads, and shows bounded failing/never-scanned rows plus the last
-and next scheduler run. Browse shows per-endpoint scan evidence, including grouped deployments.
+excluding uploads, and shows bounded failed, overdue, and never-scanned rows
+plus the latest scoped scan activity and next scheduler run. Browse shows
+per-endpoint scan evidence, including grouped deployments.
 The detail **Scan evidence** panel distinguishes last success, latest attempt,
 observation due time and retry eligibility. It replaces the ambiguous old
 “Last scanned” field. These are read-only views.
