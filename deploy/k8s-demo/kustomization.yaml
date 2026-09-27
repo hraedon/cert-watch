@@ -12,5 +12,5 @@ resources:
 images:
 - name: ghcr.io/hraedon/cert-watch
   newName: ghcr.io/hraedon/cert-watch
-  newTag: 1e23f37
-  digest: sha256:a710a717265fa8c8966d042e41eb21ed680cc793cc7c50d2d978ae65649f999c
+  newTag: fc44dd4
+  digest: sha256:7aa118a6b45a8fed9cadb695518af32790a890dddb103b5e2abff28df5a2d6fa
