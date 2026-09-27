@@ -21,7 +21,6 @@ from cert_watch.database.connection import _connect, begin_immediate, get_write_
 from cert_watch.database.metadata_ops import (
     update_certificate_tags as persist_certificate_tags,
 )
-from cert_watch.email_validation import is_safe_email_address
 from cert_watch.scan_freshness import scan_interval_out_of_range
 from cert_watch.services.certificate_identity import (
     ensure_not_superseded,
@@ -29,11 +28,10 @@ from cert_watch.services.certificate_identity import (
 )
 from cert_watch.services.host_management import HostNotFoundError, HostValidationError
 from cert_watch.services.host_ownership import (
-    VALID_RENEWAL_METHODS,
-    VALID_RENEWAL_STATUSES,
+    HostOwnershipUpdate,
     HostOwnershipValidationError,
     resolve_host_ownership_target,
-    runbook_url_error,
+    validate_host_ownership,
 )
 from cert_watch.services.resource_metadata import (
     MAX_NOTES_LENGTH,
@@ -78,7 +76,22 @@ def _optional_positive_int(value: Any, *, field: str) -> int | None:
     return parsed
 
 
-def _validate(update: HostEditUpdate, current: HostEntry) -> tuple[int | None, int | None, str]:
+def _validate(
+    update: HostEditUpdate, current: HostEntry
+) -> tuple[HostOwnershipUpdate, int | None, int | None, str]:
+    for field in ("notes", "tags"):
+        if not isinstance(getattr(update, field), str):
+            raise ResourceMetadataValidationError(f"{field} must be a string")
+    ownership = validate_host_ownership(
+        HostOwnershipUpdate(
+            owner_name=update.owner_name,
+            owner_email=update.owner_email,
+            owner_slack=update.owner_slack,
+            renewal_method=update.renewal_method,
+            runbook_url=update.runbook_url,
+            renewal_status=update.renewal_status,
+        )
+    )
     for field in (
         "owner_name",
         "owner_email",
@@ -86,20 +99,9 @@ def _validate(update: HostEditUpdate, current: HostEntry) -> tuple[int | None, i
         "renewal_method",
         "runbook_url",
         "renewal_status",
-        "notes",
-        "tags",
     ):
-        if not isinstance(getattr(update, field), str):
-            raise ResourceMetadataValidationError(f"{field} must be a string")
-    if update.owner_email and not is_safe_email_address(update.owner_email):
-        raise HostOwnershipValidationError("owner_email", f"invalid email: {update.owner_email}")
-    if update.renewal_method not in VALID_RENEWAL_METHODS:
-        raise HostOwnershipValidationError("renewal_method", "invalid renewal method")
-    if update.renewal_status not in VALID_RENEWAL_STATUSES:
-        raise HostValidationError("Choose a valid operator-reported renewal status.")
-    url_error = runbook_url_error(update.runbook_url)
-    if url_error:
-        raise HostOwnershipValidationError("runbook_url", url_error)
+        if getattr(ownership, field) is None:
+            raise HostOwnershipValidationError(field, f"{field} must be a string")
     if len(update.notes) > MAX_NOTES_LENGTH:
         raise ResourceMetadataValidationError("notes too long (max 10000)")
 
@@ -113,7 +115,7 @@ def _validate(update: HostEditUpdate, current: HostEntry) -> tuple[int | None, i
         raise HostValidationError(
             "Alert threshold must be a positive whole number within the stored range."
         )
-    return interval, threshold, normalize_tags(update.tags)
+    return ownership, interval, threshold, normalize_tags(update.tags)
 
 
 def edit_host(
@@ -152,7 +154,7 @@ def edit_host(
         if current is None:
             raise HostNotFoundError("host not found")
         resolved = update() if callable(update) else update
-        interval, threshold, normalized_tags = _validate(resolved, current)
+        ownership, interval, threshold, normalized_tags = _validate(resolved, current)
         ensure_new_tags_in_scope(auth, normalized_tags)
         final_effective_tags = parse_tags(normalized_tags)
         if named_cert:
@@ -182,14 +184,14 @@ def edit_host(
                 + (", tags = ?" if not named_cert else "")
                 + " WHERE id = ?",
                 (
-                    resolved.owner_name.strip(),
-                    resolved.owner_email.strip(),
-                    resolved.owner_slack.strip(),
-                    resolved.renewal_method,
-                    resolved.runbook_url.strip(),
+                    ownership.owner_name,
+                    ownership.owner_email,
+                    ownership.owner_slack,
+                    ownership.renewal_method,
+                    ownership.runbook_url,
                     interval,
                     threshold,
-                    resolved.renewal_status,
+                    ownership.renewal_status,
                     resolved.notes,
                     *((normalized_tags,) if not named_cert else ()),
                     target.host_id,
@@ -209,14 +211,14 @@ def edit_host(
                 target_type="host",
                 target_id=target.host_id,
                 detail={
-                    "owner_name": resolved.owner_name.strip(),
-                    "owner_email": resolved.owner_email.strip(),
-                    "owner_slack": resolved.owner_slack.strip(),
-                    "renewal_method": resolved.renewal_method,
-                    "runbook_url": resolved.runbook_url.strip(),
+                    "owner_name": ownership.owner_name,
+                    "owner_email": ownership.owner_email,
+                    "owner_slack": ownership.owner_slack,
+                    "renewal_method": ownership.renewal_method,
+                    "runbook_url": ownership.runbook_url,
                     "scan_interval_hours": interval,
                     "threshold_days": threshold,
-                    "renewal_status": resolved.renewal_status,
+                    "renewal_status": ownership.renewal_status,
                     "notes_length": len(resolved.notes),
                     "tags": normalized_tags,
                     "tags_apply_to": "certificate" if named_cert else "host",

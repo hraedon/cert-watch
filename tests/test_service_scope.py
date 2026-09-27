@@ -33,6 +33,9 @@ from cert_watch.services.resource_metadata import (
 SCOPED_OPERATOR = AuthContext.from_tier(
     "otto", tier="viewer", scope_tag="A", tag_tiers={"A": "operator"}
 )
+TEAM_B_OPERATOR = AuthContext.from_tier(
+    "bianca", tier="viewer", scope_tag="B", tag_tiers={"B": "operator"}
+)
 SCOPED_VIEWER = AuthContext.from_tier("vera", tier="viewer", scope_tag="A")
 MIXED_TIER = AuthContext.from_tier(
     "morgan",
@@ -188,30 +191,37 @@ def test_explicit_system_principal_is_unrestricted(estate):
     assert SqliteHostRepository(estate["db"]).get(estate["out"]).notes == "x"
 
 
-def test_ownership_through_a_certificate_is_scoped_by_its_effective_tags(estate):
-    """A cert tagged A on an untagged-for-A host carries A in its effective
-    tags, so ownership edited *through that certificate* is in scope."""
+def test_ownership_through_a_certificate_is_scoped_by_the_host_tags(estate):
+    """Certificate tags grant no authority over host-owned alert routing."""
     db = estate["db"]
     SqliteCertificateRepository(db).set_tags(estate["cert_b"], "A")
     target = resolve_host_ownership_target(db, estate["cert_b"], auth=SCOPED_OPERATOR)
-    update_host_ownership(
-        db,
-        target,
-        HostOwnershipUpdate(owner_name="Ops"),
-        auth=SCOPED_OPERATOR,
-        actor="t",
-        source_ip=None,
-    )
-    # ...but the same host by its own id is not.
     with pytest.raises(ScopeDeniedError):
         update_host_ownership(
             db,
-            estate["out"],
-            HostOwnershipUpdate(owner_name="Ops"),
+            target,
+            HostOwnershipUpdate(owner_email="redirect@example.test"),
             auth=SCOPED_OPERATOR,
             actor="t",
             source_ip=None,
         )
+    assert SqliteHostRepository(db).get(estate["out"]).owner_email == ""
+
+
+@pytest.mark.parametrize("addressed_by", ["host", "certificate"])
+def test_host_tag_writer_can_update_ownership_by_either_id(estate, addressed_by):
+    db = estate["db"]
+    SqliteCertificateRepository(db).set_tags(estate["cert_b"], "A")
+    resource_id = estate["out"] if addressed_by == "host" else estate["cert_b"]
+    update_host_ownership(
+        db,
+        resource_id,
+        HostOwnershipUpdate(owner_email="team-b@example.test"),
+        auth=TEAM_B_OPERATOR,
+        actor="bianca",
+        source_ip=None,
+    )
+    assert SqliteHostRepository(db).get(estate["out"]).owner_email == "team-b@example.test"
 
 
 @pytest.mark.parametrize("kind", ["notes", "host_tags", "cert_tags", "ownership"])

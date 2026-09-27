@@ -222,7 +222,9 @@ Edit host</summary>
                                                name="owner_name"
                                                class="cw-input"
                                                maxlength="200"
+
                                                value="Messaging Team">
+
                                     </div>
                                     <div class="cw-field">
                                         <label class="cw-label" for="host-owner-email">Owner email</label>
@@ -241,11 +243,16 @@ Edit host</summary>
                                                name="owner_slack"
                                                class="cw-input"
                                                maxlength="100"
+
                                                value="">
+
                                     </div>
                                     <div class="cw-field">
                                         <label class="cw-label" for="host-renewal-method">Renewal method</label>
-                                        <select id="host-renewal-method" name="renewal_method" class="cw-select">
+                                        <select id="host-renewal-method"
+                                                name="renewal_method"
+                                                class="cw-select"
+                                                >
 
                                             <option value="" >Unknown</option>
                                             <option value="acme" >ACME</option>
@@ -254,6 +261,7 @@ Edit host</summary>
                                             <option value="manual"
                                                     selected>Manual</option>
                                         </select>
+
                                     </div>
                                     <div class="cw-field wide">
                                         <label class="cw-label" for="host-runbook-url">Runbook URL</label>
@@ -295,13 +303,18 @@ Edit host</summary>
                                     </div>
                                     <div class="cw-field wide">
                                         <label class="cw-label" for="endpoint-renewal-status">Renewal status reported by operator</label>
-                                        <select id="endpoint-renewal-status" name="renewal_status" class="cw-select">
+                                        <select id="endpoint-renewal-status"
+                                                name="renewal_status"
+                                                class="cw-select"
+                                                aria-describedby="endpoint-renewal-help"
+                                                >
 
                                             <option value="pending"
                                                     >No completion reported</option>
                                             <option value="in_progress"
                                                     selected>In progress — operator reported</option>
                                         </select>
+
                                         <p class="cw-hint" id="endpoint-renewal-help">Operator-reported progress is not proof of renewal; it never suppresses expiry or expired alerts. A later scan confirms the replacement certificate.</p>
                                     </div>
                                     <div class="cw-field wide">

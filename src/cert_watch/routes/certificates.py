@@ -57,7 +57,6 @@ from cert_watch.services.host_ownership import (
     HostOwnershipTargetError,
     HostOwnershipUpdate,
     HostOwnershipValidationError,
-    resolve_host_ownership_target,
     update_host_ownership,
 )
 from cert_watch.services.resource_metadata import (
@@ -303,27 +302,9 @@ async def update_certificate_owner(
     db = _db_path(request)
 
     try:
-        target = resolve_host_ownership_target(db, cert_id, auth=acting_auth(request))
-    except CertificateSupersededError as exc:
-        return superseded_redirect(exc)
-    except CertificateNotFoundError:
-        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
-    except ScopeDeniedError as exc:
-        return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
-    except HostOwnershipTargetError as exc:
-        if exc.reason == "resource_not_found":
-            return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
-        message = "no host associated" if exc.reason == "no_host_associated" else "host not found"
-        return RedirectResponse(
-            url=f"/certificates/{cert_id}?error={quote(message)}",
-            status_code=303,
-        )
-
-    host_id = target.host_id
-    try:
-        update_host_ownership(
+        updated = update_host_ownership(
             db,
-            target,
+            cert_id,
             HostOwnershipUpdate(
                 owner_name=owner_name,
                 owner_email=owner_email,
@@ -352,11 +333,15 @@ async def update_certificate_owner(
         return superseded_redirect(exc)
     except CertificateNotFoundError:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
-    except HostOwnershipTargetError:
-        # Renewed away between resolving the target and the write, to a
-        # certificate the caller can't see: the unknown-id answer.
-        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
-    logger.info("updated owner for host %s via certificate %s", host_id, cert_id)
+    except HostOwnershipTargetError as exc:
+        if exc.reason == "resource_not_found":
+            return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
+        message = "no host associated" if exc.reason == "no_host_associated" else "host not found"
+        return RedirectResponse(
+            url=f"/certificates/{cert_id}?error={quote(message)}",
+            status_code=303,
+        )
+    logger.info("updated owner for host %s via certificate %s", updated.host_id, cert_id)
     return RedirectResponse(url=f"/certificates/{cert_id}", status_code=303)
 
 

@@ -50,6 +50,15 @@ All notable changes to cert-watch are documented in this file.
   separate violet; a failing scan renders as a warning (monitoring), not
   critical; monospace is limited to hostnames, serials and fingerprints.
 
+### Security
+
+- Every route that writes host ownership, alert-recipient, or renewal fields
+  now authorizes against the host's own tags, including routes addressed by a
+  certificate ID. This prevents a certificate-only scoped operator from
+  redirecting another team's alerts. Complete host edits also use the shared
+  server-side ownership normalizer and size limits used by legacy editing,
+  Add, JSON, and CSV import.
+
 ### Fixed
 
 - Browse no longer presents last-known certificate evidence as healthy when

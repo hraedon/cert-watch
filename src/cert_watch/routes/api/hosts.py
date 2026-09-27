@@ -36,7 +36,10 @@ from cert_watch.routes.api._shared import (
     tags_from_json_body,
 )
 from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit, rate_limit
-from cert_watch.services.certificate_identity import CertificateSupersededError
+from cert_watch.services.certificate_identity import (
+    CertificateNotFoundError,
+    CertificateSupersededError,
+)
 from cert_watch.services.host_edit import HostEditUpdate, edit_host
 from cert_watch.services.host_management import (
     HostNotFoundError as ManagedHostNotFoundError,
@@ -409,13 +412,15 @@ async def api_update_host_owner(
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
         )
+    except CertificateSupersededError as exc:
+        return superseded_json(exc)
     except ScopeDeniedError as exc:
         return JSONResponse(status_code=403, content={"error": str(exc)})
     except JsonBodyError as exc:
         return JSONResponse(content={"error": str(exc)}, status_code=400)
     except HostOwnershipValidationError as exc:
         return JSONResponse(content={"error": str(exc)}, status_code=400)
-    except HostNotFoundError:
+    except (CertificateNotFoundError, HostOwnershipTargetError, HostNotFoundError):
         return JSONResponse(content={"error": "host not found"}, status_code=404)
     return JSONResponse(
         content={

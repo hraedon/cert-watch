@@ -203,6 +203,7 @@ def test_ownership_limits_match_editor_html_json_and_csv(
     tmp_path,
     reload_app,
     monkeypatch,
+    self_signed_leaf,
     field,
     value,
 ):
@@ -212,11 +213,58 @@ def test_ownership_limits_match_editor_html_json_and_csv(
     db = tmp_path / "cert-watch.sqlite3"
     repo = SqliteHostRepository(db)
     existing_id = repo.add("existing.example.test")
+    from tests._helpers import seed_scanned
+
+    cert_id = seed_scanned(
+        db,
+        "existing.example.test",
+        443,
+        parse_certificate(self_signed_leaf.der),
+    )
+    complete_edit = {
+        "owner_name": "",
+        "owner_email": "",
+        "owner_slack": "",
+        "renewal_method": "",
+        "runbook_url": "",
+        "scan_interval_hours": "",
+        "threshold_days": "",
+        "renewal_status": "pending",
+        "notes": "",
+        "tags": "",
+        field: value,
+    }
     with TestClient(app_mod.app) as client:
         editor = client.post(
             f"/hosts/{existing_id}/owner",
             data={field: value},
             follow_redirects=False,
+        )
+        certificate_editor = client.post(
+            f"/certificates/{cert_id}/owner",
+            data={field: value},
+            follow_redirects=False,
+        )
+        api_editor = client.patch(
+            f"/api/hosts/{existing_id}/owner",
+            json={field: value},
+        )
+        api_certificate_editor = client.patch(
+            f"/api/hosts/{cert_id}/owner",
+            json={field: value},
+        )
+        combined_html = client.post(
+            f"/hosts/{existing_id}/edit",
+            data=complete_edit,
+            follow_redirects=False,
+        )
+        combined_json = client.put(
+            f"/api/hosts/{existing_id}",
+            json={
+                **complete_edit,
+                "scan_interval_hours": None,
+                "threshold_days": None,
+            },
         )
         html = client.post(
             "/hosts",
@@ -233,6 +281,11 @@ def test_ownership_limits_match_editor_html_json_and_csv(
             files={"file": ("hosts.csv", csv_body, "text/csv")},
         )
     assert "error=" in editor.headers["location"]
+    assert "error=" in certificate_editor.headers["location"]
+    assert api_editor.status_code == 400
+    assert api_certificate_editor.status_code == 400
+    assert combined_html.status_code == 422
+    assert combined_json.status_code == 400
     assert "error=" in html.headers["location"]
     assert api.status_code == 400
     assert csv_response.status_code == 400
@@ -250,6 +303,7 @@ def test_ownership_whitespace_normalizes_on_every_write_path(
     db = tmp_path / "cert-watch.sqlite3"
     repo = SqliteHostRepository(db)
     existing_id = repo.add("edited.example.test")
+    combined_id = repo.add("combined.example.test")
     padded = {
         "owner_name": "  Platform  ",
         "owner_email": "  ops@example.test  ",
@@ -265,6 +319,33 @@ def test_ownership_whitespace_normalizes_on_every_write_path(
                 follow_redirects=False,
             ).status_code
             == 303
+        )
+        complete_edit = {
+            **padded,
+            "scan_interval_hours": "",
+            "threshold_days": "",
+            "renewal_status": "pending",
+            "notes": "",
+            "tags": "",
+        }
+        assert (
+            client.post(
+                f"/hosts/{combined_id}/edit",
+                data=complete_edit,
+                follow_redirects=False,
+            ).status_code
+            == 303
+        )
+        assert (
+            client.put(
+                f"/api/hosts/{combined_id}",
+                json={
+                    **complete_edit,
+                    "scan_interval_hours": None,
+                    "threshold_days": None,
+                },
+            ).status_code
+            == 200
         )
         assert (
             client.post(
