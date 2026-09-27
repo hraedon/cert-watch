@@ -26,6 +26,7 @@ import cert_watch.routes.hosts as html_host_routes
 import cert_watch.scan as scan
 from cert_watch.app import create_app
 from cert_watch.auth.guards import MutationGuard
+from cert_watch.database import SqliteHostRepository
 from cert_watch.database.alert_store import AlertStore
 from cert_watch.database.cert_ops import delete_certificate_cascade
 from cert_watch.services import (
@@ -422,7 +423,7 @@ def _endpoint_calls_service(endpoint: Any, service: Any) -> bool:
     for call in ast.walk(tree):
         if not isinstance(call, ast.Call) or _is_conditionally_reached(
             tree, call, reject_nested_functions=True
-        ):
+        ) or _follows_unconditional_exit(tree, call):
             continue
         target: Any = None
         if isinstance(call.func, ast.Name):
@@ -440,6 +441,44 @@ def _endpoint_calls_service(endpoint: Any, service: Any) -> bool:
         if target is service:
             return True
     return False
+
+
+def _follows_unconditional_exit(tree: ast.Module, node: ast.AST) -> bool:
+    """Return whether *node* follows a ``return`` or ``raise`` in its block.
+
+    ``ast.walk`` includes statements that Python can never execute.  Such a
+    statement must not satisfy the endpoint-to-service inventory merely by
+    naming the expected service after an unconditional exit.
+    """
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    child = node
+    while child in parents:
+        parent = parents[child]
+        for _field, value in ast.iter_fields(parent):
+            if not isinstance(value, list) or child not in value:
+                continue
+            position = value.index(child)
+            if any(isinstance(item, (ast.Return, ast.Raise)) for item in value[:position]):
+                return True
+        child = parent
+    return False
+
+
+def _synthetic_delete_bypass(db_path: str, host_id: str) -> None:
+    """Negative fixture: the required service exists only in dead code."""
+    SqliteHostRepository(db_path).delete(host_id)
+    return
+    host_management.delete_host(  # pragma: no cover - deliberately unreachable
+        db_path,
+        host_id,
+        auth=None,
+        actor="synthetic",
+        source_ip=None,
+    )
 
 
 def _mutation_guards(route: Any) -> list[MutationGuard]:
@@ -499,6 +538,13 @@ def test_each_scoped_route_calls_its_mapped_service() -> None:
             key,
             service.__qualname__,
         )
+
+
+def test_unreachable_service_call_cannot_satisfy_route_inventory() -> None:
+    assert not _endpoint_calls_service(
+        _synthetic_delete_bypass,
+        host_management.delete_host,
+    )
 
 
 def test_route_scope_classes_have_the_expected_guard_tier() -> None:

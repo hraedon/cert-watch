@@ -142,129 +142,314 @@ def _team_a_client(db: Path, tmp_path: Path):
     return _scoped_client(app, groups)
 
 
+def _admin_client(db: Path, tmp_path: Path):
+    from fastapi.testclient import TestClient
+
+    from cert_watch.app import create_app
+    from cert_watch.auth import SESSION_COOKIE, create_session
+    from cert_watch.config import Settings
+    from cert_watch.database import Role, SqliteRoleRepository
+
+    SqliteRoleRepository(db).add(Role(name="admin", permission_tier="admin"))
+    settings = Settings(
+        db_path=db,
+        data_dir=tmp_path,
+        role_map={"admin": {"groups": ["admin-group"]}},
+    )
+
+    class _Provider:
+        provider_name = "mock"
+
+    client = TestClient(create_app(auth_provider=_Provider(), settings=settings))
+    client.cookies.set(SESSION_COOKIE, create_session("alice", groups=["admin-group"]))
+    return client
+
+
 _REFUSED = {"error": "operation not permitted outside your team scope"}
 
+_RACE_ROUTE_PAIRS = {
+    (("POST", "/alerts/{alert_id}/retry"), ("POST", "/api/alerts/{alert_id}/retry")),
+    (("POST", "/hosts"), ("POST", "/api/hosts")),
+    (("POST", "/hosts/import"), ("POST", "/api/hosts/import")),
+    (("POST", "/hosts/all/scan"), ("POST", "/api/hosts/scan")),
+    (("POST", "/hosts/{resource_id}/edit"), ("PUT", "/api/hosts/{resource_id}")),
+    (
+        ("POST", "/hosts/{host_id}/settings"),
+        ("PATCH", "/api/hosts/{host_id}/settings"),
+    ),
+    (("POST", "/hosts/{host_id}/notes"), ("PATCH", "/api/hosts/{host_id}/notes")),
+    (("POST", "/hosts/{host_id}/tags"), ("PUT", "/api/hosts/{host_id}/tags")),
+    (
+        ("POST", "/hosts/{host_id}/expected-issuers"),
+        ("PUT", "/api/hosts/{host_id}/issuers"),
+    ),
+    (("POST", "/hosts/{host_id}/delete"), ("DELETE", "/api/hosts/{host_id}")),
+    (("POST", "/hosts/{host_id}/scan"), ("POST", "/api/hosts/{host_id}/scan")),
+    (
+        ("POST", "/certificates/{cert_id}/delete"),
+        ("DELETE", "/api/certificates/{cert_id}"),
+    ),
+    (
+        ("POST", "/certificates/{cert_id}/tags"),
+        ("PUT", "/api/certificates/{cert_id}/tags"),
+    ),
+    (
+        ("POST", "/certificates/{cert_id}/owner"),
+        ("PATCH", "/api/hosts/{host_id}/owner"),
+    ),
+    (("POST", "/hosts/{host_id}/owner"), ("PATCH", "/api/hosts/{host_id}/owner")),
+}
 
-def test_certificate_delete(tmp_path, monkeypatch):
+
+def test_race_matrix_covers_every_paired_target_scoped_route() -> None:
+    from tests.test_api_completeness import HTML_TO_JSON
+    from tests.test_write_scope_transaction_inventory import _TARGET_CONTRACTS
+
+    target_routes = {
+        tuple(key.split(" ", 1))
+        for key in _TARGET_CONTRACTS
+    }
+    expected = {
+        (html, api)
+        for html, api in HTML_TO_JSON.items()
+        if html in target_routes and api in target_routes
+    }
+    # Expected issuers is deliberately admin-only, but is still a target-scoped
+    # HTML/API pair and belongs in the adapter race matrix requested by #124.
+    expected.add(
+        (
+            ("POST", "/hosts/{host_id}/expected-issuers"),
+            ("PUT", "/api/hosts/{host_id}/issuers"),
+        )
+    )
+    assert expected == _RACE_ROUTE_PAIRS
+    paired_routes = {route for pair in expected for route in pair}
+    assert target_routes - paired_routes == {("POST", "/api/alerts/{alert_id}/read")}
+
+
+@pytest.mark.parametrize("adapter", ["html", "api"])
+def test_certificate_delete(tmp_path, monkeypatch, adapter):
     db, host_id, cert_id = _estate(tmp_path)
     moved: list = []
     _move_after_check(monkeypatch, "cert_watch.services.certificate_management", db, host_id, moved)
     with _team_a_client(db, tmp_path) as client:
-        r = client.delete(f"/api/certificates/{cert_id}")
+        if adapter == "html":
+            r = client.post(f"/certificates/{cert_id}/delete", follow_redirects=False)
+        else:
+            r = client.delete(f"/api/certificates/{cert_id}")
     assert moved == ["moved"]
-    assert (r.status_code, r.json()) == (403, _REFUSED)
+    if adapter == "html":
+        assert r.status_code == 303
+        assert "outside%20your%20team%20scope" in r.headers["location"]
+    else:
+        assert (r.status_code, r.json()) == (403, _REFUSED)
     assert SqliteCertificateRepository(db).get_by_id(cert_id) is not None
 
 
-def test_certificate_tags(tmp_path, monkeypatch):
+@pytest.mark.parametrize("adapter", ["html", "api"])
+def test_certificate_tags(tmp_path, monkeypatch, adapter):
     db, host_id, cert_id = _estate(tmp_path)
     moved: list = []
     _move_after_check(monkeypatch, "cert_watch.services.resource_metadata", db, host_id, moved)
     with _team_a_client(db, tmp_path) as client:
-        r = client.put(f"/api/certificates/{cert_id}/tags", json={"tags": "team-a"})
+        if adapter == "html":
+            r = client.post(
+                f"/certificates/{cert_id}/tags",
+                data={"tags": "team-a"},
+                follow_redirects=False,
+            )
+        else:
+            r = client.put(f"/api/certificates/{cert_id}/tags", json={"tags": "team-a"})
     assert moved == ["moved"]
-    assert (r.status_code, r.json()) == (403, _REFUSED)
+    if adapter == "html":
+        assert r.status_code == 303
+        assert "outside%20your%20team%20scope" in r.headers["location"]
+    else:
+        assert (r.status_code, r.json()) == (403, _REFUSED)
     assert SqliteCertificateRepository(db).get_tags(cert_id) == ""
 
 
+@pytest.mark.parametrize("adapter", ["html", "api"])
 def test_combined_certificate_edit_rechecks_host_scope_after_two_process_race(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, adapter
 ):
-    from cert_watch.services.host_edit import HostEditUpdate, edit_host
-
     db, host_id, cert_id = _estate(tmp_path)
     SqliteCertificateRepository(db).set_tags(cert_id, "team-a")
     moved: list = []
     _move_after_check(monkeypatch, "cert_watch.services.host_edit", db, host_id, moved)
-    auth = AuthContext.from_tier("team-a-operator", tier="operator", scope_tag="team-a")
-    with pytest.raises(PermissionError, match="outside your team scope"):
-        edit_host(
-            db,
-            cert_id,
-            HostEditUpdate(
-                owner_name="attempted",
-                owner_email="owner@example.test",
-                owner_slack="",
-                renewal_method="manual",
-                runbook_url="https://runbooks.example.test/tls",
-                scan_interval_hours=12,
-                threshold_days=30,
-                renewal_status="pending",
-                notes="attempted",
-                tags="team-a",
-            ),
-            auth=auth,
-            actor="team-a-operator",
-            source_ip=None,
-        )
+    body = {
+        "owner_name": "attempted",
+        "owner_email": "owner@example.test",
+        "owner_slack": "",
+        "renewal_method": "manual",
+        "runbook_url": "https://runbooks.example.test/tls",
+        "scan_interval_hours": 12,
+        "threshold_days": 30,
+        "renewal_status": "pending",
+        "notes": "attempted",
+        "tags": "team-a",
+    }
+    with _team_a_client(db, tmp_path) as client:
+        if adapter == "html":
+            r = client.post(
+                f"/hosts/{cert_id}/edit", data=body, follow_redirects=False
+            )
+        else:
+            r = client.put(f"/api/hosts/{cert_id}", json=body)
     assert moved == ["moved"]
+    if adapter == "html":
+        assert r.status_code == 303
+        assert "outside%20your%20team%20scope" in r.headers["location"]
+    else:
+        assert (r.status_code, r.json()) == (403, _REFUSED)
     host = SqliteHostRepository(db).get(host_id)
     assert host is not None
     assert (host.tags, host.notes, host.owner_name) == ("team-b", "", "")
     assert SqliteCertificateRepository(db).get_tags(cert_id) == "team-a"
 
 
-@pytest.mark.parametrize("addressed_by", ["certificate", "host"])
-def test_ownership(tmp_path, monkeypatch, addressed_by):
+@pytest.mark.parametrize(
+    ("addressed_by", "adapter"),
+    [
+        ("certificate", "html"),
+        ("certificate", "api"),
+        ("host", "html"),
+        ("host", "api"),
+    ],
+)
+def test_ownership(tmp_path, monkeypatch, addressed_by, adapter):
     db, host_id, cert_id = _estate(tmp_path)
     # The certificate remains visible to team-a after the host moves.  That
     # must not let its own tag authorize a write to the now-team-b host.
     SqliteCertificateRepository(db).set_tags(cert_id, "team-a")
     moved: list = []
     _move_after_check(monkeypatch, "cert_watch.services.host_ownership", db, host_id, moved)
-    route = (
-        f"/certificates/{cert_id}/owner"
-        if addressed_by == "certificate"
-        else f"/hosts/{host_id}/owner"
-    )
     with _team_a_client(db, tmp_path) as client:
-        r = client.post(route, data={"owner_name": "team-a-took-it"}, follow_redirects=False)
+        if adapter == "html":
+            route = (
+                f"/certificates/{cert_id}/owner"
+                if addressed_by == "certificate"
+                else f"/hosts/{host_id}/owner"
+            )
+            r = client.post(
+                route,
+                data={"owner_name": "team-a-took-it", "renewal_method": "manual"},
+                follow_redirects=False,
+            )
+        else:
+            r = client.patch(
+                f"/api/hosts/{host_id}/owner",
+                json={"owner_name": "team-a-took-it", "renewal_method": "manual"},
+            )
     assert moved == ["moved"]
-    assert r.status_code == 303
-    assert "outside%20your%20team%20scope" in r.headers["location"]
+    if adapter == "html":
+        assert r.status_code == 303
+        assert "outside%20your%20team%20scope" in r.headers["location"]
+    else:
+        assert (r.status_code, r.json()) == (403, _REFUSED)
     [host] = SqliteHostRepository(db).list_all()
     assert host.owner_name == ""
 
 
 @pytest.mark.parametrize("field", ["notes", "tags"])
-def test_host_notes_and_tags(tmp_path, monkeypatch, field):
+@pytest.mark.parametrize("adapter", ["html", "api"])
+def test_host_notes_and_tags(tmp_path, monkeypatch, field, adapter):
     db, host_id, _cert_id = _estate(tmp_path)
     moved: list = []
     _move_after_check(monkeypatch, "cert_watch.services.resource_metadata", db, host_id, moved)
     body = {"notes": "team-a was here"} if field == "notes" else {"tags": "team-a"}
-    method = "patch" if field == "notes" else "put"
     with _team_a_client(db, tmp_path) as client:
-        r = getattr(client, method)(f"/api/hosts/{host_id}/{field}", json=body)
+        if adapter == "html":
+            r = client.post(
+                f"/hosts/{host_id}/{field}", data=body, follow_redirects=False
+            )
+        else:
+            method = "patch" if field == "notes" else "put"
+            r = getattr(client, method)(f"/api/hosts/{host_id}/{field}", json=body)
     assert moved == ["moved"]
-    assert (r.status_code, r.json()) == (403, _REFUSED)
+    if adapter == "html":
+        assert r.status_code == 303
+        assert "outside%20your%20team%20scope" in r.headers["location"]
+    else:
+        assert (r.status_code, r.json()) == (403, _REFUSED)
     [host] = SqliteHostRepository(db).list_all()
     assert (host.tags, host.notes) == ("team-b", "")
 
 
-def test_host_settings(tmp_path, monkeypatch):
+@pytest.mark.parametrize("adapter", ["html", "api"])
+def test_host_settings(tmp_path, monkeypatch, adapter):
     db, host_id, _cert_id = _estate(tmp_path)
     moved: list = []
     _move_after_check(monkeypatch, "cert_watch.services.host_management", db, host_id, moved)
     with _team_a_client(db, tmp_path) as client:
-        r = client.patch(
-            f"/api/hosts/{host_id}/settings",
-            json={"scan_interval_hours": 12, "threshold_days": 14, "renewal_status": "pending"},
-        )
+        body = {
+            "scan_interval_hours": 12,
+            "threshold_days": 14,
+            "renewal_status": "in_progress",
+        }
+        if adapter == "html":
+            r = client.post(
+                f"/hosts/{host_id}/settings", data=body, follow_redirects=False
+            )
+        else:
+            r = client.patch(f"/api/hosts/{host_id}/settings", json=body)
     assert moved == ["moved"]
-    assert (r.status_code, r.json()) == (403, _REFUSED)
+    if adapter == "html":
+        assert r.status_code == 303
+        assert "outside%20your%20team%20scope" in r.headers["location"]
+    else:
+        assert (r.status_code, r.json()) == (403, _REFUSED)
     host = SqliteHostRepository(db).get(host_id)
     assert host is not None
-    assert (host.scan_interval_hours, host.threshold_days) == (None, None)
+    assert (host.scan_interval_hours, host.threshold_days, host.renewal_status) == (
+        None,
+        None,
+        "pending",
+    )
 
 
-def test_host_delete(tmp_path, monkeypatch):
+@pytest.mark.parametrize("adapter", ["html", "api"])
+def test_expected_issuers_twins_survive_cross_process_tag_transfer(
+    tmp_path, monkeypatch, adapter
+):
+    """The admin-only pair has no scope denial, but both adapters must still
+    traverse the shared target service while another process changes tags."""
+    db, host_id, _cert_id = _estate(tmp_path)
+    moved: list = []
+    _move_after_check(monkeypatch, "cert_watch.services.host_management", db, host_id, moved)
+    with _admin_client(db, tmp_path) as client:
+        if adapter == "html":
+            r = client.post(
+                f"/hosts/{host_id}/expected-issuers",
+                data={"expected_issuers": "Example CA"},
+                follow_redirects=False,
+            )
+        else:
+            r = client.put(
+                f"/api/hosts/{host_id}/issuers",
+                json={"issuers": ["Example CA"]},
+            )
+    assert moved == ["moved"]
+    assert r.status_code == (303 if adapter == "html" else 200), r.text
+    assert SqliteHostRepository(db).get_expected_issuers(host_id) == ["Example CA"]
+
+
+@pytest.mark.parametrize("adapter", ["html", "api"])
+def test_host_delete(tmp_path, monkeypatch, adapter):
     db, host_id, _cert_id = _estate(tmp_path)
     moved: list = []
     _move_after_check(monkeypatch, "cert_watch.services.host_management", db, host_id, moved)
     with _team_a_client(db, tmp_path) as client:
-        r = client.delete(f"/api/hosts/{host_id}")
+        if adapter == "html":
+            r = client.post(f"/hosts/{host_id}/delete", follow_redirects=False)
+        else:
+            r = client.delete(f"/api/hosts/{host_id}")
     assert moved == ["moved"]
-    assert (r.status_code, r.json()) == (403, _REFUSED)
+    if adapter == "html":
+        assert r.status_code == 303
+        assert "outside%20your%20team%20scope" in r.headers["location"]
+    else:
+        assert (r.status_code, r.json()) == (403, _REFUSED)
     assert SqliteHostRepository(db).get(host_id) is not None
 
 
@@ -280,26 +465,43 @@ def test_alert_mark_read(tmp_path, monkeypatch):
         assert conn.execute("SELECT read FROM alerts WHERE id = ?", (alert_id,)).fetchone()[0] == 0
 
 
-def test_alert_retry(tmp_path, monkeypatch):
+@pytest.mark.parametrize("adapter", ["html", "api"])
+def test_alert_retry(tmp_path, monkeypatch, adapter):
     db, host_id, alert_id = _alert_estate(tmp_path, status="failed")
     moved: list = []
     _move_after_check(monkeypatch, "cert_watch.auth.scope", db, host_id, moved)
     with _team_a_client(db, tmp_path) as client:
-        r = client.post(f"/api/alerts/{alert_id}/retry")
+        path = (
+            f"/alerts/{alert_id}/retry"
+            if adapter == "html"
+            else f"/api/alerts/{alert_id}/retry"
+        )
+        r = client.post(path, follow_redirects=False)
     assert moved == ["moved"]
     # Alert ids are deliberately hidden from out-of-scope callers.
-    assert (r.status_code, r.json()) == (404, {"error": "alert not found"})
+    if adapter == "html":
+        assert r.status_code == 303
+        assert r.headers["location"] == "/alerts?error=alert+not+found"
+    else:
+        assert (r.status_code, r.json()) == (404, {"error": "alert not found"})
     with _connect(db) as conn:
         row = conn.execute("SELECT status FROM alerts WHERE id = ?", (alert_id,)).fetchone()
         assert row[0] == "failed"
 
 
-def test_existing_host_create_rechecks_inside_the_insert_transaction(tmp_path, monkeypatch):
+@pytest.mark.parametrize("adapter", ["html", "api"])
+def test_existing_host_create_rechecks_inside_the_insert_transaction(
+    tmp_path, monkeypatch, adapter
+):
     db, host_id, _cert_id = _estate(tmp_path)
     moved: list = []
     _move_after_check(monkeypatch, "cert_watch.services.host_management", db, host_id, moved)
     monkeypatch.setattr(
         "cert_watch.routes.hosts.resolve_and_validate_host",
+        lambda *args, **kwargs: (None, "192.0.2.1"),
+    )
+    monkeypatch.setattr(
+        "cert_watch.services.host_management.resolve_and_validate_host",
         lambda *args, **kwargs: (None, "192.0.2.1"),
     )
 
@@ -308,24 +510,37 @@ def test_existing_host_create_rechecks_inside_the_insert_transaction(tmp_path, m
 
     monkeypatch.setattr("cert_watch.routes.hosts._scan_and_store", scan)
     with _team_a_client(db, tmp_path) as client:
-        r = client.post(
-            "/hosts",
-            data={"hostname": _HOST, "port": "443"},
-            follow_redirects=False,
-        )
+        if adapter == "html":
+            r = client.post(
+                "/hosts",
+                data={"hostname": _HOST, "port": "443"},
+                follow_redirects=False,
+            )
+        else:
+            r = client.post("/api/hosts", json={"hostname": _HOST, "port": 443})
     assert moved == ["moved"]
-    assert r.status_code == 303
-    assert "outside%20your%20team%20scope" in r.headers["location"]
+    if adapter == "html":
+        assert r.status_code == 303
+        assert "outside%20your%20team%20scope" in r.headers["location"]
+    else:
+        assert (r.status_code, r.json()) == (403, _REFUSED)
     host = SqliteHostRepository(db).get(host_id)
     assert host is not None and host.tags == "team-b"
 
 
-def test_existing_host_import_rechecks_inside_the_insert_transaction(tmp_path, monkeypatch):
+@pytest.mark.parametrize("adapter", ["html", "api"])
+def test_existing_host_import_rechecks_inside_the_insert_transaction(
+    tmp_path, monkeypatch, adapter
+):
     db, host_id, _cert_id = _estate(tmp_path)
     moved: list = []
     _move_after_check(monkeypatch, "cert_watch.services.host_management", db, host_id, moved)
     monkeypatch.setattr(
         "cert_watch.routes.hosts.resolve_and_validate_host",
+        lambda *args, **kwargs: (None, "192.0.2.1"),
+    )
+    monkeypatch.setattr(
+        "cert_watch.services.host_management.resolve_and_validate_host",
         lambda *args, **kwargs: (None, "192.0.2.1"),
     )
 
@@ -335,32 +550,52 @@ def test_existing_host_import_rechecks_inside_the_insert_transaction(tmp_path, m
     monkeypatch.setattr("cert_watch.routes.hosts._scan_and_store", scan)
     content = f"hostname,port\n{_HOST},443\n"
     with _team_a_client(db, tmp_path) as client:
+        path = "/hosts/import" if adapter == "html" else "/api/hosts/import"
         r = client.post(
-            "/hosts/import",
+            path,
             files={"file": ("hosts.csv", content, "text/csv")},
             follow_redirects=False,
         )
     assert moved == ["moved"]
-    assert r.status_code == 303
-    assert "outside%20your%20team%20scope" in r.headers["location"]
+    if adapter == "html":
+        assert r.status_code == 303
+        assert "outside%20your%20team%20scope" in r.headers["location"]
+    else:
+        assert r.status_code == 400
+        assert "outside your team scope" in r.json()["errors"][0]
     host = SqliteHostRepository(db).get(host_id)
     assert host is not None and host.tags == "team-b"
 
 
-def test_manual_scan_rechecks_inside_the_scan_store_transaction(tmp_path, monkeypatch):
+@pytest.mark.parametrize("adapter", ["html", "api"])
+def test_manual_scan_rechecks_inside_the_scan_store_transaction(
+    tmp_path, monkeypatch, adapter
+):
     db, host_id, cert_id = _estate(tmp_path)
     original = SqliteCertificateRepository(db).get_by_id(cert_id)
     moved: list = []
     _move_after_check(monkeypatch, "cert_watch.services.host_management", db, host_id, moved)
     _fake_successful_scan(monkeypatch)
     with _team_a_client(db, tmp_path) as client:
-        r = client.post(f"/api/hosts/{host_id}/scan")
+        path = (
+            f"/hosts/{host_id}/scan"
+            if adapter == "html"
+            else f"/api/hosts/{host_id}/scan"
+        )
+        r = client.post(path, follow_redirects=False)
     assert moved == ["moved"]
-    assert (r.status_code, r.json()) == (403, _REFUSED)
+    if adapter == "html":
+        assert r.status_code == 303
+        assert "outside%20your%20team%20scope" in r.headers["location"]
+    else:
+        assert (r.status_code, r.json()) == (403, _REFUSED)
     assert SqliteCertificateRepository(db).get_by_id(cert_id) == original
 
 
-def test_scan_all_rechecks_each_host_inside_its_store_transaction(tmp_path, monkeypatch):
+@pytest.mark.parametrize("adapter", ["html", "api"])
+def test_scan_all_rechecks_each_host_inside_its_store_transaction(
+    tmp_path, monkeypatch, adapter
+):
     db, host_id, cert_id = _estate(tmp_path)
     original = SqliteCertificateRepository(db).get_by_id(cert_id)
     real = SqliteHostRepository.list_scoped
@@ -375,12 +610,17 @@ def test_scan_all_rechecks_each_host_inside_its_store_transaction(tmp_path, monk
     monkeypatch.setattr(SqliteHostRepository, "list_scoped", list_then_move)
     _fake_successful_scan(monkeypatch)
     with _team_a_client(db, tmp_path) as client:
-        r = client.post("/api/hosts/scan")
+        path = "/hosts/all/scan" if adapter == "html" else "/api/hosts/scan"
+        r = client.post(path, follow_redirects=False)
     assert moved == ["moved"]
-    assert (r.status_code, r.json()) == (
-        200,
-        {"scanned": 0, "failures": 0, "refused": 1},
-    )
+    if adapter == "html":
+        assert r.status_code == 303
+        assert "scanned=0&failures=0&refused=1" in r.headers["location"]
+    else:
+        assert (r.status_code, r.json()) == (
+            200,
+            {"scanned": 0, "failures": 0, "refused": 1},
+        )
     assert SqliteCertificateRepository(db).get_by_id(cert_id) == original
 
 
