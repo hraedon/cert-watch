@@ -91,7 +91,7 @@ async def save_ldap_role_map(
     # Apply the mapping now: it is part of Settings.role_map (merged in
     # Settings.from_env_with_kv), which request-time RBAC reads.
     _rebuild_settings(request, db)
-    return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
+    return RedirectResponse(url="/settings/access?saved=1#roles", status_code=303)
 
 
 def _split(raw: str, sep: str) -> list[str]:

@@ -77,21 +77,35 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 ARTIFACT_DIR="$TMP_DIR/artifact"
+CANDIDATE_DIR="$TMP_DIR/candidates"
 mkdir -p "$ARTIFACT_DIR"
 
 echo "Downloading visual-snapshot-diffs from run $RUN_ID ..."
-if ! gh run download "$RUN_ID" --name visual-snapshot-diffs --dir "$ARTIFACT_DIR" >/dev/null 2>&1; then
-    die "artifact 'visual-snapshot-diffs' not found for run $RUN_ID"
+if gh run download "$RUN_ID" --name visual-snapshot-diffs --dir "$ARTIFACT_DIR" >/dev/null 2>&1; then
+    HAVE_DIFFS=1
+else
+    HAVE_DIFFS=0
+fi
+
+mkdir -p "$CANDIDATE_DIR"
+if gh run download "$RUN_ID" --name visual-baseline-candidates --dir "$CANDIDATE_DIR" >/dev/null 2>&1; then
+    HAVE_CANDIDATES=1
+else
+    HAVE_CANDIDATES=0
 fi
 
 mapfile -t ACTUALS < <(find "$ARTIFACT_DIR" -type f -name 'actual_*.png')
-if [ "${#ACTUALS[@]}" -eq 0 ]; then
-    die "no actual_*.png files found in the downloaded artifact"
+if [ "${#ACTUALS[@]}" -eq 0 ] && [ "$HAVE_CANDIDATES" -eq 0 ]; then
+    if [ "$HAVE_DIFFS" -eq 0 ]; then
+        die "neither visual artifact is available for run $RUN_ID"
+    fi
+    die "no actual_*.png files or baseline candidates found for run $RUN_ID"
 fi
 
 MATCHED=0
 MISSING=0
 AMBIGUOUS=0
+ADDED=0
 
 for actual in "${ACTUALS[@]}"; do
     name="$(basename "$actual")"
@@ -122,12 +136,40 @@ for actual in "${ACTUALS[@]}"; do
     MATCHED=$((MATCHED + 1))
 done
 
+# A test without a checked-in baseline has no actual_*.png diff. CI uploads the
+# candidate baseline tree separately so additions still come from the same
+# Linux/Chromium environment as updates. Only copy files absent from the tree;
+# existing baselines remain governed by the exact-name matching above.
+if [ "$HAVE_CANDIDATES" -eq 1 ]; then
+    mapfile -t CANDIDATES < <(find "$CANDIDATE_DIR" -type f -name '*.png')
+    for candidate in "${CANDIDATES[@]}"; do
+        relative="${candidate#*tests/e2e/__screenshots__/}"
+        if [ "$relative" = "$candidate" ]; then
+            # Artifact downloads may strip the configured common path.
+            relative="${candidate#"$CANDIDATE_DIR"/}"
+        fi
+        target="$BASELINE_DIR/$relative"
+        if [ -e "$target" ]; then
+            continue
+        fi
+        if [ "$DRY_RUN" -eq 1 ]; then
+            echo "  DRY-RUN: would add $target"
+        else
+            mkdir -p "$(dirname "$target")"
+            cp "$candidate" "$target"
+            echo "  ADDED: $target"
+        fi
+        ADDED=$((ADDED + 1))
+    done
+fi
+
 echo ""
 echo "Summary:"
 echo "  run id:    $RUN_ID"
 echo "  matched:   $MATCHED"
 echo "  missing:   $MISSING"
 echo "  ambiguous: $AMBIGUOUS"
+echo "  added:     $ADDED"
 
 if [ "$DRY_RUN" -eq 1 ]; then
     echo "  (dry run: no files were changed)"

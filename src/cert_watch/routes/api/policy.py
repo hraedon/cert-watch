@@ -11,7 +11,11 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from cert_watch.auth.guards import admin_json_write_guard, require_auth
-from cert_watch.database import SqliteAlertRepository
+from cert_watch.config.schedule_validation import (
+    ScheduleValidationError,
+    validate_schedule,
+)
+from cert_watch.database import SqliteAlertRepository, kv_set_multi
 from cert_watch.policy import (
     PolicyRule,
     PolicySet,
@@ -23,6 +27,7 @@ from cert_watch.policy import (
 from cert_watch.routes._deps import _csv_safe, _db_path
 from cert_watch.routes._scoped import scope_tags_from_auth
 from cert_watch.routes.api._shared import JsonBodyError, json_body
+from cert_watch.routes.settings.core import _rebuild_settings
 
 logger = logging.getLogger("cert_watch.routes.api.policy")
 
@@ -45,9 +50,12 @@ def api_get_policy(
 ) -> JSONResponse:
     db = _db_path(request)
     ruleset = load_policy_set(str(db))
+    settings = request.app.state.settings
     return JSONResponse(content={
         "default_severity": ruleset.default_severity,
         "rules": [_rule_json(r) for r in ruleset.rules],
+        "sched_hour": settings.sched_hour,
+        "sched_min": settings.sched_min,
     })
 
 
@@ -61,6 +69,17 @@ async def api_put_policy(
         return JSONResponse(content={"error": str(exc)}, status_code=400)
 
     db = _db_path(request)
+    schedule: tuple[int, int] | None = None
+    if "sched_hour" in body or "sched_min" in body:
+        if "sched_hour" not in body or "sched_min" not in body:
+            return JSONResponse(
+                content={"error": "sched_hour and sched_min must be supplied together"},
+                status_code=400,
+            )
+        try:
+            schedule = validate_schedule(body["sched_hour"], body["sched_min"])
+        except ScheduleValidationError as exc:
+            return JSONResponse(content={"error": str(exc)}, status_code=400)
     default_sev = body.get("default_severity", "warning")
     if default_sev not in ("critical", "warning", "info"):
         return JSONResponse(
@@ -141,6 +160,16 @@ async def api_put_policy(
         )
         save_policy_set_locked(str(db), merged)
 
+    if schedule is not None:
+        kv_set_multi(
+            db,
+            {
+                "sched_hour": str(schedule[0]),
+                "sched_min": str(schedule[1]),
+            },
+        )
+        _rebuild_settings(request, db)
+
     from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 
     record_audit(
@@ -156,6 +185,8 @@ async def api_put_policy(
     return JSONResponse(content={
         "default_severity": merged.default_severity,
         "rules": [_rule_json(r) for r in merged.rules],
+        "sched_hour": request.app.state.settings.sched_hour,
+        "sched_min": request.app.state.settings.sched_min,
     })
 
 

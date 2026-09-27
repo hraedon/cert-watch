@@ -1,6 +1,6 @@
 {% extends "settings/_base.html" %}
 
-{% block section %}
+{% macro users_panel() %}
 <div class="cw-panel">
   <div class="cw-panel-head">
     <h2>Local users</h2>
@@ -53,20 +53,20 @@
     </details>
   </div>
   {% if users %}
-  <div class="cw-table-clip">
-  <table class="cw-table">
+  <div class="cw-table-clip" tabindex="0" role="region" aria-label="Local user accounts">
+  <table class="cw-table cw-mobile-wrap-table cw-mobile-card-table">
     <thead><tr><th>Username</th><th>Email</th><th>Role</th><th><span class="cw-sr">Actions</span></th></tr></thead>
     <tbody>
       {% for u in users %}
       <tr>
-        <td class="cw-strong">{{ u.username }}</td>
-        <td>{{ u.email or '—' }}</td>
-        <td>
+        <td class="cw-strong" data-label="Username">{{ u.username }}</td>
+        <td data-label="Email">{{ u.email or '—' }}</td>
+        <td data-label="Role">
           {% set ns = namespace(found='') %}
           {% for r in roles %}{% if r.id == u.role_id %}{% set ns.found = r.name %}{% endif %}{% endfor %}
           {% if ns.found %}<span class="cw-chip">{{ ns.found }}</span>{% else %}<span class="cw-muted">—</span>{% endif %}
         </td>
-        <td>
+        <td data-label="Actions">
           <div class="cw-chiprow">
             <details class="cw-editor">
               <summary class="cw-btn ghost sm">Edit</summary>
@@ -116,4 +116,8 @@
     {{ ui.empty('No local users yet', 'Create one above to grant password access.', icon='user') }}
   {% endif %}
 </div>
+{% endmacro %}
+
+{% block section %}
+{{ users_panel() }}
 {% endblock %}

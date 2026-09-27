@@ -22,6 +22,18 @@ All notable changes to cert-watch are documented in this file.
   administrators and callers with effective write access to that certificate;
   read-only callers receive channel types, states and anonymous counts in both
   the UI and JSON APIs.
+- Posture now leads with a scoped, linked grade distribution and the
+  lowest-grade certificates with their failing reason instead of a fleet grade
+  determined by the worst certificate. Grade and TLS trends remain hidden
+  until visible history spans more than 30 days (#126 S5).
+- The Add drawer, JSON host-create endpoint, and CSV import accept owner name,
+  owner email, and renewal method using the existing ownership validation.
+  Single-host creation still lands on the new endpoint detail and its first
+  scan result (#126 S5).
+- Daily scan time moved from Settings → Channels to Policy without changing
+  its configuration keys. Roles, IdP mappings, and local users now share one
+  Settings → Access workflow; old section URLs and the former schedule anchor
+  lead to the new locations (#126 S5).
 - Home A (#126 S3) replaces the blended urgency cards and attention queue with
   three scoped blocks for certificate risk, monitoring gaps, and alert
   delivery/routing. Every count, issuer group, and twelve-week expiry bar opens
@@ -46,6 +58,14 @@ All notable changes to cert-watch are documented in this file.
   write-tier access to every submitted tag and cannot remove the last tag that
   keeps a scoped writer in scope. Read-only APIs and exports redact owner email
   and channel handles while retaining the owner's display name.
+- S5 follow-up: mobile content wraps or uses labeled keyboard-scrollable table
+  regions instead of being clipped; Posture explains the checks that actually
+  determine a grade; moved and activity links keep accessible dark-theme
+  contrast; and Access sub-tabs follow their URL fragment.
+- Ownership fields now share whitespace normalization and hard size limits
+  across editing, Add, JSON, and CSV writes. Invalid daily schedule values are
+  rejected by both HTML and JSON policy writes, and an idempotent Add reports
+  when ownership seeds were intentionally not applied to an existing endpoint.
 - Accessibility (#126 S2): every page has a `<main>` landmark, every form
   field has an associated label, empty action-column headers are named for
   screen readers, and secondary text no longer uses `--text-3`, which failed

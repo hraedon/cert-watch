@@ -150,6 +150,7 @@ from cert_watch.database.drift import (
     list_cert_history,
     list_grade_trends,
     list_tls_version_trends,
+    posture_trend_ready,
     purge_old_history,
     record_cert_history,
 )
@@ -203,6 +204,7 @@ from cert_watch.database.kv_store import (
     kv_all,
     kv_get,
     kv_set,
+    kv_set_multi,
     kv_set_secret,
 )
 
@@ -322,6 +324,7 @@ __all__ = [  # noqa: RUF022 — exports are grouped by database subsystem
     "list_cert_history",
     "list_tls_version_trends",
     "list_grade_trends",
+    "posture_trend_ready",
     # dashboard
     "count_dashboard_leaves",
     "count_leaf_certs",
@@ -351,6 +354,7 @@ __all__ = [  # noqa: RUF022 — exports are grouped by database subsystem
     "kv_all",
     "kv_get",
     "kv_set",
+    "kv_set_multi",
     "kv_set_secret",
     # session_versions
     "get_session_version",

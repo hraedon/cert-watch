@@ -58,11 +58,11 @@ _ALERT_KEYS = ui_field_map(
         "drift_alerts",
         "renewal_window_days",
         "alert_retention_days",
-        "sched_hour",
-        "sched_min",
         "check_revocation",
     )
 )
+
+_SCHEDULE_KEYS = ui_field_map(("sched_hour", "sched_min"))
 
 # Single source of truth lives in config (SENSITIVE_SETTING_KEYS) so the
 # encrypt-side (this module) and the decrypt-side (config.from_env_with_kv)

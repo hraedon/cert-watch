@@ -83,8 +83,7 @@
 <nav class="cw-sidenav" aria-label="Settings sections">
   <div class="grp">Access</div>
   <a href="/settings/auth" class="">Authentication</a>
-  <a href="/settings/roles" class="">Roles</a>
-  <a href="/settings/users" class="active">Users</a>
+  <a href="/settings/access" class="active">Access</a>
   <a href="/settings/api-keys" class="" data-testid="settings-api-keys-link">API keys</a>
   <a href="/settings/tags" class="" data-testid="settings-tags-link">Tags</a>
   <div class="grp">Alerting</div>
@@ -99,6 +98,118 @@
     <div class="cw-vstack">
 
 
+
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2>Access workflow</h2>
+    <span class="cw-hint">roles, identity-provider mapping, and local accounts</span>
+  </div>
+  <div class="cw-panel-body">
+    <div class="cw-seg" data-access-tabs aria-label="Access sections">
+      <a class="on" href="#roles" aria-current="location">Roles &amp; IdP mapping</a>
+      <a href="#local-users">Local users</a>
+    </div>
+  </div>
+</div>
+
+<section id="roles" class="cw-vstack" aria-labelledby="roles-heading">
+  <h2 id="roles-heading" class="cw-sr cw-sub">Roles and identity-provider mapping</h2>
+
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2>Roles</h2>
+    <span class="cw-hint">a role bundles access (tier + scope) and alert routing for a team</span>
+  </div>
+  <div class="cw-panel-body">
+    <details class="cw-editor">
+      <summary class="cw-btn primary">
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+
+Add role</summary>
+      <div class="cw-editor-body">
+        <form method="post" action="/settings/roles" class="cw-form">
+          <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
+
+
+  <div class="cw-field">
+    <label class="cw-label" for="role_name">Name</label>
+    <input class="cw-input" type="text" id="role_name" name="name" value="" placeholder="e.g., platform-operators" required>
+    <div class="cw-hint">Also the join key for IdP mapping — groups/users mapped to this name get the role.</div>
+  </div>
+  <div class="cw-divider"></div>
+  <div class="cw-kv-label">Access</div>
+  <div class="cw-form-grid">
+    <div class="cw-field">
+      <label class="cw-label" for="role_scope">Scope tags</label>
+      <input class="cw-input" type="text" id="role_scope" name="scope_tag" value="" placeholder="prod, payments">
+      <div class="cw-hint">Empty = the whole estate. Set = members see only resources carrying these tags.</div>
+    </div>
+    <div class="cw-field">
+      <label class="cw-label" for="role_tier">Tier</label>
+      <select class="cw-select" id="role_tier" name="permission_tier">
+
+  <option value="viewer" selected>Viewer — read only</option>
+  <option value="operator" >Operator — read and write</option>
+  <option value="admin" >Admin — full settings access</option>
+
+      </select>
+      <div class="cw-hint">Unscoped role: this is the global tier. Scoped role: this tier applies <b>within the scope tags</b> — it never elevates access outside them.</div>
+    </div>
+    <div class="cw-field wide">
+      <label class="cw-label" for="role_tag_tiers">Per-tag tier overrides <span class="cw-muted">(optional)</span></label>
+      <input class="cw-input" type="text" id="role_tag_tiers" name="tag_tiers"
+             value="" placeholder="prod=operator, edge=viewer">
+      <div class="cw-hint">Give individual scope tags a different tier than the role default — e.g. operator for prod, viewer for edge.</div>
+    </div>
+  </div>
+  <div class="cw-divider"></div>
+  <div class="cw-kv-label">Notifications</div>
+  <div class="cw-form-grid">
+    <div class="cw-field">
+      <label class="cw-label" for="role_group">Linked alert group</label>
+      <select class="cw-select" id="role_group" name="alert_group_id">
+        <option value="" selected>— none —</option>
+
+      </select>
+      <div class="cw-hint">With scope tags set, members are alerted for matching certs via this group.</div>
+    </div>
+    <div class="cw-field">
+      <label class="cw-label" for="role_email">Notification email</label>
+      <input class="cw-input" type="email" id="role_email" name="email" value="" placeholder="ops@example.com">
+      <div class="cw-hint">Alert fanout also mails this address when a host's owner email matches it.</div>
+    </div>
+  </div>
+  <div class="cw-field">
+    <label class="cw-label" for="role_description">Description</label>
+    <input class="cw-input" type="text" id="role_description" name="description" value="" placeholder="Certificate operators">
+  </div>
+
+          <div class="cw-form-foot"><button type="submit" class="cw-btn primary">Add role</button></div>
+        </form>
+      </div>
+    </details>
+  </div>
+
+
+<div class="cw-empty">
+  <div class="cw-empty-icon ">
+
+    <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-3-3.9"/><path d="M13 3.1a4 4 0 010 7.8"/><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+
+</div>
+  <div class="cw-empty-title">No roles yet</div>
+  <div class="cw-empty-sub">Create one above to define a team and its access.</div>
+
+</div>
+
+
+</div>
+
+</section>
+
+<section id="local-users" class="cw-vstack" aria-labelledby="local-users-heading">
+  <h2 id="local-users-heading" class="cw-sr cw-sub">Local users</h2>
 
 <div class="cw-panel">
   <div class="cw-panel-head">
@@ -173,6 +284,8 @@ Add user</summary>
 
 </div>
 
+</section>
+
     </div>
   </div>
 </div>
@@ -180,6 +293,8 @@ Add user</summary>
     </main>
   </div>
   <script src="/static/js/core.js" nonce="{{CSP_NONCE}}"></script>
+
+<script src="/static/js/settings-access.js" nonce="{{CSP_NONCE}}"></script>
 
 </body>
 </html>

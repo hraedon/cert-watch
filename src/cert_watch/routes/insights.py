@@ -14,19 +14,20 @@ from cert_watch import __commit__, __version__
 from cert_watch.auth.guards import get_auth_context
 from cert_watch.compliance import (
     build_compliance_report,
-    fleet_grade_summary,
     report_to_dict,
 )
 from cert_watch.crypto_posture import analyze_fleet_crypto, crypto_posture_to_dict
 from cert_watch.database import (
     list_grade_trends,
     list_tls_version_trends,
+    posture_trend_ready,
 )
 from cert_watch.readiness import build_readiness_report, readiness_report_to_dict
 from cert_watch.routes._deps import _db_path, _get_settings, get_templates
 from cert_watch.routes._scoped import enforce_scope_tag, scope_tags_from_auth
 from cert_watch.routes.api._shared import compliance_signing_key
 from cert_watch.security.csrf import get_csrf_context
+from cert_watch.services.posture_page import load_posture_headline
 from cert_watch.status_model import AxisSettings
 
 logger = logging.getLogger("cert_watch.routes.insights")
@@ -94,7 +95,7 @@ def _pivot_grade_monthly(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any
 
 
 @router.get("/posture", response_class=HTMLResponse)
-def posture_view(request: Request) -> HTMLResponse:
+def posture_view(request: Request, grade: str = "") -> HTMLResponse:
     """Fleet posture: grade distribution + trends + crypto inventory.
 
     Absorbs the old /insights?tab=trends and /crypto pages; the compliance
@@ -109,22 +110,22 @@ def posture_view(request: Request) -> HTMLResponse:
     tls_max: int = 1
     grade_trends: list[dict[str, Any]] = []
     grade_max: int = 1
-    try:
-        tls_trends, tls_max = _pivot_tls_monthly(
-            list_tls_version_trends(db, days=180, scope_tags=scope_tags, bucket="month")
-        )
-    except Exception:
-        logger.exception("posture: TLS trends query failed")
-    try:
-        grade_trends, grade_max = _pivot_grade_monthly(
-            list_grade_trends(db, days=180, scope_tags=scope_tags, bucket="month")
-        )
-    except Exception:
-        logger.exception("posture: grade trends query failed")
+    trend_ready = posture_trend_ready(db, scope_tags=scope_tags)
+    if trend_ready:
+        try:
+            tls_trends, tls_max = _pivot_tls_monthly(
+                list_tls_version_trends(db, days=180, scope_tags=scope_tags, bucket="month")
+            )
+        except Exception:
+            logger.exception("posture: TLS trends query failed")
+        try:
+            grade_trends, grade_max = _pivot_grade_monthly(
+                list_grade_trends(db, days=180, scope_tags=scope_tags, bucket="month")
+            )
+        except Exception:
+            logger.exception("posture: grade trends query failed")
 
-    # Fleet posture grade + distribution: one grade per current certificate,
-    # the same population the compliance report grades (#113).
-    fleet_grade = fleet_grade_summary(db, scope_tags=scope_tags)
+    headline = load_posture_headline(db, scope_tags=scope_tags, selected_grade=grade)
 
     return templates.TemplateResponse(
         request=request,
@@ -135,7 +136,8 @@ def posture_view(request: Request) -> HTMLResponse:
             **get_csrf_context(request),
             "active_page": "posture",
             "posture": posture,
-            "fleet_grade": fleet_grade,
+            "headline": headline,
+            "trend_ready": trend_ready,
             "tls_trends": tls_trends,
             "tls_max": tls_max,
             "grade_trends": grade_trends,

@@ -1,6 +1,38 @@
 {% extends "settings/_base.html" %}
 
 {% block section %}
+<div class="cw-panel" id="daily-scan-time">
+  <div class="cw-panel-head">
+    <h2>Scan schedule</h2>
+    <span class="cw-hint">when monitoring policy is evaluated each day</span>
+  </div>
+  <div class="cw-panel-body">
+    <form method="post" action="/settings/policy" class="cw-form" data-testid="scan-schedule-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="settings_section" value="schedule">
+      <div class="cw-field">
+        <span class="cw-label">Daily scan time (UTC)
+          {% if env_overrides.sched_hour or env_overrides.sched_min %}<span class="cw-envbadge">env</span>{% endif %}
+        </span>
+        <div class="cw-form-grid">
+          <div class="cw-field">
+            <label class="cw-label" for="sched_hour">Hour (0–23)</label>
+            <input class="cw-input tnum" type="number" min="0" max="23" id="sched_hour"
+                   name="sched_hour" value="{{ schedule.sched_hour if schedule.sched_hour != '' else '6' }}">
+          </div>
+          <div class="cw-field">
+            <label class="cw-label" for="sched_min">Minute (0–59)</label>
+            <input class="cw-input tnum" type="number" min="0" max="59" id="sched_min"
+                   name="sched_min" value="{{ schedule.sched_min if schedule.sched_min != '' else '0' }}">
+          </div>
+        </div>
+        <div class="cw-hint">The daily scan and alert cycle. Default 06:00 UTC; per-endpoint cadence still takes precedence.</div>
+      </div>
+      <div class="cw-form-foot"><button type="submit" class="cw-btn primary">Save scan schedule</button></div>
+    </form>
+  </div>
+</div>
+
 <div class="cw-panel">
   <div class="cw-panel-head">
     <h2>Certificate policy rules</h2>
@@ -16,10 +48,10 @@
       </div>
     </div>
   </div>
-  <form method="post" action="/settings/policy">
+  <form method="post" action="/settings/policy" data-testid="policy-form">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="default_severity" value="{{ policy_set.default_severity }}">
-    <div class="cw-table-clip">
+    <div class="cw-table-clip" tabindex="0" role="region" aria-label="Certificate policy rules">
     <table class="cw-table">
       <thead>
         <tr>
@@ -105,7 +137,7 @@
   </form>
   {% else %}
   {% call ui.empty('No policy rules configured', 'Initialize the defaults, then tune severities and parameters.', icon='shield') %}
-    <form method="post" action="/settings/policy">
+    <form method="post" action="/settings/policy" data-testid="policy-form">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
       <button type="submit" class="cw-btn primary">Initialize default policy</button>
     </form>

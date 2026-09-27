@@ -242,7 +242,7 @@ class TestSettingsPolicyPost:
     def test_initialize_default_policy(self, page: Page, cert_watch_server: str) -> None:
         page.goto(f"{cert_watch_server}/settings?tab=policy")
         # First visit: no policy exists, click "Initialize default policy"
-        page.locator("form[action='/settings/policy']").locator('button[type="submit"]').click()
+        page.get_by_test_id("policy-form").locator('button[type="submit"]').click()
         expect(page).to_have_url(re.compile(r"saved=1"), timeout=5000)
 
         # After initialization, the policy table should be visible
@@ -252,23 +252,24 @@ class TestSettingsPolicyPost:
     def test_save_policy_with_modified_rules(self, page: Page, cert_watch_server: str) -> None:
         # Ensure policy is initialized
         page.goto(f"{cert_watch_server}/settings?tab=policy")
-        if page.locator(
-            "form[action='/settings/policy'] button[type='submit']"
-        ).first.is_visible():
+        if page.get_by_test_id("policy-form").locator(
+            "button[type='submit']"
+        ).is_visible():
             text = (
-                page.locator(
-                    "form[action='/settings/policy'] button[type='submit']"
-                )
-                .first.text_content()
+                page.get_by_test_id("policy-form")
+                .locator("button[type='submit']")
+                .text_content()
                 or ""
             )
             if "Initialize" in text:
-                page.locator("form[action='/settings/policy']").locator('button[type="submit"]').click()
+                page.get_by_test_id("policy-form").locator(
+                    'button[type="submit"]'
+                ).click()
                 expect(page).to_have_url(re.compile(r"saved=1"), timeout=5000)
 
         page.goto(f"{cert_watch_server}/settings?tab=policy")
         # The policy table with rules should be present; submit the form
-        page.locator("form[action='/settings/policy']").locator('button[type="submit"]').click()
+        page.get_by_test_id("policy-form").locator('button[type="submit"]').click()
         expect(page).to_have_url(re.compile(r"saved=1"), timeout=5000)
 
 

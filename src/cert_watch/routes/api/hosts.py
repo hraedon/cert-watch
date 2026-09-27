@@ -91,6 +91,11 @@ class HostCreateBody(BaseModel):
     common_ports: StrictBool = False
     notes: StrictStr = Field(default="", max_length=10_000)
     starttls_mode: StrictStr = ""
+    owner_name: StrictStr = ""
+    owner_email: StrictStr = ""
+    owner_slack: StrictStr = ""
+    renewal_method: StrictStr = ""
+    runbook_url: StrictStr = ""
 
 
 class HostSettingsBody(BaseModel):
@@ -165,20 +170,28 @@ async def api_create_host(request: Request, _auth: str = Depends(json_write_guar
             common_ports=body.common_ports,
             notes=body.notes,
             starttls_mode=body.starttls_mode,
+            owner_name=body.owner_name,
+            owner_email=body.owner_email,
+            owner_slack=body.owner_slack,
+            renewal_method=body.renewal_method,
+            runbook_url=body.runbook_url,
             auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
         )
     except (HostValidationError, ScopeDeniedError) as exc:
         return _service_error(exc)
-    return JSONResponse(
-        status_code=201,
-        content={
-            "ids": list(result.host_ids),
-            "scanned": result.scanned,
-            "refused": result.refused,
-        },
-    )
+    content: dict[str, object] = {
+        "ids": list(result.host_ids),
+        "scanned": result.scanned,
+        "refused": result.refused,
+    }
+    if result.owner_fields_skipped:
+        content["notice"] = (
+            "Supplied ownership details were not applied to "
+            f"{result.owner_fields_skipped} already monitored endpoint(s)."
+        )
+    return JSONResponse(status_code=201, content=content)
 
 
 @router.post("/api/hosts/import")
@@ -283,6 +296,7 @@ def api_list_hosts(
             "owner_email": h.owner_email if reveal else "",
             "owner_slack": h.owner_slack if reveal else "",
             "renewal_status": h.renewal_status,
+            "renewal_method": h.renewal_method,
             "notes": h.notes,
             "expected_issuers": h.expected_issuers,
             "added_at": h.added_at.isoformat(),

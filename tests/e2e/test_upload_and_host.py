@@ -87,6 +87,17 @@ def _switch_tab(page: Page, tab: str) -> None:
     page.locator(f'[data-tab-pane="{tab}"]:not(.cw-hidden)').wait_for()
 
 
+def test_add_drawer_has_no_horizontal_scroll_at_mobile_width(
+    page: Page, cert_watch_server: str,
+) -> None:
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{cert_watch_server}/browse")
+    _open_slide(page)
+    assert page.evaluate("document.documentElement.scrollWidth === innerWidth")
+    assert page.locator(".cw-page").evaluate("el => el.scrollWidth === el.clientWidth")
+    assert page.locator("#add-drawer").evaluate("el => el.scrollWidth === el.clientWidth")
+
+
 def test_upload_pem_appears_on_dashboard(
     page: Page, cert_watch_server: str, pem_path: Path
 ) -> None:
@@ -212,7 +223,26 @@ def test_add_host_lands_on_the_new_host_with_a_confirmation(
     _open_slide(page)
     page.get_by_test_id("scan-hostname-input").fill(hostname)
     page.locator('[data-tab-pane="scan"] input[name="port"]').fill("443")
+    page.get_by_test_id("scan-owner-name-input").fill("Platform Team")
+    page.get_by_test_id("scan-owner-email-input").fill("platform@example.test")
+    page.get_by_test_id("scan-renewal-method-select").select_option("manual")
     page.get_by_test_id("scan-submit-btn").click()
     page.wait_for_url("**/certificates/*")
     expect(page.get_by_test_id("host-detail-heading")).to_have_text(f"{hostname}:443")
     expect(page.get_by_test_id("host-added-note")).to_contain_text("Host added")
+    expect(page.locator("body")).to_contain_text("Platform Team")
+    expect(page.locator("body")).to_contain_text("platform@example.test")
+    expect(page.locator("body")).to_contain_text("Manual")
+
+
+def test_add_host_owner_email_uses_browser_validation(
+    page: Page, cert_watch_server: str,
+) -> None:
+    page.goto(f"{cert_watch_server}/browse")
+    _open_slide(page)
+    page.get_by_test_id("scan-hostname-input").fill("invalid-owner.invalid")
+    email = page.get_by_test_id("scan-owner-email-input")
+    email.fill("not-an-address")
+    page.get_by_test_id("scan-submit-btn").click()
+    assert email.evaluate("el => el.validity.valid") is False
+    expect(page.locator(".cw-drawer.on")).to_be_visible()

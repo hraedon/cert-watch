@@ -140,6 +140,7 @@
                                         <input id="host-owner-name"
                                                name="owner_name"
                                                class="cw-input"
+                                               maxlength="200"
                                                value="{{ edit_values.get('owner_name', host_info.owner_name or '') }}">
                                     </div>
                                     <div class="cw-field">
@@ -148,6 +149,7 @@
                                                name="owner_email"
                                                type="email"
                                                class="cw-input"
+                                               maxlength="254"
                                                {% if edit_errors.owner_email %}aria-invalid="true"{% endif %}
                                                value="{{ edit_values.get('owner_email', host_info.owner_email or '') }}">
                                         {% if edit_errors.owner_email %}<p class="cw-hint t-crit">{{ edit_errors.owner_email }}</p>{% endif %}
@@ -157,6 +159,7 @@
                                         <input id="host-owner-slack"
                                                name="owner_slack"
                                                class="cw-input"
+                                               maxlength="100"
                                                value="{{ edit_values.get('owner_slack', host_info.owner_slack or '') }}">
                                     </div>
                                     <div class="cw-field">
@@ -177,6 +180,7 @@
                                                name="runbook_url"
                                                type="url"
                                                class="cw-input"
+                                               maxlength="2048"
                                                {% if edit_errors.runbook_url %}aria-invalid="true"{% endif %}
                                                value="{{ edit_values.get('runbook_url', host_info.runbook_url or '') }}">
                                         {% if edit_errors.runbook_url %}<p class="cw-hint t-crit">{{ edit_errors.runbook_url }}</p>{% endif %}
