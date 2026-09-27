@@ -758,7 +758,9 @@ def _detail_actions(
             )
         )
     if bool(status.get("chain_trust_problem")) and chain_guidance:
-        remediation = _chain_guidance_for_role(chain_guidance, is_admin).remediation
+        # chain_guidance arrives already adjusted for the viewer's role
+        # (_chain_guidance_for_role); rewriting it again doubled the phrase.
+        remediation = chain_guidance.remediation
         actions.append(
             DetailActionView(
                 (
@@ -839,7 +841,7 @@ def _detail_actions(
 
 def _chain_guidance_for_role(guidance: ChainGuidance, is_admin: bool) -> ChainGuidance:
     """Delegate trust-anchor settings work without hiding endpoint remediation."""
-    if is_admin:
+    if is_admin or "ask an administrator" in guidance.remediation:
         return guidance
     remediation = guidance.remediation.replace(
         "configure the verified issuing CA in Settings → Trust anchors",

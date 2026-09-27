@@ -6,6 +6,7 @@ from cert_watch.certificate_model import Certificate
 from cert_watch.chain_guidance import ChainGuidance
 from cert_watch.database import Alert, HostEntry, LatestScanRecord
 from cert_watch.presenters.certificate_detail import (
+    _chain_guidance_for_role,
     _delivery_routes,
     _detail_actions,
     _detail_axes,
@@ -341,7 +342,7 @@ def test_detail_actions_separate_host_steps_from_admin_only_settings_steps() -> 
         port=443,
         days=5,
         runbook_url="",
-        chain_guidance=guidance,
+        chain_guidance=_chain_guidance_for_role(guidance, False),
         may_write=True,
         is_admin=False,
         has_host=True,
@@ -353,7 +354,7 @@ def test_detail_actions_separate_host_steps_from_admin_only_settings_steps() -> 
         port=443,
         days=5,
         runbook_url="",
-        chain_guidance=guidance,
+        chain_guidance=_chain_guidance_for_role(guidance, False),
         may_write=False,
         is_admin=False,
         has_host=True,
@@ -386,6 +387,13 @@ def test_detail_actions_separate_host_steps_from_admin_only_settings_steps() -> 
         in action.detail
         for action in operator
     )
+    # The role rewrite is applied once; it doubled the phrase when the steps
+    # builder rewrote guidance that was already adjusted for the role.
+    assert all(
+        action.detail.count("ask an administrator") <= 1 for action in operator + reader
+    )
+    once = _chain_guidance_for_role(guidance, False)
+    assert _chain_guidance_for_role(once, False) == once
     assert all(not action.command for action in reader)
     assert all(
         action.title.startswith(("Ask an administrator", "Ask the certificate's owner"))
