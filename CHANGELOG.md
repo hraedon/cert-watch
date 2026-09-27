@@ -2,123 +2,173 @@
 
 All notable changes to cert-watch are documented in this file.
 
-## [Unreleased]
+## [1.1.0] - 2026-09-27
 
-### Added
-
-- Home, Browse, endpoint detail, inventory/compliance reports and the host and
-  certificate JSON lists now share one four-axis status model: expiry-only
-  certificate condition, scan-cadence monitoring (including the first
-  consecutive failure and plain-language cause), renewal state, and resolved
-  alert delivery routes/outcomes. Browse and both JSON lists accept combinable
-  SQL filters for every axis while preserving tag scope (#126 S1).
-
-### Changed
-
-- Browse rows and issuer, owner, and renewal-method groups now lead with the
-  expiry condition in days and show monitoring, chain, renewal, and delivery
-  only when they need attention. Repeated one-host, current-scan, private-root,
-  and unknown-renewal labels are removed (#126 S6).
-- Detail A (#126 S4) reorganizes endpoint and uploaded-certificate pages around
-  certificate, monitoring, renewal and alert-delivery state; state-derived
-  next steps; an alert-recipient table; one atomic Edit host form; and collapsed
-  certificate facts and history. Routing identities are visible to
-  administrators and callers with effective write access to that certificate;
-  read-only callers receive channel types, states and anonymous counts in both
-  the UI and JSON APIs.
-- Posture now leads with a scoped, linked grade distribution and the
-  lowest-grade certificates with their failing reason instead of a fleet grade
-  determined by the worst certificate. Grade and TLS trends remain hidden
-  until visible history spans more than 30 days (#126 S5).
-- The Add drawer, JSON host-create endpoint, and CSV import accept owner name,
-  owner email, and renewal method using the existing ownership validation.
-  Single-host creation still lands on the new endpoint detail and its first
-  scan result (#126 S5).
-- Daily scan time moved from Settings → Channels to Policy without changing
-  its configuration keys. Roles, IdP mappings, and local users now share one
-  Settings → Access workflow; old section URLs and the former schedule anchor
-  lead to the new locations (#126 S5).
-- Home A (#126 S3) replaces the blended urgency cards and attention queue with
-  three scoped blocks for certificate risk, monitoring gaps, and alert
-  delivery/routing. Every count, issuer group, and twelve-week expiry bar opens
-  the exact filtered Browse rows it counts. The old pipeline-health banner and
-  renewal/host-count row noise are removed from Home.
-- Visual system (#126 S2): one type scale (12, 14, 16, 20, 28 px); colour
-  means status only, so links, focus rings, active states and the wordmark
-  are neutral ink and links carry a hairline underline instead of the bronze
-  accent; expired uses the crit colour plus the word "Expired" instead of a
-  separate violet; a failing scan renders as a warning (monitoring), not
-  critical; monospace is limited to hostnames, serials and fingerprints.
+Four facts per endpoint and a redesigned UI (#126). Every endpoint is now
+described by its certificate condition (expiry only), monitoring (is the scan
+current), renewal state, and alert delivery, and Home, Browse, certificate
+detail and Posture are rebuilt around those facts, so a failing or
+never-scanned endpoint is no longer shown as healthy. One schema migration
+(0043). Several API responses and exports change shape, and recipient details
+are hidden from read-only callers; read [UPGRADING.md](UPGRADING.md) first.
 
 ### Security
 
-- Every route that writes host ownership, alert-recipient, or renewal fields
-  now authorizes against the host's own tags, including routes addressed by a
-  certificate ID. This prevents a certificate-only scoped operator from
-  redirecting another team's alerts. Complete host edits also use the shared
-  server-side ownership normalizer and size limits used by legacy editing,
-  Add, JSON, and CSV import.
+- Recipient identities -- alert-group names and recipient addresses (group
+  members, host owner, global and role-member recipients) -- and a host's
+  owner email and Slack handle are visible only to administrators and callers
+  with effective write access to that certificate; the owner's name stays
+  visible. Read-only sessions and `read` API keys receive delivery state,
+  channel types and anonymous counts on the detail page, in every status
+  block, in `GET /api/certificates`, `GET /api/hosts`, pivot rows, the JSON
+  and host CSV exports, and in
+  `GET /api/certificates/{id}/alert-routing`, which omits `matched_groups`
+  and `recipients` for them (#126 S1, S4).
+- Every route that writes host-level fields -- owner, owner email and Slack
+  handle, renewal method and status, runbook -- authorizes against the host's
+  own tags, both before and inside the write transaction, including the
+  routes addressed by a certificate id (`POST /certificates/{id}/owner`,
+  *Edit host* on a certificate's page). In 1.0.4
+  `POST /certificates/{id}/owner` was judged by the certificate's effective tags, so a scoped operator with
+  write access only through a tag set on the certificate could change the
+  owner email -- an alert recipient -- of another team's host and redirect its
+  alerts. *Edit host* also authorizes its tag field against the certificate
+  separately, so it needs write access to both (#126 S4, #137).
+- Tag writes by a tag-scoped user require write-tier access to every
+  submitted tag, on host and certificate tag edits, *Edit host*, Add, CSV
+  import and certificate upload; the automatically merged scope tags are only
+  the writable ones. A scoped writer cannot remove the last tag through which
+  they can write the resource, which would otherwise hand it to a read-only
+  tier (#126 S4).
+
+### Added
+
+- Four-axis status model shared by Home, Browse, certificate detail, the
+  inventory and compliance reports, `/metrics` and the host and certificate
+  JSON lists: expiry-only certificate condition, scan-cadence monitoring
+  (with the first consecutive failure and a plain-language cause), renewal
+  state, and resolved alert delivery routes and outcomes. API rows gain the
+  four facts and a nested `status` object, which `GET /api/certificates/{id}`
+  and `GET /api/hosts` also gain; `/alert-routing` gains a `delivery`
+  block (#126 S1).
+- Combinable `condition`, `monitoring`, `renewal` and `delivery` filters on
+  Browse, `GET /api/certificates` and `GET /api/hosts`, applied in SQL after
+  tag scope. Browse also accepts `routing_gap`, `chain_problem` with
+  `issuer`, and `expiry_week`, so every number on Home opens the rows it
+  counts. An unknown axis value is a `400` from the JSON APIs and is ignored
+  with a notice in Browse (#126 S1, S3).
+- One atomic *Edit host* form on the detail page, `POST /hosts/{id}/edit`,
+  and its JSON peer `PUT /api/hosts/{id}`, for owner and contact, renewal
+  method and runbook, cadence, threshold, renewal progress, notes and tags.
+  The field-specific endpoints remain (#126 S4).
+- Add, `POST /api/hosts` and CSV import accept owner name, owner email, owner
+  Slack, renewal method and runbook URL for new endpoints, and say when an
+  already monitored endpoint kept its existing ownership (#126 S5).
+- `GET`/`PUT /api/policy` read and set the daily scan time
+  (`sched_hour`, `sched_min`) (#126 S5).
+- An HTML *Not found* page for browsers; API paths keep the JSON 404 (#126 S2).
+
+### Changed
+
+- Home A: three scoped blocks for certificate risk, monitoring gaps, and
+  alert delivery and routing replace the urgency cards and the *Needs
+  attention* queue. Every count, issuer group and twelve-week expiry bar
+  opens the exact filtered Browse rows it counts. The pipeline-health strip
+  no longer appears on Home or certificate detail (#126 S3, S4).
+- Browse rows and issuer, owner and renewal-method groups lead with the expiry
+  condition in days and show monitoring, chain, renewal and delivery only
+  when they need attention. Repeated one-host, current-scan, private-root and
+  unknown-renewal labels are gone (#126 S6).
+- Detail A: endpoint, pending-host and uploaded-certificate pages lead with
+  certificate, monitoring, renewal and alert-delivery state, state-derived
+  numbered next steps, *Scan now* in the header, and an owner and
+  who-gets-alerted table; certificate facts (including the grade) and history
+  are collapsed (#126 S4).
+- Posture leads with a scoped, linked grade distribution and the lowest-grade
+  certificates with the finding that sets each grade, instead of a fleet
+  grade set by the worst certificate. Grade and TLS trends stay hidden until
+  visible history spans more than 30 days (#126 S5).
+- Settings: the daily scan time moved from Channels to Policy (same
+  configuration keys; Channels no longer saves it). Roles, IdP role mappings
+  and local users share Settings → Access; the old Roles and Users URLs
+  redirect there (#126 S5).
+- `urgency` in certificate API rows, the JSON export, pivot rows and the
+  compliance report now carries the endpoint's overall state, which adds
+  `failing` (scans failing or overdue) and reports never-scanned endpoints as
+  `gray`; `overall_state` repeats it. The CSV exports' `urgency` column is
+  renamed `overall_status`, the certificate and inventory CSVs gain
+  condition, monitoring, renewal and delivery columns, and the compliance
+  CSV's *Urgency* column becomes those four. The
+  `cert_watch_certificates_by_urgency` metric gains `failing` and `gray`
+  (#126 S1).
+- `GET /api/hosts` uses the Browse inventory query: tag scope now includes
+  certificate tags, as elsewhere, and entries gain `renewal_method` and
+  `status` (#126 S1).
+- Ownership fields are trimmed and limited to 200 (owner name), 254 (email),
+  100 (Slack) and 2048 (runbook URL) characters on every write path: Add,
+  `POST /api/hosts`, CSV import, *Edit host* (HTML and JSON) and the
+  field-specific ownership endpoints (#126 S5, #137).
+- Visual system: one type scale (12, 14, 16, 20, 28 px); colour means status
+  only, so links, focus rings, active states and the wordmark are neutral ink
+  and links carry a hairline underline; expired uses the critical colour plus
+  the word *Expired* instead of violet; a failing scan renders as a warning,
+  not critical; monospace is limited to hostnames, serials and fingerprints
+  (#126 S2).
 
 ### Fixed
 
-- Browse no longer presents last-known certificate evidence as healthy when
-  endpoint monitoring is failing, overdue, or has never succeeded. Group and
-  pivot rows preserve the earliest failure time, pending-host delivery agrees
-  with filters and APIs, lazy pivot rows include expiry and metadata details,
-  mobile alert-group tables stay contained, and critical status text clears
-  contrast requirements on hovered rows (#126 S6).
-- Detail pages keep the Edit host disclosure full-width at desktop and mobile,
-  preserve submitted values beside field errors, open disclosures addressed by
-  URL fragments, and give viewers role-appropriate next steps. Pending hosts
-  now resolve owner, tag-group and global alert routes exactly like scanned
-  endpoints; unmatched groups are informational unless no route exists.
-- Combined host edits authorize host fields and certificate tags against their
-  separate resources, including the transactional recheck. Tag changes require
-  write-tier access to every submitted tag and cannot remove the last tag that
-  keeps a scoped writer in scope. Read-only APIs and exports redact owner email
-  and channel handles while retaining the owner's display name.
-- S5 follow-up: mobile content wraps or uses labeled keyboard-scrollable table
-  regions instead of being clipped; Posture explains the checks that actually
-  determine a grade; moved and activity links keep accessible dark-theme
-  contrast; and Access sub-tabs follow their URL fragment.
-- Ownership fields now share whitespace normalization and hard size limits
-  across editing, Add, JSON, and CSV writes. Invalid daily schedule values are
-  rejected by both HTML and JSON policy writes, and an idempotent Add reports
-  when ownership seeds were intentionally not applied to an existing endpoint.
-- Accessibility (#126 S2): every page has a `<main>` landmark, every form
-  field has an associated label, empty action-column headers are named for
-  screen readers, and secondary text no longer uses `--text-3`, which failed
-  4.5:1 contrast. Text on tinted status fills is now ink with the status
-  colour on the icon or fill; chips and the danger button are outlined.
-- Home no longer overflows a 390 px viewport, keeps all twelve expiry weeks in
-  view with distinct, unclipped week labels, and gives its compact wordmark an
-  accessible name. Its monitoring and delivery copy now distinguishes overdue
-  scans from failed attempts, explains certificate-verification failures, and
-  includes scoped routing gaps and webhook failure evidence without exposing
-  recipient identities. Pending hosts now use the same owner, tag-group, and
-  global delivery routes as scanned endpoints (#126 S3).
-
 - An endpoint with a failed, overdue or never-successful scan is no longer
-  labelled Healthy/OK because its last stored certificate was fine. Chain
+  labelled Healthy or OK because its last stored certificate was fine. Chain
   trust is reported separately from expiry condition (#126 S1).
-- Default certificate-grouped Browse now selects, orders and paginates group
-  keys in SQL before building display rows, so one page no longer materialises
-  the whole estate (#120, #126 S1).
-- Home and Browse now compute all four-axis and overall counts in one estate
-  pass, while Browse and the host/certificate list APIs derive full status only
-  for the returned page. Unknown four-axis values return HTTP 400 from the JSON
-  APIs and are ignored with a notice in Browse (#126 S1).
-- Renewal history and alert-delivery evidence now produce the same state in
-  list rows, filters and counts. Migration 0043 classifies each endpoint once
-  with the Python renewal classifier and persists its evidence; history writes
-  refresh it transactionally, and stale evidence fails closed to Unknown.
-  Delivery uses the latest outcome for the configured, normalized channel name
-  (#126 S1).
-- `GET /api/certificates/{id}/alert-routing` and every status block expose
-  alert-group names and recipient addresses only to administrators and callers
-  with effective write access to that certificate. Read-only sessions and API
-  keys receive delivery state, channel types and anonymous route counts
-  (#126 S1, S4).
+- Renewal history and alert-delivery evidence produce the same state in list
+  rows, filters and counts. Migration 0043 classifies each endpoint once with
+  the Python renewal classifier and persists the result; history writes
+  refresh it transactionally, and stale evidence fails closed to *Unknown*.
+  Delivery uses the latest outcome for the configured, normalized channel
+  name (#126 S1).
+- Pending hosts resolve owner, tag-group and global alert routes exactly like
+  scanned endpoints on Home, Browse, detail and in the APIs; an unmatched
+  group is informational unless no route exists (#126 S3, S4, S6).
+- Default certificate-grouped Browse selects, orders and paginates group keys
+  in SQL before building display rows, so one page no longer materialises the
+  whole estate. Home and Browse compute their counts in one estate pass, and
+  lists derive full status only for the returned page (#120, #126 S1).
+- `/api/reports/inventory.csv` and `/api/reports/expiring.csv` fill in the
+  `port` column, which was always empty (#126 S1).
+- Invalid daily scan times are rejected by both the Policy form and
+  `PUT /api/policy`; previously the Channels form stored an out-of-range
+  hour in the database while the running schedule kept its old value
+  (#126 S5).
+- Browse: group and pivot rows keep the earliest failure time; lazily loaded
+  pivot rows include expiry and metadata; group rows no longer nest
+  interactive controls; mobile alert-group tables stay contained; critical
+  expiry text meets contrast in dark theme and on hovered rows (#126 S6).
+- Detail: the Edit host disclosure is full-width at every size, submitted
+  values survive a field error, disclosures addressed by URL fragment open,
+  viewers get role-appropriate next steps, and day counts are singular where
+  they should be (#126 S4).
+- Home fits a 390 px viewport with all twelve expiry weeks and distinct week
+  labels, its wordmark has an accessible name, and its copy distinguishes
+  overdue scans from failed attempts, explains certificate-verification
+  failures, and shows scoped routing gaps and webhook failure evidence
+  without exposing recipient identities (#126 S3).
+- Mobile content on Posture, Add and Settings wraps or uses labelled,
+  keyboard-scrollable table regions instead of being clipped; Posture
+  explains the checks that determine a grade; moved-setting and activity
+  links keep accessible dark-theme contrast; Access sub-tabs follow their URL
+  fragment; `/settings/alert-groups` no longer scrolls sideways at 390 px
+  (#126 S5, S6).
+- Accessibility: every page has a `<main>` landmark, every form field has a
+  label, empty action-column headers are named, secondary text no longer uses
+  `--text-3` (which failed 4.5:1), and text on tinted status fills is ink with
+  the status colour on the icon or fill; chips and the danger button are
+  outlined (#126 S2).
+
+### Upgrade notes
+
+- One migration, 0043 (per-endpoint renewal analytics, backfilled on first
+  start). API and export shape changes, the recipient-visibility rule and the
+  moved settings are listed in [UPGRADING.md](UPGRADING.md).
 
 ## [1.0.4] - 2026-09-25
 
