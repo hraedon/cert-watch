@@ -226,3 +226,61 @@ def test_full_detail_presenter_builds_pending_host_view() -> None:
     assert [tag.label for tag in view.shown_tags] == ["production", "network"]
     assert view.host_info is not None
     assert view.host_info.settings_writable is False
+
+
+def test_detail_delivery_failure_shows_time_but_hides_identity_for_readers() -> None:
+    data = PendingHostDetailData(
+        cert_id="host-1",
+        host=_host(),
+        latest_scan=None,
+        scan_evidence=None,
+        all_tags=["network", "production"],
+        status={
+            "condition": {"state": None},
+            "monitoring": {"state": "never_scanned"},
+            "renewal": {"state": "manual"},
+            "delivery": {
+                "state": "failing",
+                "recipients": [],
+                "matching_groups": ["Network on-call"],
+                "channels": [
+                    {
+                        "channel": "webhook:generic",
+                        "recipients": ["Network on-call"],
+                        "configured": True,
+                        "can_deliver": False,
+                        "last_outcome": "failed",
+                        "last_attempt_at": "2026-09-22T08:30:00+00:00",
+                    }
+                ],
+            },
+        },
+    )
+
+    reader = present_certificate_detail(
+        data,
+        settings_writable=False,
+        slack_configured=False,
+        reveal_delivery_identities=False,
+    )
+    writer = present_certificate_detail(
+        data,
+        settings_writable=True,
+        slack_configured=False,
+        reveal_delivery_identities=True,
+    )
+
+    assert reader.delivery_routes[0].recipient == "1 routed group"
+    assert "Network on-call" not in {
+        route.recipient for route in reader.delivery_routes
+    }
+    assert writer.delivery_routes[0].recipient == "Network on-call"
+    assert writer.delivery_routes[0].status == "Failing"
+    assert writer.delivery_routes[0].detail == (
+        "Latest delivery failed at 2026-09-22 08:30 UTC."
+    )
+    assert any(
+        action.title == "Check webhook generic delivery."
+        and "2026-09-22 08:30 UTC" in action.detail
+        for action in writer.actions
+    )

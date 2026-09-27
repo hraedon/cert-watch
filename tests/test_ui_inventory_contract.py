@@ -77,6 +77,25 @@ def test_inventory_write_contracts_each_have_one_shared_service() -> None:
 
 
 def _result(service: str, resource_id: str) -> Any:
+    if service.endswith("edit_host"):
+        from cert_watch.services.host_edit import HostEditResult
+
+        return HostEditResult(
+            SimpleNamespace(
+                id=resource_id,
+                owner_name="owner",
+                owner_email="",
+                owner_slack="",
+                renewal_method="",
+                runbook_url="",
+                scan_interval_hours=None,
+                threshold_days=None,
+                renewal_status="pending",
+                notes="",
+            ),
+            ("ops",),
+            "host",
+        )
     if service.endswith(("update_certificate_tags", "update_host_tags")):
         from cert_watch.services.resource_metadata import TagUpdateResult
 
@@ -133,7 +152,22 @@ def _result(service: str, resource_id: str) -> Any:
 def _request_pair(concept: str) -> tuple[dict[str, Any], dict[str, Any]]:
     form: dict[str, Any] = {"data": {}}
     api: dict[str, Any] = {"json": {}}
-    if concept.endswith("tags"):
+    if concept == "detail host edit":
+        values = {
+            "owner_name": "owner",
+            "owner_email": "",
+            "owner_slack": "",
+            "renewal_method": "",
+            "runbook_url": "",
+            "scan_interval_hours": "",
+            "threshold_days": "",
+            "renewal_status": "pending",
+            "notes": "",
+            "tags": "ops",
+        }
+        form["data"] = values
+        api["json"] = {**values, "scan_interval_hours": None, "threshold_days": None}
+    elif concept.endswith("tags"):
         form["data"] = {"tags": "ops"}
         api["json"] = {"tags": ["ops"]}
     elif concept in {"certificate upload", "trust anchor add"}:
@@ -219,6 +253,7 @@ def test_both_adapters_reach_the_inventory_service(
         substitutions = {
             "cert_id": host_id,
             "host_id": host_id,
+            "resource_id": host_id,
             "anchor_id": target_id,
             "group_id": target_id,
         }

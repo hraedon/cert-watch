@@ -193,10 +193,11 @@ def test_cert_detail_page_renders(
 
     page.set_viewport_size({"width": 390, "height": 844})
     page.reload()
-    panels = page.locator(".cw-cols .cw-panel")
+    panels = page.locator(".cw-detail-stack > .cw-panel")
     expect(panels.first).to_be_visible()
     for bounds in panels.evaluate_all(
         "els => els.map(el => el.getBoundingClientRect().toJSON())"
     ):
         assert bounds["left"] >= 0
         assert bounds["right"] <= 390
+    assert page.evaluate("document.documentElement.scrollWidth === window.innerWidth")

@@ -15,6 +15,13 @@ All notable changes to cert-watch are documented in this file.
 
 ### Changed
 
+- Detail A (#126 S4) reorganizes endpoint and uploaded-certificate pages around
+  certificate, monitoring, renewal and alert-delivery state; state-derived
+  next steps; an alert-recipient table; one atomic Edit host form; and collapsed
+  certificate facts and history. Routing identities are visible to
+  administrators and callers with effective write access to that certificate;
+  read-only callers receive channel types, states and anonymous counts in both
+  the UI and JSON APIs.
 - Home A (#126 S3) replaces the blended urgency cards and attention queue with
   three scoped blocks for certificate risk, monitoring gaps, and alert
   delivery/routing. Every count, issuer group, and twelve-week expiry bar opens
@@ -58,10 +65,11 @@ All notable changes to cert-watch are documented in this file.
   refresh it transactionally, and stale evidence fails closed to Unknown.
   Delivery uses the latest outcome for the configured, normalized channel name
   (#126 S1).
-- `GET /api/certificates/{id}/alert-routing` no longer exposes alert-group names
-  or recipient addresses to viewer/operator sessions or read/write API keys.
-  Non-admin callers receive delivery state, channel types and anonymous route
-  counts; administrators retain the full routing preview (#126 S1).
+- `GET /api/certificates/{id}/alert-routing` and every status block expose
+  alert-group names and recipient addresses only to administrators and callers
+  with effective write access to that certificate. Read-only sessions and API
+  keys receive delivery state, channel types and anonymous route counts
+  (#126 S1, S4).
 
 ## [1.0.4] - 2026-09-25
 

@@ -62,384 +62,382 @@
     <main class="cw-page" id="main">
 
 
-      <div id="cw-health" class="cw-health cw-hidden">
-        <span class="cw-status"><span class="dot" id="cw-health-dot" aria-hidden="true"></span><span id="cw-health-text">Loading…</span></span>
-        <button type="button" class="x" data-dismiss="cw-health" data-dismiss-key="cw-health-dismissed" id="cw-health-dismiss" title="Dismiss" aria-label="Dismiss">&times;</button>
-      </div>
 
 
-<div class="cw-wrap">
-  <nav class="cw-crumbs" aria-label="Breadcrumb">
-    <a href="/browse">Browse</a>
 
+    <div class="cw-wrap cw-detail-wrap">
+        <nav class="cw-crumbs" aria-label="Breadcrumb">
+            <a href="/browse">Browse</a>
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
 
+<span class="mono">pending.demo.test</span>
+        </nav>
+        <header class="cw-detail-head">
+            <div class="cw-detail-title">
+                <h1 class="mono"
+                    data-testid="host-detail-heading">pending.demo.test<span class="cw-detail-port">:8443</span>
+                </h1>
+                <div class="cw-chiprow cw-metarow">
+                    <span>Monitored
+                        · Edge Team
+                    </span>
 
-    <span class="mono">pending.demo.test:8443</span>
-  </nav>
+                        <span class="cw-chip">staging
 
+                        </span>
 
-  <div class="cw-page-head">
-    <div>
-      <div class="cw-chiprow">
-        <h1 class="mono" data-testid="host-detail-heading">pending.demo.test:8443</h1>
+                        <span class="cw-chip">edge
 
-          <span class="cw-status t-warn">
-  <span class="dot" aria-hidden="true"></span>Scan failing
-</span>
+                        </span>
 
-      </div>
-      <div class="cw-chiprow cw-metarow">
+                </div>
+            </div>
+            <div class="cw-page-actions">
 
-          <span class="cw-chip">
-
-    <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2V6z"/><path d="M3 15a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2v-3z"/></svg>
-
-Monitored</span>
-
-        <span class="cw-muted">
-
-            last scan failed
-
-        </span>
-      </div>
-    </div>
-    <div class="cw-page-actions">
-
-        <form method="post" action="/hosts/{{HOST_2_ID}}/scan" class="cw-inline">
-          <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
-          <input type="hidden" name="return_to" value="detail">
-          <button type="submit" class="cw-btn primary" data-testid="host-scan-btn">
+                    <form method="post" action="/hosts/{{HOST_2_ID}}/scan" class="cw-inline">
+                        <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
+                        <input type="hidden" name="return_to" value="detail">
+                        <button type="submit"
+                                class="cw-btn primary"
+                                data-testid="host-scan-btn">
 
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
 
 Scan now</button>
-        </form>
-
-
-        <form method="post" action="/hosts/{{HOST_2_ID}}/delete" class="cw-inline confirm-form" data-confirm="Remove this host?">
-          <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
-          <button type="submit" class="cw-btn danger" data-testid="host-delete-btn">
-
-    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
-
-Remove</button>
-        </form>
-
-    </div>
-  </div>
-
-
-  <div class="cw-panel" data-testid="scan-failure-panel">
-    <div class="cw-panel-body">
-
-      <div class="cw-note t-warn">
-
-
-    <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
-
-
-        <div>
-          <b>Scan failed</b> <span class="tnum">· 2026-09-22 12:00 UTC</span>
-
-          <div data-testid="scan-failure-cause">The server rejected the TLS handshake.</div>
-          <div data-testid="scan-failure-next-step"><b>Next step:</b> The server may require a client certificate, a specific server name, or ciphers cert-watch does not offer. Check the server&#39;s TLS configuration.</div>
-
-          <div class="mono" data-testid="scan-failure-error">TLS handshake failed</div>
-
-        </div>
-      </div>
-    </div>
-  </div>
-
-
-  <div class="">
-
-    <div>
+                    </form>
 
 
 
-      <div class="cw-panel" data-testid="scan-evidence">
-        <div class="cw-panel-head">
-          <h2>Scan evidence</h2>
-          <span class="cw-chip t-warn">No successful scan</span>
-        </div>
-        <div class="cw-panel-body">
-          <dl class="cw-kv">
+                    <form method="post"
+                          action="/hosts/{{HOST_2_ID}}/delete"
+                          class="cw-inline confirm-form"
+                          data-confirm="Remove this host?">
+                        <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
+                        <button type="submit"
+                                class="cw-iconbtn"
+                                title="Remove host"
+                                data-testid="host-delete-btn">
 
-  <div>
-    <dt>Last successful scan</dt>
-    <dd>Not recorded</dd>
-  </div>
+    <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
 
+</button>
+                    </form>
 
-  <div>
-    <dt>Latest attempt</dt>
-    <dd>2026-09-22 12:00:00 UTC<div class="cw-muted">Failure</div></dd>
-  </div>
-
-
-  <div>
-    <dt>Observation due</dt>
-    <dd>Awaiting a successful scan</dd>
-  </div>
-
-
-  <div>
-    <dt>Next eligible attempt</dt>
-    <dd>2026-09-22 13:00:00 UTC</dd>
-  </div>
-
-          </dl>
-          <p class="cw-note t-warn">No successful certificate observation is recorded. Scan again to confirm what this endpoint currently serves.</p>
-          <p class="cw-hint">Cadence uses the last successful scan. Incomplete attempts do not refresh it. Times show eligibility; a running job can delay the next attempt.</p>
-        </div>
-      </div>
-
-
-
-
-      <div class="cw-panel">
-        <div class="cw-panel-head">
-          <h2>Operational summary</h2>
-
-          <details class="cw-editor">
-            <summary class="cw-btn ghost sm" data-testid="host-edit-btn">
-
-    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-
-Edit host details</summary>
-            <div class="cw-editor-body">
-              <form method="post" action="/hosts/{{HOST_2_ID}}/owner" class="cw-form">
-                <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
-                <div class="cw-form-grid">
-                  <div class="cw-field">
-                    <label class="cw-label" for="host-owner-name">Owner name</label>
-                    <input type="text" id="host-owner-name" name="owner_name" class="cw-input" value="Edge Team" placeholder="Team or individual">
-                  </div>
-                  <div class="cw-field">
-                    <label class="cw-label" for="host-owner-email">Owner email</label>
-                    <input type="text" id="host-owner-email" name="owner_email" class="cw-input" value="" placeholder="ops@example.com">
-                  </div>
-
-                  <div class="cw-field">
-                    <label class="cw-label" for="host-renewal-method">Renewal method</label>
-                    <select id="host-renewal-method" name="renewal_method" class="cw-select">
-                      <option value="" >—</option>
-                      <option value="acme" >ACME</option>
-                      <option value="cert-manager" selected>cert-manager</option>
-                      <option value="manual" >Manual</option>
-                    </select>
-                  </div>
-                  <div class="cw-field wide">
-                    <label class="cw-label" for="host-runbook-url">Runbook URL</label>
-                    <input type="text" id="host-runbook-url" name="runbook_url" class="cw-input" value="" placeholder="https://wiki.example.com/cert-renewal">
-                  </div>
-                </div>
-                <div class="cw-form-foot">
-                  <button class="cw-btn primary sm" type="submit" data-testid="host-owner-save-btn">Save</button>
-                  <span class="cw-hint">Owner and renewal apply to every certificate on this host.</span>
-                </div>
-              </form>
             </div>
-          </details>
-
-        </div>
-        <div class="cw-panel-body">
-          <dl class="cw-kv">
-
-  <div>
-    <dt>Owner</dt>
-    <dd>
-              Edge Team
-
-            </dd>
-  </div>
-
-
-  <div>
-    <dt>Renewal</dt>
-    <dd>
-              cert-manager
-
-                <span class="cw-chip t-neutral">automation configured</span>
-
-            </dd>
-  </div>
-
-
-  <div>
-    <dt>Scan cadence</dt>
-    <dd>Daily schedule</dd>
-  </div>
-
-
-  <div>
-    <dt>Alert threshold</dt>
-    <dd>21 days</dd>
-  </div>
-
-
-  <div class="wide">
-    <dt>Renewal report</dt>
-    <dd>
-              No completion reported
-              <div class="cw-hint">Operator report, not proof of renewal.</div>
-            </dd>
-  </div>
+        </header>
 
 
 
-          </dl>
-        </div>
-        <div class="cw-panel-body" id="endpoint-settings">
 
+        <section class="cw-detail-axes"
+                 aria-label="Certificate status"
+                 data-testid="detail-state-axes">
 
+                <div class="cw-detail-axis">
+                    <div class="cw-detail-axis-label">Certificate</div>
+                    <div class="cw-detail-axis-value t-muted"
+                         ><span class="cw-dot"></span>No certificate observed</div>
+                    <div class="cw-detail-axis-detail">A successful scan has not stored certificate evidence yet.</div>
+                </div>
 
-          <details class="cw-editor" >
-            <summary class="cw-btn ghost sm" data-testid="endpoint-settings-edit">
+                <div class="cw-detail-axis">
+                    <div class="cw-detail-axis-label">Monitoring</div>
+                    <div class="cw-detail-axis-value t-warn"
+                         data-testid="cert-scan-failed-status"><span class="cw-dot"></span>Failing since 2026-09-22 12:00 UTC</div>
+                    <div class="cw-detail-axis-detail">The server rejected the TLS handshake. Automatic retry eligible 2026-09-22 13:00 UTC.</div>
+                </div>
 
-    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                <div class="cw-detail-axis">
+                    <div class="cw-detail-axis-label">Renewal</div>
+                    <div class="cw-detail-axis-value t-ok"
+                         ><span class="cw-dot"></span>Automation configured</div>
+                    <div class="cw-detail-axis-detail">cert-manager is configured.</div>
+                </div>
 
-<span class="when-closed">Edit endpoint settings</span><span class="when-open">Cancel editing</span></summary>
-            <div class="cw-editor-body">
-              <form method="post" action="/hosts/{{HOST_2_ID}}/settings" class="cw-form">
-                <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
-                <div class="cw-form-grid">
+                <div class="cw-detail-axis">
+                    <div class="cw-detail-axis-label">Alerts</div>
+                    <div class="cw-detail-axis-value t-warn"
+                         ><span class="cw-dot"></span>No specific route</div>
+                    <div class="cw-detail-axis-detail">Assign an owner or matching alert group for certificate-specific routing.</div>
+                </div>
 
-                  <div class="cw-field">
-                    <label class="cw-label" for="endpoint-scan-interval">Scan interval (hours)</label>
-                    <input id="endpoint-scan-interval" type="number" name="scan_interval_hours" class="cw-input" step="1" min="1" max="8760" value="" placeholder="Daily schedule" aria-describedby="endpoint-scan-help">
-                    <p class="cw-hint" id="endpoint-scan-help">Blank uses the configured daily UTC schedule. A custom interval is 1–8760 hours after the last successful scan. Failed scans retry after at least one hour.</p>
+        </section>
+        <div class="cw-detail-stack">
 
-                  </div>
-                  <div class="cw-field">
-                    <label class="cw-label" for="endpoint-threshold">Alert threshold (days)</label>
-                    <input id="endpoint-threshold" type="number" name="threshold_days" class="cw-input" min="1" step="1" value="21" placeholder="Automatic thresholds" aria-describedby="endpoint-threshold-help">
-                    <p class="cw-hint" id="endpoint-threshold-help">Blank uses automatic expiry thresholds. A custom value alerts at this many days, half, one quarter, and one day. Matching alert-group thresholds take precedence.</p>
-                  </div>
-                  <div class="cw-field wide">
-                    <label class="cw-label" for="endpoint-renewal-status">Renewal status reported by operator</label>
-                    <select id="endpoint-renewal-status" name="renewal_status" class="cw-select" aria-describedby="endpoint-renewal-help">
-                      <option value="pending" selected>No completion reported</option>
-                      <option value="in_progress" >In progress — operator reported</option>
-                    </select>
-                    <div class="cw-hint" id="endpoint-renewal-help">
-                      <p>In progress suppresses new renewal-stalled notices and the Home stalled status until you change this report.</p>
-                      <p>This operator report never suppresses expiry or expired alerts. cert-watch observes a completed renewal only when a scan sees the replacement certificate.</p>
+                <section class="cw-panel" data-testid="what-to-do">
+                    <div class="cw-panel-head">
+                        <h2>What to do</h2>
                     </div>
-                  </div>
-                </div>
-                <div class="cw-form-foot"><button type="submit" class="cw-btn primary sm" data-testid="endpoint-settings-save">Save endpoint settings</button></div>
-              </form>
-            </div>
-          </details>
+                    <div class="cw-panel-body">
+                        <ol class="cw-detail-steps">
 
+                                <li>
+                                    <b>Check the service on pending.demo.test:8443.</b> <span data-testid="scan-failure-cause">The server rejected the TLS handshake.</span>
 
-        </div>
-        <div class="cw-panel-body">
-          <div class="cw-panel-head-inline">
-            <span class="cw-kv-label">Notes <span class="cw-muted">— operational notes for this host</span></span>
+                                        <code class="cw-detail-command"
+                                              data-testid="scan-failure-next-step">openssl s_client -connect pending.demo.test:8443 -servername pending.demo.test</code>
 
-            <details class="cw-editor">
-              <summary class="cw-btn ghost sm" data-testid="notes-edit-toggle">
+                                </li>
 
+                                <li>
+                                    <b>Assign an owner or alert group.</b> <span >No certificate-specific recipient route matches this certificate.</span>
 
-    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                </li>
 
-<span class="when-closed">Edit notes</span><span class="when-open">Cancel editing</span>
-              </summary>
-              <div class="cw-editor-body">
-                <form method="post" action="/hosts/{{HOST_2_ID}}/notes" class="cw-form">
-                  <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
-                  <label class="cw-label" for="host-notes">Host notes</label>
-                  <textarea id="host-notes" name="notes" class="cw-textarea" rows="5" maxlength="10000" spellcheck="false" data-testid="notes-editor">Waiting for the first successful observation.</textarea>
-                  <div class="cw-form-foot"><button class="cw-btn primary sm" type="submit" data-testid="notes-save">Save notes</button></div>
-                </form>
-              </div>
-            </details>
+                        </ol>
 
-          </div>
-          <div class="cw-notes-view" data-testid="notes-view">Waiting for the first successful observation.</div>
-        </div>
-      </div>
+                            <details class="cw-disclose" data-testid="scan-failure-panel">
+                                <summary class="cw-note t-warn">
+                                    Scan failed · raw error from the latest attempt
+                                    · 2026-09-22 12:00 UTC
+                                </summary>
+                                <code class="cw-detail-command" data-testid="scan-failure-error">TLS handshake failed</code>
+                            </details>
 
+                    </div>
+                </section>
 
+            <section class="cw-panel" data-testid="owner-routing-panel">
+                <div class="cw-panel-head">
+                    <h2>Owner &amp; who gets alerted</h2>
 
-
-
-      <div class="cw-panel">
-        <div class="cw-panel-head">
-          <h2>
-
-    <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4l-7.2 7.2a2 2 0 01-2.8 0l-7.2-7.2A2 2 0 013 11.8V5a2 2 0 012-2h6.8a2 2 0 011.4.6l7.4 7.4a2 2 0 010 2.4z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/></svg>
-
- Tags</h2>
-
-          <details class="cw-editor">
-            <summary class="cw-btn ghost sm">
+                        <details class="cw-editor" >
+                            <summary class="cw-btn ghost sm" data-testid="edit-host">
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
 
-Edit tags</summary>
-            <div class="cw-editor-body">
-              <form method="post" action="/hosts/{{HOST_2_ID}}/tags" class="cw-form">
-                <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
-                <input class="cw-input" type="text" name="tags" aria-label="Tags" value="staging, edge"
-                       list="cw-all-tags" placeholder="comma-separated, e.g. prod, payments">
-                <datalist id="cw-all-tags">
-                  <option value="edge"></option><option value="leaf-tag"></option><option value="mail"></option><option value="production"></option><option value="staging"></option>
-                </datalist>
-                <div class="cw-hint">
-                  Tags apply to every certificate on this host.
-                  Tags group the estate, scope team access, and route alerts.
+Edit host</summary>
+                            <div class="cw-editor-body cw-detail-editor">
+                                <form method="post" action="/hosts/{{HOST_2_ID}}/edit" class="cw-form">
+                                    <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
+                                    <div class="cw-form-grid">
+                                        <div class="cw-field">
+                                            <label class="cw-label" for="host-owner-name">Owner name</label>
+                                            <input id="host-owner-name"
+                                                   name="owner_name"
+                                                   class="cw-input"
+                                                   value="Edge Team">
+                                        </div>
+                                        <div class="cw-field">
+                                            <label class="cw-label" for="host-owner-email">Owner email</label>
+                                            <input id="host-owner-email"
+                                                   name="owner_email"
+                                                   type="email"
+                                                   class="cw-input"
+                                                   value="">
+                                        </div>
+                                        <div class="cw-field">
+                                            <label class="cw-label" for="host-owner-slack">Slack channel</label>
+                                            <input id="host-owner-slack"
+                                                   name="owner_slack"
+                                                   class="cw-input"
+                                                   value="">
+                                        </div>
+                                        <div class="cw-field">
+                                            <label class="cw-label" for="host-renewal-method">Renewal method</label>
+                                            <select id="host-renewal-method" name="renewal_method" class="cw-select">
+                                                <option value="" >Unknown</option>
+                                                <option value="acme"
+                                                        >ACME</option>
+                                                <option value="cert-manager"
+                                                        selected>cert-manager</option>
+                                                <option value="manual"
+                                                        >Manual</option>
+                                            </select>
+                                        </div>
+                                        <div class="cw-field wide">
+                                            <label class="cw-label" for="host-runbook-url">Runbook URL</label>
+                                            <input id="host-runbook-url"
+                                                   name="runbook_url"
+                                                   type="url"
+                                                   class="cw-input"
+                                                   value="">
+                                        </div>
+                                        <div class="cw-field">
+                                            <label class="cw-label" for="endpoint-scan-interval">Scan interval (hours)</label>
+                                            <input id="endpoint-scan-interval"
+                                                   name="scan_interval_hours"
+                                                   type="number"
+                                                   step="1"
+                                                   min="1" max="8760"
+                                                   class="cw-input"
+                                                   value=""
+                                                   placeholder="Daily schedule">
+
+                                        </div>
+                                        <div class="cw-field">
+                                            <label class="cw-label" for="endpoint-threshold">Alert threshold (days)</label>
+                                            <input id="endpoint-threshold"
+                                                   name="threshold_days"
+                                                   type="number"
+                                                   min="1"
+                                                   step="1"
+                                                   class="cw-input"
+                                                   value="21"
+                                                   placeholder="Automatic">
+                                        </div>
+                                        <div class="cw-field wide">
+                                            <label class="cw-label" for="endpoint-renewal-status">Renewal status reported by operator</label>
+                                            <select id="endpoint-renewal-status" name="renewal_status" class="cw-select">
+                                                <option value="pending"
+                                                        selected>No completion reported</option>
+                                                <option value="in_progress"
+                                                        >In progress — operator reported</option>
+                                            </select>
+                                            <p class="cw-hint" id="endpoint-renewal-help">Operator-reported progress is not proof of renewal; it never suppresses expiry or expired alerts. A later scan confirms the replacement certificate.</p>
+                                        </div>
+                                        <div class="cw-field wide">
+                                            <label class="cw-label" for="host-tags">Tags</label>
+                                            <input id="host-tags"
+                                                   name="tags"
+                                                   class="cw-input"
+                                                   value="staging, edge"
+                                                   list="cw-all-tags">
+                                            <datalist id="cw-all-tags">
+                                                <option value="edge"></option><option value="leaf-tag"></option><option value="mail"></option><option value="production"></option><option value="staging"></option>
+                                            </datalist>
+                                            <p class="cw-hint">
+
+                                                    Tags apply to this endpoint.
+
+                                                Tags control scope, routing and grouping.
+                                            </p>
+                                        </div>
+                                        <div class="cw-field wide">
+                                            <label class="cw-label" for="host-notes">Notes</label>
+                                            <textarea id="host-notes"
+                                                      name="notes"
+                                                      class="cw-textarea"
+                                                      rows="5"
+                                                      maxlength="10000"
+                                                      data-testid="notes-editor">Waiting for the first successful observation.</textarea>
+                                        </div>
+                                    </div>
+                                    <div class="cw-form-foot">
+                                        <button type="submit" class="cw-btn primary sm" data-testid="save-host">Save host</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </details>
+
                 </div>
-                <div class="cw-form-foot"><button type="submit" class="cw-btn primary sm">Save tags</button></div>
-              </form>
-            </div>
-          </details>
+                <div class="cw-panel-body">
+
+                    <dl class="cw-detail-owner">
+                        <div>
+                            <dt>Owner</dt>
+                            <dd>
+                                Edge Team
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>Contact</dt>
+                            <dd>
+
+                                    None
+
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>Runbook</dt>
+                            <dd>
+
+                                    None
+
+                            </dd>
+                        </div>
+                    </dl>
+                    <div class="cw-table-wrap cw-detail-route-wrap">
+                        <table class="cw-table cw-detail-route">
+                            <thead>
+                                <tr>
+                                    <th>Recipient</th>
+                                    <th>Via</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+
+                                    <tr>
+                                        <td>No matching alert group</td>
+                                        <td>Alert group</td>
+                                        <td>
+                                            <span class="t-warn">Routing gap</span>
+                                            <div class="cw-sub">Assign an owner or add a group whose tags match.</div>
+                                        </td>
+                                    </tr>
+
+                            </tbody>
+                        </table>
+                    </div>
+
+
+                        <dl class="cw-detail-owner cw-detail-host-facts">
+                            <div>
+                                <dt>Renewal method</dt>
+                                <dd>
+                                    cert-manager
+
+                                        <div class="cw-sub">automation configured</div>
+
+                                </dd>
+                            </div>
+                            <div>
+                                <dt>Scan cadence</dt>
+                                <dd>
+                                    Daily schedule
+                                </dd>
+                            </div>
+                            <div>
+                                <dt>Alert threshold</dt>
+                                <dd>
+                                    21 days
+                                </dd>
+                            </div>
+
+                            <div>
+                                <dt>Notes</dt>
+                                <dd data-testid="notes-view">
+                                    Waiting for the first successful observation.
+                                </dd>
+                            </div>
+                        </dl>
+                        <p class="cw-hint">operational notes for this host</p>
+
+                </div>
+            </section>
+
+                <section class="cw-panel cw-detail-disclosures">
+                    <details id="history" data-testid="history-disclosure">
+                        <summary><span><b>History</b><span class="cw-sub">scan attempts</span></span></summary>
+                        <div class="cw-detail-disclosure-body">
+
+                                <dl class="cw-detail-owner">
+                                    <div>
+                                        <dt>Latest attempt</dt>
+                                        <dd>
+
+    2026-09-22 12:00 UTC
+
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt>Next eligible attempt</dt>
+                                        <dd>
+
+    2026-09-22 13:00 UTC
+
+                                        </dd>
+                                    </div>
+                                </dl>
+
+                        </div>
+                    </details>
+                </section>
 
         </div>
-        <div class="cw-panel-body">
-
-
-          <div class="cw-chiprow">
-
-              <span class="cw-chip">staging</span>
-
-              <span class="cw-chip">edge</span>
-
-          </div>
-
-        </div>
-      </div>
-
-
-
-
-      <div class="cw-panel">
-        <div class="cw-panel-body">
-          <div class="cw-note">
-
-
-    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-
-
-            <div>
-              <b>Why is this host pending?</b>
-              <div>No certificate is currently stored for this endpoint. Review its latest scan result and connection settings.
-              Click <strong>Scan now</strong> to check it, or <strong>Remove</strong> if this host should not be monitored.</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
     </div>
-
-
-  </div>
-</div>
 
     </main>
   </div>

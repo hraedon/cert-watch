@@ -158,6 +158,30 @@ class CertificateAlertView:
 
 
 @dataclass(frozen=True)
+class DetailAxisView:
+    label: str
+    value: str
+    detail: str
+    tone: str = "t-muted"
+
+
+@dataclass(frozen=True)
+class DetailActionView:
+    title: str
+    detail: str
+    command: str = ""
+
+
+@dataclass(frozen=True)
+class DeliveryRouteView:
+    recipient: str
+    via: str
+    status: str
+    detail: str
+    tone: str = "t-muted"
+
+
+@dataclass(frozen=True)
 class CertificateDetailView:
     cert: CertificateView | None
     cert_id: str
@@ -218,6 +242,10 @@ class CertificateDetailView:
     delivery: str = "unrouted"
     overall_label: str = "Unknown"
     overall_tone: str = "t-muted"
+    axes: tuple[DetailAxisView, ...] = ()
+    actions: tuple[DetailActionView, ...] = ()
+    delivery_routes: tuple[DeliveryRouteView, ...] = ()
+    reveal_delivery_identities: bool = False
 
     def template_context(self) -> dict[str, Any]:
         """Expose one stable boundary to Jinja or a future JSON serializer."""
@@ -515,6 +543,235 @@ def _axis_display(
     return condition, monitoring, renewal, delivery, label, tone
 
 
+def _when(value: object) -> str:
+    return _scan_time_label(str(value)) if value else "an unknown time"
+
+
+def _condition_words(days: int, condition: str | None) -> str:
+    if condition == "expired" or days < 0:
+        amount = abs(days)
+        return f"Expired {amount} day{'s' if amount != 1 else ''} ago"
+    return f"Expires in {days} day{'s' if days != 1 else ''}"
+
+
+def _detail_axes(
+    *,
+    model: dict[str, Any] | None,
+    cert: Certificate | None,
+    host: Any,
+    evidence: ScanEvidence | None,
+    days: int,
+) -> tuple[DetailAxisView, ...]:
+    status = model or {}
+    condition = str((status.get("condition") or {}).get("state") or "") or None
+    monitoring_data = status.get("monitoring") or {}
+    monitoring = str(monitoring_data.get("state") or "never_scanned")
+    renewal = str((status.get("renewal") or {}).get("state") or "unknown")
+    delivery_data = status.get("delivery") or {}
+    delivery = str(delivery_data.get("state") or "unrouted")
+
+    if cert is None:
+        certificate_axis = DetailAxisView(
+            "Certificate", "No certificate observed",
+            "A successful scan has not stored certificate evidence yet.",
+        )
+    else:
+        words = _condition_words(days, condition)
+        tone = {
+            "expired": "t-expired", "le7": "t-crit", "8to30": "t-warn", "ok": "t-ok",
+        }.get(condition or "", "t-muted")
+        detail = (
+            f"Issued {cert.not_before:%Y-%m-%d} · expires {cert.not_after:%Y-%m-%d}."
+        )
+        if monitoring not in {"current", "not_monitored"}:
+            words = f"Last seen {words.lower()}"
+            tone = "t-muted"
+            last_seen = evidence.last_success if evidence else None
+            detail = (
+                "Certificate facts are earlier evidence from the last successful "
+                f"scan at {_when(last_seen)}. "
+                "cert-watch can't confirm what the server serves now."
+            )
+        certificate_axis = DetailAxisView("Certificate", words, detail, tone)
+
+    if monitoring == "not_monitored":
+        monitoring_axis = DetailAxisView(
+            "Monitoring", "Not monitored",
+            "Uploaded certificate evidence does not have an endpoint or scan cadence.",
+        )
+    elif monitoring == "current":
+        detail = f"Last scanned {_when(evidence.last_success if evidence else None)}"
+        if evidence and evidence.due_at:
+            detail += f" · next due {_when(evidence.due_at)}"
+        monitoring_axis = DetailAxisView("Monitoring", "Current", detail, "t-ok")
+    elif monitoring == "failing":
+        since = monitoring_data.get("since")
+        cause = str(monitoring_data.get("cause") or "No current successful observation.")
+        if evidence and evidence.next_attempt_at:
+            cause += f" Automatic retry eligible {_when(evidence.next_attempt_at)}."
+        value = f"Failing since {_when(since)}"
+        if (
+            evidence
+            and evidence.state == "overdue"
+            and evidence.attempt_status != "failure"
+        ):
+            value = f"Scan overdue since {_when(evidence.due_at)}"
+        monitoring_axis = DetailAxisView(
+            "Monitoring", value, cause, "t-warn"
+        )
+    else:
+        monitoring_axis = DetailAxisView(
+            "Monitoring", "Never scanned",
+            "No successful certificate observation is recorded.",
+        )
+
+    renewal_value, renewal_tone = {
+        "automation_configured": ("Automation configured", "t-ok"),
+        "manual": ("Manual", "t-muted"),
+        "stalled": ("Stalled", "t-crit"),
+        "in_progress": ("In progress", "t-warn"),
+        "unknown": ("Unknown", "t-muted"),
+    }.get(renewal, (renewal.replace("_", " ").title(), "t-muted"))
+    method = getattr(host, "renewal_method", "") if host else ""
+    renewal_detail = {
+        "stalled": "The renewal window is open and no replacement certificate has appeared.",
+        "in_progress": "An operator reported that renewal work is under way.",
+        "manual": "This endpoint is recorded as requiring manual renewal.",
+        "automation_configured": (
+            f"{_renewal_display(method)[0] or 'Automated renewal'} is configured."
+        ),
+    }.get(renewal, "No renewal method or reliable renewal pattern is recorded.")
+    renewal_axis = DetailAxisView("Renewal", renewal_value, renewal_detail, renewal_tone)
+
+    delivery_value, delivery_tone = {
+        "ok": ("Delivery ready", "t-ok"),
+        "failing": ("Delivery failing", "t-crit"),
+        "unrouted": ("No specific route", "t-warn"),
+    }.get(delivery, (delivery.replace("_", " ").title(), "t-muted"))
+    channels = delivery_data.get("channels") or []
+    ready = sum(bool(c.get("can_deliver")) for c in channels if isinstance(c, dict))
+    delivery_detail = (
+        f"{ready} delivery channel{'s' if ready != 1 else ''} ready."
+        if delivery == "ok"
+        else (
+            "The configured route cannot currently deliver an alert."
+            if delivery == "failing"
+            else "Assign an owner or matching alert group for certificate-specific routing."
+        )
+    )
+    return (
+        certificate_axis,
+        monitoring_axis,
+        renewal_axis,
+        DetailAxisView("Alerts", delivery_value, delivery_detail, delivery_tone),
+    )
+
+
+def _detail_actions(
+    *, view_status: dict[str, Any] | None, hostname: str, port: int,
+    days: int, runbook_url: str, chain_guidance: ChainGuidance | None,
+) -> tuple[DetailActionView, ...]:
+    status = view_status or {}
+    monitoring = status.get("monitoring") or {}
+    condition = (status.get("condition") or {}).get("state")
+    delivery = status.get("delivery") or {}
+    actions: list[DetailActionView] = []
+    if monitoring.get("state") == "failing":
+        cause = str(monitoring.get("cause") or "The endpoint has no current observation.")
+        actions.append(DetailActionView(
+            f"Check the service on {hostname}:{port}.",
+            cause,
+            f"openssl s_client -connect {hostname}:{port} -servername {hostname}",
+        ))
+    if condition in {"expired", "le7", "8to30"}:
+        timing = "now" if condition == "expired" else ("today" if condition == "le7" else "soon")
+        detail = _condition_words(days, str(condition)) + "."
+        if runbook_url:
+            detail += f" Follow the runbook: {runbook_url}"
+        actions.append(DetailActionView(f"Renew the certificate {timing}.", detail))
+    if bool(status.get("chain_trust_problem")) and chain_guidance:
+        actions.append(DetailActionView(chain_guidance.title + ".", chain_guidance.remediation))
+    if not delivery.get("recipients") and not delivery.get("matching_groups"):
+        actions.append(DetailActionView(
+            "Assign an owner or alert group.",
+            "No certificate-specific recipient route matches this certificate.",
+        ))
+    for channel in delivery.get("channels") or []:
+        if not isinstance(channel, dict):
+            continue
+        name = str(channel.get("channel") or "delivery channel")
+        if channel.get("recipients") and not channel.get("configured") and name == "smtp":
+            actions.append(DetailActionView(
+                "Configure email delivery.",
+                "Recipients are resolved, but SMTP and the From address are not configured.",
+            ))
+        if channel.get("last_outcome") in {"failed", "partial", "unknown"}:
+            actions.append(DetailActionView(
+                f"Check {name.replace(':', ' ')} delivery.",
+                f"The latest attempt failed at {_when(channel.get('last_attempt_at'))}.",
+            ))
+    return tuple(actions)
+
+
+def _delivery_routes(
+    model: dict[str, Any] | None, *, reveal: bool
+) -> tuple[DeliveryRouteView, ...]:
+    delivery = (model or {}).get("delivery") or {}
+    rows: list[DeliveryRouteView] = []
+    for channel in delivery.get("channels") or []:
+        if not isinstance(channel, dict):
+            continue
+        raw_channel = str(channel.get("channel") or "")
+        via = "Email" if raw_channel == "smtp" else "Webhook"
+        recipients = [str(value) for value in channel.get("recipients") or []]
+        if reveal and recipients:
+            labels = recipients
+        elif raw_channel == "smtp":
+            labels = [
+                f"{len(recipients)} recipient{'s' if len(recipients) != 1 else ''}"
+            ]
+        elif recipients:
+            labels = [
+                f"{len(recipients)} routed group{'s' if len(recipients) != 1 else ''}"
+            ]
+        else:
+            labels = ["Global webhook"]
+        configured = bool(channel.get("configured"))
+        outcome = channel.get("last_outcome")
+        if not configured:
+            state, tone, detail = "Not configured", "t-warn", f"{via} is not configured."
+        elif outcome in {"failed", "partial", "unknown"}:
+            state, tone = "Failing", "t-crit"
+            detail = f"Latest delivery failed at {_when(channel.get('last_attempt_at'))}."
+        elif channel.get("can_deliver"):
+            state, tone = (
+                ("Last delivery worked", "t-ok")
+                if outcome == "accepted"
+                else ("Ready", "t-ok")
+            )
+            detail = "The channel is configured and has a route."
+        else:
+            state, tone, detail = "No route", "t-warn", "No recipient route is available."
+        rows.extend(DeliveryRouteView(label, via, state, detail, tone) for label in labels)
+    groups = [str(value) for value in delivery.get("matching_groups") or []]
+    if reveal:
+        rows.extend(
+            DeliveryRouteView(group, "Alert group", "Matched", "Routes by effective tags.")
+            for group in groups
+        )
+    elif groups:
+        rows.append(DeliveryRouteView(
+            f"{len(groups)} matching group{'s' if len(groups) != 1 else ''}",
+            "Alert group", "Matched", "Group identities are hidden for read-only access.",
+        ))
+    if not groups:
+        rows.append(DeliveryRouteView(
+            "No matching alert group", "Alert group", "Routing gap",
+            "Assign an owner or add a group whose tags match.", "t-warn",
+        ))
+    return tuple(rows)
+
+
 def present_certificate_detail(
     data: CertificateDetailData,
     *,
@@ -525,6 +782,7 @@ def present_certificate_detail(
     superseded: bool = False,
     scanned: bool = False,
     added: bool = False,
+    reveal_delivery_identities: bool = False,
     now: datetime | None = None,
 ) -> CertificateDetailView:
     """Build either stored-certificate or pending-host detail view."""
@@ -537,6 +795,13 @@ def present_certificate_detail(
         shown_tags = tuple(TagView(tag, False) for tag in parse_tags(host.tags))
         condition, monitoring, renewal, delivery, overall_label, overall_tone = _axis_display(
             data.status, endpoint=True
+        )
+        axes = _detail_axes(
+            model=data.status,
+            cert=None,
+            host=host,
+            evidence=data.scan_evidence,
+            days=0,
         )
         return CertificateDetailView(
             cert=None,
@@ -600,6 +865,19 @@ def present_certificate_detail(
             delivery=delivery,
             overall_label=overall_label,
             overall_tone=overall_tone,
+            axes=axes,
+            actions=_detail_actions(
+                view_status=data.status,
+                hostname=host.hostname,
+                port=host.port,
+                days=0,
+                runbook_url=host.runbook_url or "",
+                chain_guidance=None,
+            ),
+            delivery_routes=_delivery_routes(
+                data.status, reveal=reveal_delivery_identities
+            ),
+            reveal_delivery_identities=reveal_delivery_identities,
         )
 
     technical = present_certificate_technical_details(
@@ -626,6 +904,13 @@ def present_certificate_detail(
     cert_tag_set = set(data.cert_tags)
     condition, monitoring, renewal, delivery, overall_label, overall_tone = _axis_display(
         data.status, endpoint=data.host is not None
+    )
+    axes = _detail_axes(
+        model=data.status,
+        cert=data.cert,
+        host=data.host,
+        evidence=data.scan_evidence,
+        days=technical.days_remaining,
     )
     return CertificateDetailView(
         cert=CertificateView(
@@ -716,4 +1001,17 @@ def present_certificate_detail(
         delivery=delivery,
         overall_label=overall_label,
         overall_tone=overall_tone,
+        axes=axes,
+        actions=_detail_actions(
+            view_status=data.status,
+            hostname=data.hostname or technical.subject_cn,
+            port=data.port,
+            days=technical.days_remaining,
+            runbook_url=data.host.runbook_url if data.host else "",
+            chain_guidance=guidance,
+        ),
+        delivery_routes=_delivery_routes(
+            data.status, reveal=reveal_delivery_identities
+        ),
+        reveal_delivery_identities=reveal_delivery_identities,
     )

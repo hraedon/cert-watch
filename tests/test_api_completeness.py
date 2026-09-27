@@ -19,6 +19,7 @@ HTML_TO_JSON: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/hosts/import"): ("POST", "/api/hosts/import"),
     ("POST", "/hosts/all/scan"): ("POST", "/api/hosts/scan"),
     ("POST", "/hosts/{host_id}/settings"): ("PATCH", "/api/hosts/{host_id}/settings"),
+    ("POST", "/hosts/{resource_id}/edit"): ("PUT", "/api/hosts/{resource_id}"),
     ("POST", "/hosts/{host_id}/notes"): ("PATCH", "/api/hosts/{host_id}/notes"),
     ("POST", "/hosts/{host_id}/tags"): ("PUT", "/api/hosts/{host_id}/tags"),
     ("POST", "/hosts/{host_id}/expected-issuers"): ("PUT", "/api/hosts/{host_id}/issuers"),

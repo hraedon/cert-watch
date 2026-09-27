@@ -162,14 +162,14 @@ def test_host_notes_editor_has_distinct_view_and_edit_states(
 
     view = page.get_by_test_id("notes-view")
     editor = page.get_by_test_id("notes-editor")
-    expect(view).to_have_text("No operational notes for this host.")
+    expect(view).to_have_text("None")
     expect(editor).not_to_be_visible()
-    page.get_by_test_id("notes-edit-toggle").click()
-    expect(view).not_to_be_visible()
+    page.get_by_test_id("edit-host").click()
+    expect(view).to_be_visible()
     expect(editor).to_be_visible()
     expect(editor).to_be_editable()
     editor.fill("Renew through the network team.")
-    page.get_by_test_id("notes-save").click()
+    page.get_by_test_id("save-host").click()
 
     page.goto(detail_url)
     expect(page.get_by_test_id("notes-view")).to_have_text(

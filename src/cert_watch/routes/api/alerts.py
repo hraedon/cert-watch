@@ -457,7 +457,8 @@ def api_cert_alert_routing(
         cert_id,
         {"state": "unrouted", "recipients": [], "matching_groups": [], "channels": []},
     )
-    reveal_details = delivery_details_allowed(request)
+    effective = cert_repo.effective_tags(cert_id)
+    reveal_details = delivery_details_allowed(request, effective_tags=effective)
 
     # Alert-group routing applies only to leaf certificates — the batch
     # resolver (_resolve_group_config) filters on is_leaf=1. Return an empty
@@ -466,7 +467,7 @@ def api_cert_alert_routing(
     if not cert.is_leaf:
         content: dict[str, Any] = {
             "cert_id": cert_id,
-            "effective_tags": cert_repo.effective_tags(cert_id),
+            "effective_tags": effective,
             "matched_groups": [],
             "recipients": [],
             "delivery": delivery_for_api(delivery, reveal_details=reveal_details),
@@ -481,13 +482,12 @@ def api_cert_alert_routing(
         return JSONResponse(
             content={
                 "cert_id": cert_id,
-                "effective_tags": cert_repo.effective_tags(cert_id),
+                "effective_tags": effective,
                 "delivery": delivery_for_api(delivery, reveal_details=False),
             }
         )
 
     group_repo = SqliteAlertGroupRepository(db)
-    effective = cert_repo.effective_tags(cert_id)
     manual_ids = set(group_repo.groups_for_cert_manual(cert_id))
 
     from cert_watch.alerting.routing import resolve_group_recipients

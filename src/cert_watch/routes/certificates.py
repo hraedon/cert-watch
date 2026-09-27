@@ -13,16 +13,18 @@ from cert_watch import __commit__, __version__
 from cert_watch.audit import resolve_actor, resolve_source_ip
 from cert_watch.auth.guards import (
     admin_form_guard,
+    form_write_error,
     get_auth_context,
     write_form_guard,
 )
-from cert_watch.auth.scope import ScopeDeniedError
+from cert_watch.auth.scope import ScopeDeniedError, may_reveal_routing_identities
 from cert_watch.database import resolve_current_certificate
 from cert_watch.presenters.certificate_detail import present_certificate_detail
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth, get_templates
 from cert_watch.routes._scoped import (
     scope_read_denied,
     scope_tags_from_auth,
+    scope_write_denied,
     superseded_redirect,
     tags_with_scope,
 )
@@ -128,17 +130,31 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
     if denied:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     host_id = data.host.id if data.host is not None else ""
+    resource_writable = (
+        endpoint_settings_writable(request, db, host_id)
+        if host_id
+        else (
+            form_write_error(request) is None
+            and scope_write_denied(request, db, cert_id=cert_id) is None
+        )
+    )
+    effective_tags = (
+        data.effective_tags
+        if not isinstance(data, PendingHostDetailData)
+        else tuple(tag.strip() for tag in data.host.tags.split(",") if tag.strip())
+    )
     view = present_certificate_detail(
         data,
-        settings_writable=(
-            endpoint_settings_writable(request, db, host_id) if host_id else False
-        ),
+        settings_writable=resource_writable,
         slack_configured=settings.webhook_kind == "slack",
         endpoint_saved=bool(request.query_params.get("endpoint_saved")),
         endpoint_error=request.query_params.get("endpoint_error", ""),
         superseded=bool(request.query_params.get("superseded")),
         scanned=bool(request.query_params.get("scanned")),
         added=bool(request.query_params.get("added")),
+        reveal_delivery_identities=may_reveal_routing_identities(
+            getattr(request.state, "auth_context", None), effective_tags
+        ),
     )
     return templates.TemplateResponse(
         request=request,
@@ -148,11 +164,18 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             "version": __version__,
             "commit": __commit__,
             **get_auth_context(request),
+            "may_write": resource_writable,
             "active_page": "browse",
+            # Estate-wide "last scan failed" is misleading beside this
+            # endpoint's own monitoring state. Detail has the authoritative
+            # per-host four-axis block instead.
+            "hide_health_banner": True,
             # Flash messages from actions that return here (tags, owner,
             # Scan now); base.html renders them.
             "error": request.query_params.get("error", ""),
             "warning": request.query_params.get("warning", ""),
+            "host_saved": bool(request.query_params.get("host_saved")),
+            "edit_open": bool(request.query_params.get("edit")),
             **get_csrf_context(request),
         },
     )

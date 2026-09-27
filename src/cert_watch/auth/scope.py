@@ -229,6 +229,16 @@ def writable_scope_tags(auth_ctx: Any) -> tuple[str, ...] | None:
     return writable or None
 
 
+def may_reveal_routing_identities(
+    auth_ctx: Any, effective_tags: list[str] | tuple[str, ...]
+) -> bool:
+    """Apply the certificate-specific recipient-identity visibility rule."""
+    if auth_ctx is None or getattr(auth_ctx, "is_admin", False):
+        return True
+    may_write_tags = getattr(auth_ctx, "may_write_tags", None)
+    return bool(callable(may_write_tags) and may_write_tags(effective_tags))
+
+
 def ensure_new_tags_in_scope(auth_ctx: Any, new_tags: str) -> None:
     """Raise :class:`ScopeDeniedError` unless every tag is within scope."""
     require_auth_context(auth_ctx)

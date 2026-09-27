@@ -1132,7 +1132,7 @@ def test_every_home_status_number_matches_the_linked_rows(
     assert "not_monitored" not in home
 
 
-def test_delivery_identities_are_admin_only_across_read_apis(
+def test_delivery_identities_follow_certificate_write_access_across_read_apis(
     tmp_path, reload_app, monkeypatch, login_csrf
 ):
     import json
@@ -1231,13 +1231,16 @@ def test_delivery_identities_are_admin_only_across_read_apis(
             f"/api/certificates/{cert_id}/alert-routing",
         )
         admin_bodies = [client.get(path).json() for path in paths]
-        for username in ("viewer", "operator"):
+        for username, reveal in (("viewer", False), ("operator", True)):
             login(client, username)
             for path in paths:
                 response = client.get(path)
                 assert response.status_code == 200
                 serialized = json.dumps(response.json(), sort_keys=True)
-                assert all(secret not in serialized for secret in secrets)
+                if reveal:
+                    assert "team-a@example.test" in serialized
+                else:
+                    assert all(secret not in serialized for secret in secrets)
                 delivery_blocks = []
 
                 def collect(value, blocks):
@@ -1254,16 +1257,17 @@ def test_delivery_identities_are_admin_only_across_read_apis(
                 if path.endswith("/alert-routing"):
                     delivery_blocks.append(response.json()["delivery"])
                 assert delivery_blocks
-                for delivery in delivery_blocks:
-                    assert "recipients" not in delivery
-                    assert "matching_groups" not in delivery
-                    assert set(delivery) == {
-                        "state", "recipient_count", "matching_group_count", "channels"
-                    }
-                    assert all(set(channel) == {"channel", "route_count"}
-                               for channel in delivery["channels"])
+                if not reveal:
+                    for delivery in delivery_blocks:
+                        assert "recipients" not in delivery
+                        assert "matching_groups" not in delivery
+                        assert set(delivery) == {
+                            "state", "recipient_count", "matching_group_count", "channels"
+                        }
+                        assert all(set(channel) == {"channel", "route_count"}
+                                   for channel in delivery["channels"])
 
-        for scope in ("read", "write"):
+        for scope, reveal in (("read", False), ("write", True)):
             client.cookies.delete(SESSION_COOKIE)
             response = client.get(
                 f"/api/certificates/{cert_id}/alert-routing",
@@ -1271,15 +1275,19 @@ def test_delivery_identities_are_admin_only_across_read_apis(
             )
             assert response.status_code == 200
             serialized = json.dumps(response.json(), sort_keys=True)
-            assert all(secret not in serialized for secret in secrets)
             delivery = response.json()["delivery"]
-            assert set(delivery) == {
-                "state", "recipient_count", "matching_group_count", "channels"
-            }
-            assert all(
-                set(channel) == {"channel", "route_count"}
-                for channel in delivery["channels"]
-            )
+            if reveal:
+                assert "team-a@example.test" in serialized
+                assert "recipients" in delivery
+            else:
+                assert all(secret not in serialized for secret in secrets)
+                assert set(delivery) == {
+                    "state", "recipient_count", "matching_group_count", "channels"
+                }
+                assert all(
+                    set(channel) == {"channel", "route_count"}
+                    for channel in delivery["channels"]
+                )
 
         response = client.get(
             f"/api/certificates/{cert_id}/alert-routing",
@@ -1306,3 +1314,136 @@ def test_delivery_identities_are_admin_only_across_read_apis(
 
     admin_text = json.dumps(admin_bodies, sort_keys=True)
     assert secrets <= {secret for secret in secrets if secret in admin_text}
+
+
+def test_per_tag_writer_sees_identities_only_for_writable_certificates(
+    tmp_path, reload_app, monkeypatch, login_csrf
+):
+    """A mixed role may inspect both teams but only de-anonymizes its write tag."""
+    from fastapi.testclient import TestClient
+
+    from cert_watch.auth import _scrypt_hash
+    from cert_watch.database import (
+        Role,
+        SqliteRoleRepository,
+        SqliteUserRepository,
+        User,
+        kv_set,
+    )
+
+    db, _ = _seed(tmp_path, "cert-watch.sqlite3")
+    password = "example-password"
+    password_hash = _scrypt_hash(password, n=2**4, r=1, p=1)
+    kv_set(db, "local_admin_user", "admin")
+    kv_set(db, "local_admin_password_hash", password_hash)
+    kv_set(db, "setup_complete", "1")
+    SqliteAlertGroupRepository(db).create(
+        name="Team B responders",
+        recipients=["team-b@example.test"],
+        match_tags=["team-b"],
+    )
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE hosts SET owner_email = ? WHERE hostname = ?",
+            ("owner-a@example.test", "manual.example.test"),
+        )
+        conn.execute(
+            "UPDATE hosts SET owner_email = ? WHERE hostname = ?",
+            ("owner-b@example.test", "auto.example.test"),
+        )
+        conn.commit()
+    roles = SqliteRoleRepository(db)
+    mixed_role = roles.add(
+        Role(
+            name="mixed-team-access",
+            permission_tier="viewer",
+            scope_tag="team-a, team-b",
+        )
+    )
+    roles.set_tag_tiers(
+        mixed_role, {"team-a": "operator", "team-b": "viewer"}
+    )
+    SqliteUserRepository(db).add(
+        User(
+            username="mixed",
+            email="mixed@example.test",
+            password_hash=password_hash,
+            role_id=mixed_role,
+        )
+    )
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.test")
+    monkeypatch.setenv("ALERT_FROM", "alerts@example.test")
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", lambda self: None)
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.stop", lambda self: None)
+    app_mod = reload_app()
+
+    def row_for(value, cert_id):
+        if isinstance(value, dict):
+            if value.get("id") == cert_id and isinstance(value.get("status"), dict):
+                return value
+            for child in value.values():
+                found = row_for(child, cert_id)
+                if found is not None:
+                    return found
+        elif isinstance(value, list):
+            for child in value:
+                found = row_for(child, cert_id)
+                if found is not None:
+                    return found
+        return None
+
+    with TestClient(app_mod.app) as client:
+        response = client.post(
+            "/login",
+            data={
+                "username": "mixed",
+                "password": password,
+                "_csrf_token": login_csrf(client),
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        listed = client.get("/api/certificates?limit=50").json()
+        own_id = next(
+            row["id"] for row in listed["certificates"]
+            if row["host"].startswith("manual.")
+        )
+        other_id = next(
+            row["id"] for row in listed["certificates"]
+            if row["host"].startswith("auto.")
+        )
+
+        surfaces = (
+            listed,
+            client.get("/api/export/certificates.json").json(),
+        )
+        for surface in surfaces:
+            own = row_for(surface, own_id)
+            other = row_for(surface, other_id)
+            assert own is not None and other is not None
+            assert "owner-a@example.test" in str(own["status"]["delivery"])
+            assert "Team A operators" in str(own["status"]["delivery"])
+            assert set(other["status"]["delivery"]) == {
+                "state", "recipient_count", "matching_group_count", "channels"
+            }
+            assert "team-b@example.test" not in str(other)
+            assert "Team B responders" not in str(other)
+
+        for cert_id, reveal, recipient, group_name in (
+            (own_id, True, "owner-a@example.test", "Team A operators"),
+            (other_id, False, "owner-b@example.test", "Team B responders"),
+        ):
+            for path in (
+                f"/api/certificates/{cert_id}",
+                f"/api/certificates/{cert_id}/alert-routing",
+            ):
+                body = client.get(path).json()
+                serialized = str(body)
+                assert (recipient in serialized) is reveal
+                assert (group_name in serialized) is reveal
+            html = client.get(f"/certificates/{cert_id}").text
+            assert (recipient in html) is reveal
+            assert (group_name in html) is reveal
+            assert ('data-testid="edit-host"' in html) is reveal
+            assert ("hidden for read-only access" in html) is (not reveal)

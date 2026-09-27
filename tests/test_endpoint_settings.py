@@ -200,7 +200,7 @@ def test_endpoint_editor_shows_state_without_claiming_verified_renewal(
     with TestClient(reload_app().app) as client:
         page = client.get(f"/certificates/{detail_id}")
         assert page.status_code == 200
-        assert f'action="/hosts/{host_id}/settings"' in page.text
+        assert f'action="/hosts/{detail_id}/edit"' in page.text
         assert 'name="scan_interval_hours"' in page.text
         assert 'name="threshold_days"' in page.text
         assert 'name="renewal_status"' in page.text

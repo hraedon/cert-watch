@@ -424,10 +424,10 @@ def routing_gap_sql(cert_alias: str | None, host_alias: str | None) -> str:
 
 def _latest_channel_outcomes(
     db_path: str | Path, cert_ids: tuple[str, ...]
-) -> dict[str, dict[str, str]]:
+) -> dict[str, dict[str, dict[str, str | None]]]:
     if not cert_ids:
         return {}
-    result: dict[str, dict[str, str]] = {}
+    result: dict[str, dict[str, dict[str, str | None]]] = {}
     from cert_watch.alerting.model import normalize_channel
 
     with _connect(db_path) as conn:
@@ -440,27 +440,33 @@ def _latest_channel_outcomes(
             rows = conn.execute(
                 f"""WITH normalized AS (
                     SELECT a.cert_id, cw_normalize_channel(e.channel) AS channel,
-                           e.details, e.id
+                           e.details, e.occurred_at, e.id
                     FROM alert_delivery_events e
                     JOIN alerts a ON a.id = e.alert_id
                     WHERE e.event_kind = 'completed' AND a.cert_id IN ({placeholders})
                 ), completed AS (
-                    SELECT cert_id, channel, details, id,
+                    SELECT cert_id, channel, details, occurred_at, id,
                            ROW_NUMBER() OVER (
                                PARTITION BY cert_id, channel ORDER BY id DESC
                            ) AS n
                     FROM normalized
                 )
-                SELECT cert_id, channel, json_extract(details, '$.outcome') AS outcome
+                SELECT cert_id, channel, occurred_at,
+                       json_extract(details, '$.outcome') AS outcome
                 FROM completed WHERE n = 1""",
                 chunk,
             ).fetchall()
             for row in rows:
                 channel = str(row["channel"])
                 outcome = row["outcome"]
-                result.setdefault(row["cert_id"], {})[channel] = (
-                    outcome if outcome in {"accepted", "partial", "failed"} else "unknown"
-                )
+                result.setdefault(row["cert_id"], {})[channel] = {
+                    "outcome": (
+                        outcome
+                        if outcome in {"accepted", "partial", "failed"}
+                        else "unknown"
+                    ),
+                    "at": row["occurred_at"],
+                }
     return result
 
 
@@ -492,6 +498,8 @@ def load_delivery_statuses(
         )
         smtp_recipients = tuple(dict.fromkeys((*cfg.global_recipients, *specific)))
         latest = outcomes.get(cert_id, {})
+        smtp_latest = latest.get("smtp", {})
+        webhook_latest = latest.get(f"webhook:{cfg.webhook_kind}", {})
         smtp_ok = cfg.smtp_configured and bool(smtp_recipients)
         webhook_ok = cfg.webhook_configured
         channels = (
@@ -500,14 +508,16 @@ def load_delivery_statuses(
                 "recipients": list(smtp_recipients),
                 "configured": cfg.smtp_configured,
                 "can_deliver": smtp_ok,
-                "last_outcome": latest.get("smtp"),
+                "last_outcome": smtp_latest.get("outcome"),
+                "last_attempt_at": smtp_latest.get("at"),
             },
             {
                 "channel": f"webhook:{cfg.webhook_kind}",
                 "recipients": list(groups),
                 "configured": cfg.webhook_configured,
                 "can_deliver": webhook_ok,
-                "last_outcome": latest.get(f"webhook:{cfg.webhook_kind}"),
+                "last_outcome": webhook_latest.get("outcome"),
+                "last_attempt_at": webhook_latest.get("at"),
             },
         )
         state = delivery_state(
@@ -516,8 +526,8 @@ def load_delivery_statuses(
             smtp_ok,
             cfg.webhook_configured,
             webhook_ok,
-            latest.get("smtp"),
-            latest.get(f"webhook:{cfg.webhook_kind}"),
+            smtp_latest.get("outcome"),
+            webhook_latest.get("outcome"),
         )
         context.delivery[cert_id] = {
             "state": state,
@@ -536,7 +546,7 @@ def _monitoring_axis(row: dict[str, Any]) -> dict[str, Any]:
         cause = (
             "No successful scan is recorded."
             if not row.get("monitoring_last_success")
-            else "The endpoint has no current successful observation."
+            else "The scheduled certificate observation is overdue."
         )
     return {
         "state": state,

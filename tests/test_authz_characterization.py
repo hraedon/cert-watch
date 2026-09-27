@@ -190,6 +190,7 @@ def _order_key(item: tuple[str, str, Any]) -> tuple[int, str, str]:
 
 
 _PARAM_TARGETS = {
+    "resource_id": ("host_a", "host_b", "cert_a", "cert_b"),
     "host_id": ("host_a", "host_b"),
     "cert_id": ("cert_a", "cert_b"),
     "alert_id": ("alert",),
@@ -261,6 +262,22 @@ def _body_for(route: Any, path: str) -> dict[str, Any]:
                 "renewal_status": "pending",
             }
         }
+    if path in {"/api/hosts/{resource_id}", "/hosts/{resource_id}/edit"}:
+        values: dict[str, Any] = {
+            "owner_name": "probe",
+            "owner_email": "",
+            "owner_slack": "",
+            "renewal_method": "",
+            "runbook_url": "",
+            "scan_interval_hours": None,
+            "threshold_days": None,
+            "renewal_status": "pending",
+            "notes": "probe",
+            "tags": "A",
+        }
+        if path.startswith("/api/"):
+            return {"json": values}
+        return {"data": {k: "" if v is None else str(v) for k, v in values.items()}}
     data: dict[str, str] = {"_probe": "1"}
     files: dict[str, Any] = {}
     dependant = getattr(route, "dependant", None)

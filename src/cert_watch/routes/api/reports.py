@@ -18,7 +18,6 @@ from cert_watch.routes._deps import _csv_safe, _db_path, _get_settings
 from cert_watch.routes._scoped import enforce_scope_tag, scope_tags_from_auth
 from cert_watch.routes.api._shared import (
     compliance_signing_key,
-    delivery_details_allowed,
     status_api_row,
 )
 from cert_watch.status_model import AxisSettings, overall_state
@@ -145,7 +144,7 @@ def api_export_certificates_json(
             "certificates": [
                 status_api_row(
                     row,
-                    reveal_delivery_details=delivery_details_allowed(request),
+                    request=request,
                 )
                 for row in rows
             ]

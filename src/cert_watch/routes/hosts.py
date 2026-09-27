@@ -37,6 +37,7 @@ from cert_watch.scan_freshness import (
 from cert_watch.scheduler import ScanHistory, record_scan_history
 from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
 from cert_watch.services.certificate_identity import CertificateSupersededError
+from cert_watch.services.host_edit import HostEditUpdate, edit_host
 from cert_watch.services.host_management import (
     HostNotFoundError as ManagedHostNotFoundError,
 )
@@ -206,6 +207,71 @@ def endpoint_settings_writable(request: Request, db: str | Path, host_id: str) -
     return (
         form_write_error(request) is None
         and scope_write_denied(request, db, host_id=host_id) is None
+    )
+
+
+@router.post("/hosts/{resource_id}/edit")
+async def edit_host_detail(
+    request: Request,
+    resource_id: IdParam,
+    owner_name: str = Form(""),
+    owner_email: str = Form(""),
+    owner_slack: str = Form(""),
+    renewal_method: str = Form(""),
+    runbook_url: str = Form(""),
+    scan_interval_hours: str = Form(""),
+    threshold_days: str = Form(""),
+    renewal_status: str = Form("pending"),
+    notes: str = Form(""),
+    tags: str = Form(""),
+    _auth: str = Depends(write_form_guard),
+) -> RedirectResponse:
+    """Save the detail page's one Edit host form in one transaction."""
+    if not check_rate_limit(f"host_edit:{_extract_client_ip(request)}", 30, 60):
+        return RedirectResponse(
+            url=f"/certificates/{resource_id}?error={quote('rate limited: too many requests')}",
+            status_code=303,
+        )
+    try:
+        edit_host(
+            _db_path(request),
+            resource_id,
+            HostEditUpdate(
+                owner_name=owner_name,
+                owner_email=owner_email,
+                owner_slack=owner_slack,
+                renewal_method=renewal_method,
+                runbook_url=runbook_url,
+                scan_interval_hours=scan_interval_hours.strip(),
+                threshold_days=threshold_days.strip(),
+                renewal_status=renewal_status,
+                notes=notes,
+                tags=tags,
+            ),
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+        from cert_watch.scheduler import wake_scheduler
+
+        wake_scheduler(getattr(request.app.state, "scheduler", None))
+    except CertificateSupersededError as exc:
+        return superseded_redirect(exc)
+    except ScopeDeniedError as exc:
+        return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
+    except (HostOwnershipTargetError, OwnershipHostNotFoundError, ManagedHostNotFoundError):
+        return RedirectResponse(url="/?error=host+not+found", status_code=303)
+    except (
+        HostOwnershipValidationError,
+        HostValidationError,
+        ResourceMetadataValidationError,
+    ) as exc:
+        return RedirectResponse(
+            url=f"/certificates/{resource_id}?error={quote(str(exc))}&edit=1",
+            status_code=303,
+        )
+    return RedirectResponse(
+        url=f"/certificates/{resource_id}?host_saved=1", status_code=303
     )
 
 

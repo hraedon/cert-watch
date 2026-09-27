@@ -20,7 +20,11 @@ from cert_watch.auth.guards import (
 from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.database import SqliteHostRepository, list_dashboard_page
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth
-from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth
+from cert_watch.routes._scoped import (
+    scope_read_denied,
+    scope_tags_from_auth,
+    superseded_json,
+)
 from cert_watch.routes.api._shared import (
     JsonBodyError,
     _normalize_pagination,
@@ -32,6 +36,8 @@ from cert_watch.routes.api._shared import (
     tags_from_json_body,
 )
 from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit, rate_limit
+from cert_watch.services.certificate_identity import CertificateSupersededError
+from cert_watch.services.host_edit import HostEditUpdate, edit_host
 from cert_watch.services.host_management import (
     HostNotFoundError as ManagedHostNotFoundError,
 )
@@ -52,6 +58,7 @@ from cert_watch.services.host_management import (
 )
 from cert_watch.services.host_ownership import (
     HostNotFoundError,
+    HostOwnershipTargetError,
     HostOwnershipUpdate,
     HostOwnershipValidationError,
     update_host_ownership,
@@ -63,6 +70,7 @@ from cert_watch.services.resource_metadata import (
     update_host_tags,
 )
 from cert_watch.status_model import AxisSettings
+from cert_watch.tags import parse_tags
 
 logger = logging.getLogger("cert_watch.routes.api.hosts")
 
@@ -93,6 +101,12 @@ class HostSettingsBody(BaseModel):
     scan_interval_hours: StrictInt | None = Field(ge=1, le=8760)
     threshold_days: StrictInt | None = Field(ge=1, le=2**63 - 1)
     renewal_status: Literal["pending", "in_progress"]
+
+
+_HOST_EDIT_FIELDS = {
+    "owner_name", "owner_email", "owner_slack", "renewal_method", "runbook_url",
+    "scan_interval_hours", "threshold_days", "renewal_status", "notes", "tags",
+}
 
 
 def _validation_error(exc: PydanticValidationError) -> JSONResponse:
@@ -251,7 +265,7 @@ def api_list_hosts(
     )
     page, limit, pages, _offset = _normalize_pagination(page, limit, total)
     repo = SqliteHostRepository(db)
-    page_hosts = [(repo.get(str(row["host_id"])), row["status"]) for row in rows]
+    page_hosts = [(repo.get(str(row["host_id"])), row) for row in rows]
 
     return JSONResponse(
         content={
@@ -270,11 +284,13 @@ def api_list_hosts(
                     "expected_issuers": h.expected_issuers,
                     "added_at": h.added_at.isoformat(),
                     "status": status_for_api(
-                        status,
-                        reveal_delivery_details=delivery_details_allowed(request),
+                        row["status"],
+                        reveal_delivery_details=delivery_details_allowed(
+                            request, effective_tags=parse_tags(row.get("tags", ""))
+                        ),
                     ),
                 }
-                for h, status in page_hosts
+                for h, row in page_hosts
                 if h is not None
             ],
             "pagination": {
@@ -284,6 +300,70 @@ def api_list_hosts(
                 "pages": pages,
                 **_pagination_links(request, "/api/hosts", page, limit, total),
             },
+        }
+    )
+
+
+@router.put("/api/hosts/{resource_id}")
+async def api_edit_host(
+    resource_id: IdParam,
+    request: Request,
+    _auth: str = Depends(json_write_guard),
+    _rl: None = Depends(rate_limit("host_edit", 30, 60)),
+) -> JSONResponse:
+    """JSON peer of the detail page's complete Edit host form."""
+    raw = await request.body()
+
+    def parse() -> HostEditUpdate:
+        body = json_body(raw)
+        missing = _HOST_EDIT_FIELDS - body.keys()
+        extra = body.keys() - _HOST_EDIT_FIELDS
+        if missing or extra:
+            raise JsonBodyError(
+                "host edit requires exactly: " + ", ".join(sorted(_HOST_EDIT_FIELDS))
+            )
+        return HostEditUpdate(**body)
+
+    try:
+        result = edit_host(
+            _db_path(request),
+            resource_id,
+            parse,
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+        from cert_watch.scheduler import wake_scheduler
+
+        wake_scheduler(getattr(request.app.state, "scheduler", None))
+    except CertificateSupersededError as exc:
+        return superseded_json(exc)
+    except ScopeDeniedError as exc:
+        return JSONResponse(status_code=403, content={"error": str(exc)})
+    except (HostOwnershipTargetError, HostNotFoundError, ManagedHostNotFoundError):
+        return JSONResponse(status_code=404, content={"error": "host not found"})
+    except (
+        JsonBodyError,
+        HostOwnershipValidationError,
+        HostValidationError,
+        ResourceMetadataValidationError,
+    ) as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    host = result.host
+    return JSONResponse(
+        content={
+            "id": host.id,
+            "owner_name": host.owner_name,
+            "owner_email": host.owner_email,
+            "owner_slack": host.owner_slack,
+            "renewal_method": host.renewal_method,
+            "runbook_url": host.runbook_url,
+            "scan_interval_hours": host.scan_interval_hours,
+            "threshold_days": host.threshold_days,
+            "renewal_status": host.renewal_status,
+            "notes": host.notes,
+            "tags": list(result.tags),
+            "tags_apply_to": result.tags_apply_to,
         }
     )
 
