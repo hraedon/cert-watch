@@ -45,6 +45,8 @@ class _Contract:
     transaction: Any
     mutation: str
     handoffs: tuple[tuple[Any, str], ...] = ()
+    advisory_authorizer: str | None = None
+    in_transaction_authorizer: str | None = None
 
 
 def _keys(*paths: str, method: str = "POST") -> set[str]:
@@ -111,7 +113,13 @@ _target(
     "POST /hosts/all/scan", "POST /api/hosts/scan",
 )
 _target(
-    _Contract(host_edit.edit_host, host_edit.edit_host, '"UPDATE hosts SET owner_name'),
+    _Contract(
+        host_edit.edit_host,
+        host_edit.edit_host,
+        '"UPDATE hosts SET owner_name',
+        advisory_authorizer="_authorize_tag_transition",
+        in_transaction_authorizer="_authorize_tag_transition",
+    ),
     "POST /hosts/{resource_id}/edit", "PUT /api/hosts/{resource_id}",
 )
 _target(
@@ -500,6 +508,25 @@ def test_every_scoped_target_service_authorizes_between_begin_and_mutation() -> 
             mutation_positions = _call_positions(contract.transaction, contract.mutation)
             assert begin_positions and guard_positions and mutation_positions, route
             assert min(begin_positions) < min(guard_positions) < min(mutation_positions), route
+            if contract.advisory_authorizer is not None:
+                authorizer_positions = _call_positions(
+                    contract.transaction,
+                    contract.advisory_authorizer,
+                    reject_conditionals=True,
+                )
+                assert any(
+                    position < min(begin_positions) for position in authorizer_positions
+                ), route
+            if contract.in_transaction_authorizer is not None:
+                authorizer_positions = _call_positions(
+                    contract.transaction,
+                    contract.in_transaction_authorizer,
+                    reject_conditionals=True,
+                )
+                assert any(
+                    min(begin_positions) < position < min(mutation_positions)
+                    for position in authorizer_positions
+                ), route
 
 
 def test_each_scoped_route_calls_its_mapped_service() -> None:

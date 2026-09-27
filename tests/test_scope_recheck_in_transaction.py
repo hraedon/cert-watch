@@ -44,6 +44,14 @@ update_host_tags(sys.argv[1], sys.argv[2], "team-b", auth=AuthContext.system(),
 print("moved")
 """
 
+_SET_RESOURCE_TAGS = r"""
+import sqlite3
+import sys
+with sqlite3.connect(sys.argv[1]) as conn:
+    conn.execute(f"UPDATE {sys.argv[2]} SET tags = ? WHERE id = ?", (sys.argv[4], sys.argv[3]))
+print("changed")
+"""
+
 
 @pytest.fixture(autouse=True)
 def _no_startup_scan(monkeypatch):
@@ -205,6 +213,152 @@ def test_combined_certificate_edit_rechecks_host_scope_after_two_process_race(
 
 
 @pytest.mark.parametrize("addressed_by", ["certificate", "host"])
+@pytest.mark.parametrize(
+    ("initial", "submitted", "concurrent"),
+    [
+        ("team-b", "team-b", "team-b,team-a"),
+        ("team-b,team-a", "team-b,team-a", "team-b"),
+    ],
+    ids=["foreign-tag-added", "foreign-tag-removed"],
+)
+def test_combined_edit_rechecks_tag_transition_after_two_process_race(
+    tmp_path, monkeypatch, addressed_by, initial, submitted, concurrent
+):
+    from cert_watch.services import host_edit
+    from cert_watch.services.host_edit import HostEditUpdate, edit_host
+
+    db, host_id, cert_id = _estate(tmp_path)
+    target_id = cert_id if addressed_by == "certificate" else host_id
+    table = "certificates" if addressed_by == "certificate" else "hosts"
+    if addressed_by == "certificate":
+        SqliteHostRepository(db).set_tags(host_id, "team-b")
+        SqliteCertificateRepository(db).set_tags(cert_id, initial)
+    else:
+        SqliteHostRepository(db).set_tags(host_id, initial)
+    real_begin = host_edit.begin_immediate
+    changed: list[str] = []
+
+    def change_then_begin(conn):
+        done = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                _SET_RESOURCE_TAGS,
+                str(db),
+                table,
+                target_id,
+                concurrent,
+            ],
+            cwd=Path(__file__).resolve().parent.parent,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert done.returncode == 0, done.stderr
+        changed.append(done.stdout.strip())
+        real_begin(conn)
+
+    monkeypatch.setattr(host_edit, "begin_immediate", change_then_begin)
+    auth = AuthContext.from_tier("team-b-operator", tier="operator", scope_tag="team-b")
+    with pytest.raises(PermissionError, match="scope"):
+        edit_host(
+            db,
+            target_id,
+            HostEditUpdate(
+                owner_name="attempted",
+                owner_email="owner@example.test",
+                owner_slack="",
+                renewal_method="manual",
+                runbook_url="https://runbooks.example.test/tls",
+                scan_interval_hours=12,
+                threshold_days=30,
+                renewal_status="pending",
+                notes="attempted",
+                tags=submitted,
+            ),
+            auth=auth,
+            actor="team-b-operator",
+            source_ip=None,
+        )
+    assert changed == ["changed"]
+    stored = (
+        SqliteCertificateRepository(db).get_tags(cert_id)
+        if addressed_by == "certificate"
+        else SqliteHostRepository(db).get(host_id).tags
+    )
+    assert stored == concurrent
+    host = SqliteHostRepository(db).get(host_id)
+    assert host is not None and (host.notes, host.owner_name) == ("", "")
+
+
+@pytest.mark.parametrize("resource", ["certificate", "host"])
+@pytest.mark.parametrize(
+    ("initial", "submitted", "concurrent"),
+    [
+        ("team-b", "team-b", "team-b,team-a"),
+        ("team-b,team-a", "team-b,team-a", "team-b"),
+    ],
+    ids=["foreign-tag-added", "foreign-tag-removed"],
+)
+def test_dedicated_tag_write_rechecks_transition_after_two_process_race(
+    tmp_path, monkeypatch, resource, initial, submitted, concurrent
+):
+    from cert_watch.services import resource_metadata
+
+    db, host_id, cert_id = _estate(tmp_path)
+    target_id = cert_id if resource == "certificate" else host_id
+    table = "certificates" if resource == "certificate" else "hosts"
+    if resource == "certificate":
+        SqliteHostRepository(db).set_tags(host_id, "team-b")
+        SqliteCertificateRepository(db).set_tags(cert_id, initial)
+        update = resource_metadata.update_certificate_tags
+    else:
+        SqliteHostRepository(db).set_tags(host_id, initial)
+        update = resource_metadata.update_host_tags
+    real_begin = resource_metadata.begin_immediate
+    changed: list[str] = []
+
+    def change_then_begin(conn):
+        done = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                _SET_RESOURCE_TAGS,
+                str(db),
+                table,
+                target_id,
+                concurrent,
+            ],
+            cwd=Path(__file__).resolve().parent.parent,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert done.returncode == 0, done.stderr
+        changed.append(done.stdout.strip())
+        real_begin(conn)
+
+    monkeypatch.setattr(resource_metadata, "begin_immediate", change_then_begin)
+    auth = AuthContext.from_tier("team-b-operator", tier="operator", scope_tag="team-b")
+    with pytest.raises(PermissionError, match="scope"):
+        update(
+            db,
+            target_id,
+            submitted,
+            auth=auth,
+            actor="team-b-operator",
+            source_ip=None,
+        )
+    assert changed == ["changed"]
+    stored = (
+        SqliteCertificateRepository(db).get_tags(cert_id)
+        if resource == "certificate"
+        else SqliteHostRepository(db).get(host_id).tags
+    )
+    assert stored == concurrent
+
+
+@pytest.mark.parametrize("addressed_by", ["certificate", "host"])
 def test_ownership(tmp_path, monkeypatch, addressed_by):
     db, host_id, cert_id = _estate(tmp_path)
     # The certificate remains visible to team-a after the host moves.  That
@@ -236,7 +390,11 @@ def test_host_notes_and_tags(tmp_path, monkeypatch, field):
     with _team_a_client(db, tmp_path) as client:
         r = getattr(client, method)(f"/api/hosts/{host_id}/{field}", json=body)
     assert moved == ["moved"]
-    assert (r.status_code, r.json()) == (403, _REFUSED)
+    assert r.status_code == 403
+    if field == "notes":
+        assert r.json() == _REFUSED
+    else:
+        assert "scope" in r.json()["error"]
     [host] = SqliteHostRepository(db).list_all()
     assert (host.tags, host.notes) == ("team-b", "")
 

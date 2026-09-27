@@ -678,6 +678,53 @@ def test_certificate_edit_refuses_foreign_tag_changes_for_scoped_writer(
     assert SqliteCertificateRepository(db).get_tags(cert_id) == initial
 
 
+@pytest.mark.parametrize("adapter", ["html", "json"])
+def test_host_addressed_edit_preserves_foreign_tag_spelling_for_scoped_writer(
+    tmp_path, reload_app, adapter
+):
+    from tests.test_tag_scoped_access import _make_scoped_app, _scoped_client
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    host_id = _host(db, tags="Team-A,team-b")
+    app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-b")
+    with _scoped_client(app, groups) as client:
+        response = _submit_edit(
+            client,
+            host_id,
+            adapter,
+            _edit_values(adapter, owner_name="Saved by team B", tags="TEAM-A,team-b"),
+        )
+    assert response.status_code == (303 if adapter == "html" else 200), response.text
+    host = SqliteHostRepository(db).get(host_id)
+    assert host is not None
+    assert (host.owner_name, host.tags) == ("Saved by team B", "Team-A,team-b")
+
+
+@pytest.mark.parametrize("adapter", ["html", "json"])
+def test_host_addressed_edit_refuses_foreign_tag_removal_for_scoped_writer(
+    tmp_path, reload_app, adapter
+):
+    from tests.test_tag_scoped_access import _make_scoped_app, _scoped_client
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    host_id = _host(db, tags="team-a,team-b")
+    before = SqliteHostRepository(db).get(host_id)
+    app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-b")
+    with _scoped_client(app, groups) as client:
+        response = _submit_edit(
+            client,
+            host_id,
+            adapter,
+            _edit_values(adapter, owner_name="Must not save", tags="team-b"),
+        )
+    assert response.status_code == (303 if adapter == "html" else 403)
+    error = response.headers.get("location", "") if adapter == "html" else response.text
+    assert "scope" in error
+    assert SqliteHostRepository(db).get(host_id) == before
+
+
 @pytest.mark.parametrize("tags", ["team-a,team-b", "team-b", ""])
 def test_mixed_tier_combined_edit_cannot_add_read_only_tags_or_leave_write_scope(tmp_path, tags):
     db = tmp_path / "cert-watch.sqlite3"

@@ -76,6 +76,30 @@ def test_certificate_tags_return_effective_host_tags(tmp_path: Path) -> None:
     assert SqliteCertificateRepository(db).get_tags(cert_id) == "prod,platform"
 
 
+def test_preserved_foreign_spelling_is_rechecked_against_tag_length(tmp_path: Path) -> None:
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    repo = SqliteHostRepository(db)
+    host_id = repo.add("metadata.example.test", tags="STRASSE,team-b")
+    added = "x" * 1986
+    auth = AuthContext.from_tier(
+        "team-b-operator", tier="operator", scope_tag=f"team-b,{added}"
+    )
+
+    with pytest.raises(ResourceMetadataValidationError, match="tags too long"):
+        update_host_tags(
+            db,
+            host_id,
+            f"straße,team-b,{added}",
+            auth=auth,
+            actor="team-b-operator",
+            source_ip=None,
+        )
+
+    stored = repo.get(host_id)
+    assert stored is not None and stored.tags == "STRASSE,team-b"
+
+
 def test_metadata_validation_and_missing_target_precede_audit(tmp_path: Path) -> None:
     db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)

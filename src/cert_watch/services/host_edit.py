@@ -9,12 +9,9 @@ from typing import Any
 
 from cert_watch.audit import export_audit, record_audit
 from cert_watch.auth.scope import (
-    ScopeDeniedError,
-    ensure_new_tags_in_scope,
     ensure_tag_update_retains_scope,
     ensure_write_scope,
     ensure_write_scope_on,
-    new_tags_scope_error,
     require_auth_context,
     unknown_target_scope_error,
 )
@@ -38,9 +35,10 @@ from cert_watch.services.host_ownership import (
 from cert_watch.services.resource_metadata import (
     MAX_NOTES_LENGTH,
     ResourceMetadataValidationError,
+    _authorize_tag_transition,
     normalize_tags,
 )
-from cert_watch.tags import format_tags, parse_tags
+from cert_watch.tags import parse_tags
 
 
 @dataclass(frozen=True)
@@ -118,31 +116,6 @@ def _validate(
             "Alert threshold must be a positive whole number within the stored range."
         )
     return ownership, interval, threshold, normalize_tags(update.tags)
-
-
-def _authorize_tag_transition(auth: Any, current: str, submitted: str) -> str:
-    """Allow foreign tags only when the edit leaves them logically untouched."""
-    current_tags = parse_tags(current)
-    submitted_tags = parse_tags(submitted)
-    current_by_key = {tag.casefold(): tag for tag in current_tags}
-    submitted_by_key = {tag.casefold(): tag for tag in submitted_tags}
-    protected = {
-        tag.casefold(): tag
-        for tag in current_tags
-        if new_tags_scope_error(auth, tag) is not None
-    }
-    for key, tag in protected.items():
-        if key not in submitted_by_key:
-            raise ScopeDeniedError(
-                f"tag '{tag}' is outside your writable scope and cannot be removed"
-            )
-        # Preserve the stored spelling of a tag the caller cannot modify.
-        submitted_by_key[key] = tag
-    additions = [
-        tag for tag in submitted_tags if tag.casefold() not in current_by_key
-    ]
-    ensure_new_tags_in_scope(auth, format_tags(additions))
-    return format_tags(submitted_by_key.values())
 
 
 def edit_host(

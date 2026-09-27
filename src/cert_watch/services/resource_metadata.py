@@ -21,10 +21,12 @@ from typing import Any
 
 from cert_watch.audit import export_audit, record_audit
 from cert_watch.auth.scope import (
+    ScopeDeniedError,
     ensure_new_tags_in_scope,
     ensure_tag_update_retains_scope,
     ensure_write_scope,
     ensure_write_scope_on,
+    new_tags_scope_error,
     require_auth_context,
     unknown_target_scope_error,
 )
@@ -151,6 +153,34 @@ def normalize_tags(tags: Any) -> str:
     return normalized
 
 
+def _authorize_tag_transition(auth: Any, current: str, submitted: str) -> str:
+    """Require writable-scope additions and leave every foreign tag untouched."""
+    current_tags = parse_tags(current)
+    submitted_tags = parse_tags(submitted)
+    current_by_key = {tag.casefold(): tag for tag in current_tags}
+    submitted_by_key = {tag.casefold(): tag for tag in submitted_tags}
+    protected = {
+        tag.casefold(): tag
+        for tag in current_tags
+        if new_tags_scope_error(auth, tag) is not None
+    }
+    for key, tag in protected.items():
+        if key not in submitted_by_key:
+            raise ScopeDeniedError(
+                f"tag '{tag}' is outside your writable scope and cannot be removed"
+            )
+        # Preserve the stored spelling of a tag the caller cannot modify.
+        submitted_by_key[key] = tag
+    additions = [
+        tag for tag in submitted_tags if tag.casefold() not in current_by_key
+    ]
+    ensure_new_tags_in_scope(auth, format_tags(additions))
+    authorized = format_tags(submitted_by_key.values())
+    if len(authorized) > MAX_TAGS_LENGTH:
+        raise ResourceMetadataValidationError("tags too long (max 2000)")
+    return authorized
+
+
 def update_host_tags(
     db_path: str | Path,
     host_id: str,
@@ -164,13 +194,23 @@ def update_host_tags(
     with get_write_lock():
         ensure_write_scope(auth, db_path, host_id=host_id)
         normalized = normalize_tags(_value(tags))
-        ensure_new_tags_in_scope(auth, normalized)
+        with _connect(db_path) as conn:
+            row = conn.execute("SELECT tags FROM hosts WHERE id = ?", (host_id,)).fetchone()
+        if row is None:
+            raise ResourceMetadataNotFoundError("host not found")
+        normalized = _authorize_tag_transition(auth, row["tags"], normalized)
         ensure_tag_update_retains_scope(auth, parse_tags(normalized))
+        detail: dict[str, object] = {"tags": normalized}
 
         def guard(conn: sqlite3.Connection) -> None:
+            nonlocal normalized
             ensure_write_scope_on(conn, auth, host_id=host_id)
-            ensure_new_tags_in_scope(auth, normalized)
+            row = conn.execute("SELECT tags FROM hosts WHERE id = ?", (host_id,)).fetchone()
+            if row is None:
+                raise ResourceMetadataNotFoundError("host not found")
+            normalized = _authorize_tag_transition(auth, row["tags"], normalized)
             ensure_tag_update_retains_scope(auth, parse_tags(normalized))
+            detail["tags"] = normalized
 
         event = _transact(
             db_path,
@@ -179,7 +219,7 @@ def update_host_tags(
             action="host.update_tags",
             target_type="host",
             target_id=host_id,
-            detail={"tags": normalized},
+            detail=detail,
             actor=actor,
             source_ip=source_ip,
         )
@@ -198,37 +238,49 @@ def update_certificate_tags(
 ) -> TagUpdateResult:
     require_auth_context(auth)
     with get_write_lock():
+        normalized = ""
+        detail: dict[str, object] = {}
 
         def hidden() -> Exception:
             return unknown_target_scope_error(auth, db_path)
 
         def guard(conn: sqlite3.Connection) -> None:
+            nonlocal normalized
             # Inside the write transaction, immediately before the write:
             # lineage, then the authoritative scope check (#115 rounds 3, 10).
             ensure_not_superseded(conn, cert_id, auth=auth, hidden=hidden)
             ensure_write_scope_on(conn, auth, cert_id=cert_id)
-            ensure_new_tags_in_scope(auth, normalized)
-            host_row = conn.execute(
-                "SELECT h.tags FROM certificates c LEFT JOIN hosts h "
+            resource_row = conn.execute(
+                "SELECT c.tags AS cert_tags, h.tags AS host_tags "
+                "FROM certificates c LEFT JOIN hosts h "
                 "ON h.hostname = c.hostname AND h.port = c.port WHERE c.id = ?",
                 (cert_id,),
             ).fetchone()
-            inherited = parse_tags(host_row["tags"] if host_row else "")
+            if resource_row is None:
+                raise ResourceMetadataNotFoundError("certificate not found")
+            normalized = _authorize_tag_transition(
+                auth, resource_row["cert_tags"], normalized
+            )
+            inherited = parse_tags(resource_row["host_tags"] or "")
             ensure_tag_update_retains_scope(auth, [*parse_tags(normalized), *inherited])
+            detail["tags"] = normalized
 
         refuse_if_superseded(db_path, cert_id, auth=auth, hidden=hidden)
         ensure_write_scope(auth, db_path, cert_id=cert_id)
         normalized = normalize_tags(_value(tags))
-        ensure_new_tags_in_scope(auth, normalized)
-        inherited: list[str] = []
         with _connect(db_path) as conn:
-            host_row = conn.execute(
-                "SELECT h.tags FROM certificates c LEFT JOIN hosts h "
+            resource_row = conn.execute(
+                "SELECT c.tags AS cert_tags, h.tags AS host_tags "
+                "FROM certificates c LEFT JOIN hosts h "
                 "ON h.hostname = c.hostname AND h.port = c.port WHERE c.id = ?",
                 (cert_id,),
             ).fetchone()
-        inherited = parse_tags(host_row["tags"] if host_row else "")
+        if resource_row is None:
+            raise ResourceMetadataNotFoundError("certificate not found")
+        normalized = _authorize_tag_transition(auth, resource_row["cert_tags"], normalized)
+        inherited = parse_tags(resource_row["host_tags"] or "")
         ensure_tag_update_retains_scope(auth, [*parse_tags(normalized), *inherited])
+        detail["tags"] = normalized
         event = _transact(
             db_path,
             persist=lambda conn: persist_certificate_tags(conn, cert_id, normalized),
@@ -236,7 +288,7 @@ def update_certificate_tags(
             action="cert.update_tags",
             target_type="certificate",
             target_id=cert_id,
-            detail={"tags": normalized},
+            detail=detail,
             actor=actor,
             source_ip=source_ip,
         )
