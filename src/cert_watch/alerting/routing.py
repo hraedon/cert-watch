@@ -31,6 +31,7 @@ def _load_host_owner_maps(
     connection: AbstractContextManager[sqlite3.Connection]
     if conn is None:
         from cert_watch.database import _connect
+
         connection = _connect(db_path)
     else:
         connection = nullcontext(conn)
@@ -40,9 +41,7 @@ def _load_host_owner_maps(
         if endpoints is not None:
             if not endpoints:
                 return {}, {}
-            sql += " WHERE " + " OR ".join(
-                "(hostname = ? AND port = ?)" for _ in endpoints
-            )
+            sql += " WHERE " + " OR ".join("(hostname = ? AND port = ?)" for _ in endpoints)
             params = [value for endpoint in endpoints for value in endpoint]
         for row in active_conn.execute(sql, params).fetchall():
             key = (row["hostname"], row["port"])
@@ -58,7 +57,9 @@ def _load_host_owner_maps(
 
 
 def _load_role_user_emails(
-    db_path: str | Path, *, conn: sqlite3.Connection | None = None,
+    db_path: str | Path,
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> dict[str, list[str]]:
     """Map a role's team email (casefolded) → emails of users in that role.
 
@@ -71,6 +72,7 @@ def _load_role_user_emails(
         connection: AbstractContextManager[sqlite3.Connection]
         if conn is None:
             from cert_watch.database import _connect
+
             connection = _connect(db_path)
         else:
             connection = nullcontext(conn)
@@ -82,9 +84,7 @@ def _load_role_user_emails(
         for role in roles:
             if not role["email"]:
                 continue
-            members = [
-                user["email"] for user in users if user["role_id"] == role["id"]
-            ]
+            members = [user["email"] for user in users if user["role_id"] == role["id"]]
             if members:
                 role_user_emails[role["email"].casefold()] = members
     except (ImportError, sqlite3.Error):
@@ -150,12 +150,14 @@ def find_orphan_certs(db_path: str | Path) -> list[dict[str, Any]]:
             all_group_recipients.get(row["id"], []), owner_info, role_user_emails
         )
         if not recipients:
-            orphans.append({
-                "cert_id": row["id"],
-                "hostname": row["hostname"] or "",
-                "port": row["port"],
-                "subject": row["subject"] or "",
-            })
+            orphans.append(
+                {
+                    "cert_id": row["id"],
+                    "hostname": row["hostname"] or "",
+                    "port": row["port"],
+                    "subject": row["subject"] or "",
+                }
+            )
     orphans.sort(key=lambda o: (o["hostname"], o["subject"]))
     return orphans
 
@@ -198,6 +200,7 @@ def _resolve_group_config(
     connection: AbstractContextManager[sqlite3.Connection]
     if conn is None:
         from cert_watch.database.connection import _connect
+
         connection = _connect(db_path)
     else:
         connection = nullcontext(conn)
@@ -220,15 +223,15 @@ def _resolve_group_config(
             """SELECT c.id, c.tags, h.tags AS host_tags
                FROM certificates c
                LEFT JOIN hosts h ON c.hostname = h.hostname AND c.port = h.port
-               WHERE c.is_leaf = 1""" + cert_filter, params,
+               WHERE c.is_leaf = 1"""
+            + cert_filter,
+            params,
         ).fetchall()
-        cert_tags = {
-            row["id"]: merge_tags(row["tags"], row["host_tags"])
-            for row in cert_tags_rows
-        }
+        cert_tags = {row["id"]: merge_tags(row["tags"], row["host_tags"]) for row in cert_tags_rows}
 
         manual_rows = active_conn.execute(
-            "SELECT cert_id, group_id FROM alert_group_certs" + assignment_filter, params,
+            "SELECT cert_id, group_id FROM alert_group_certs" + assignment_filter,
+            params,
         ).fetchall()
         manual_map: dict[str, set[str]] = {}
         for row in manual_rows:
@@ -242,6 +245,7 @@ def _resolve_group_config(
         role_connection: AbstractContextManager[sqlite3.Connection]
         if conn is None:
             from cert_watch.database.connection import _connect
+
             role_connection = _connect(db_path)
         else:
             role_connection = nullcontext(conn)
@@ -251,10 +255,12 @@ def _resolve_group_config(
             ).fetchall()
         for role in role_rows:
             if role["alert_group_id"] and role["scope_tag"]:
-                role_links.append({
-                    "alert_group_id": role["alert_group_id"],
-                    "scope_tags": parse_tags(role["scope_tag"]),
-                })
+                role_links.append(
+                    {
+                        "alert_group_id": role["alert_group_id"],
+                        "scope_tags": parse_tags(role["scope_tag"]),
+                    }
+                )
     except (sqlite3.OperationalError, sqlite3.DatabaseError, ImportError):
         logger.warning("Role→alert-group link routing unavailable", exc_info=True)
         role_links = []
@@ -324,14 +330,13 @@ def resolve_routing(
     if len(cert_ids) > 350:
         resolved: dict[str, dict[str, Any]] = {}
         for start in range(0, len(cert_ids), 350):
-            resolved.update(
-                resolve_routing(db_path, cert_ids[start : start + 350], conn=conn)
-            )
+            resolved.update(resolve_routing(db_path, cert_ids[start : start + 350], conn=conn))
         return resolved
     placeholders = ",".join("?" for _ in cert_ids)
     connection: AbstractContextManager[sqlite3.Connection]
     if conn is None:
         from cert_watch.database.connection import _connect
+
         connection = _connect(db_path)
     else:
         connection = nullcontext(conn)
@@ -340,12 +345,8 @@ def resolve_routing(
             f"SELECT id, hostname, port FROM certificates WHERE id IN ({placeholders})",
             cert_ids,
         ).fetchall()
-        group_rows = active_conn.execute(
-            "SELECT id, name FROM alert_groups"
-        ).fetchall()
-    endpoints = {
-        row["id"]: (row["hostname"], row["port"]) for row in cert_rows
-    }
+        group_rows = active_conn.execute("SELECT id, name FROM alert_groups").fetchall()
+    endpoints = {row["id"]: (row["hostname"], row["port"]) for row in cert_rows}
     endpoint_keys = tuple(
         dict.fromkeys(
             (str(hostname), int(port))
@@ -355,7 +356,10 @@ def resolve_routing(
     )
     matched_groups: dict[str, list[str]] = {}
     group_recipients, group_thresholds = _resolve_group_config(
-        db_path, matched_groups=matched_groups, cert_ids=cert_ids, conn=conn,
+        db_path,
+        matched_groups=matched_groups,
+        cert_ids=cert_ids,
+        conn=conn,
     )
     _, owners = _load_host_owner_maps(db_path, conn=conn, endpoints=endpoint_keys)
     role_members = _load_role_user_emails(db_path, conn=conn)
@@ -365,7 +369,9 @@ def resolve_routing(
         endpoint = endpoints.get(cert_id)
         owner = owners.get(endpoint) if endpoint else None
         recipients = resolve_cert_recipients(
-            group_recipients.get(cert_id, []), owner, role_members,
+            group_recipients.get(cert_id, []),
+            owner,
+            role_members,
         )
         snapshots[cert_id] = {
             "version": 1,
@@ -375,6 +381,86 @@ def resolve_routing(
                 for group_id in matched_groups.get(cert_id, [])
             ],
             "threshold_days": group_thresholds.get(cert_id),
+        }
+    return snapshots
+
+
+def resolve_pending_host_routing(
+    db_path: str | Path,
+    host_ids: tuple[str, ...],
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Resolve owner and tag-group routing for hosts with no certificate yet.
+
+    Pending hosts cannot have manual certificate-to-group assignments, but all
+    other routing inputs are already present: host tags, owner contact, role
+    linked groups, and global transports added by the caller.
+    """
+    if not host_ids:
+        return {}
+    from cert_watch.tags import parse_tags, tags_match
+
+    connection: AbstractContextManager[sqlite3.Connection]
+    if conn is None:
+        from cert_watch.database.connection import _connect
+
+        connection = _connect(db_path)
+    else:
+        connection = nullcontext(conn)
+    with connection as active_conn:
+        placeholders = ",".join("?" for _ in host_ids)
+        hosts = active_conn.execute(
+            f"SELECT id, tags, owner_email FROM hosts WHERE id IN ({placeholders})",
+            host_ids,
+        ).fetchall()
+        groups = [
+            dict(row)
+            for row in active_conn.execute(
+                "SELECT id, name, recipients, match_tags, threshold_days FROM alert_groups"
+            ).fetchall()
+        ]
+        try:
+            role_links = active_conn.execute(
+                "SELECT alert_group_id, scope_tag FROM roles "
+                "WHERE alert_group_id IS NOT NULL AND scope_tag != ''"
+            ).fetchall()
+        except sqlite3.Error:
+            role_links = []
+    role_members = _load_role_user_emails(db_path, conn=conn)
+    group_by_id = {str(group["id"]): group for group in groups}
+    snapshots: dict[str, dict[str, Any]] = {}
+    for host in hosts:
+        effective = parse_tags(host["tags"])
+        matched: list[dict[str, Any]] = []
+        for group in groups:
+            if tags_match(effective, parse_tags(group["match_tags"])):
+                matched.append(group)
+        for link in role_links:
+            if not tags_match(effective, parse_tags(link["scope_tag"])):
+                continue
+            linked = group_by_id.get(str(link["alert_group_id"]))
+            if linked is not None and linked not in matched:
+                matched.append(linked)
+        group_recipients = [
+            recipient.strip()
+            for group in matched
+            for recipient in str(group["recipients"] or "").split(",")
+            if recipient.strip()
+        ]
+        recipients = resolve_cert_recipients(
+            group_recipients,
+            {"owner_email": host["owner_email"]},
+            role_members,
+        )
+        thresholds = [
+            int(group["threshold_days"]) for group in matched if group["threshold_days"] is not None
+        ]
+        snapshots[str(host["id"])] = {
+            "version": 1,
+            "recipients": recipients,
+            "groups": [{"id": str(group["id"]), "name": str(group["name"])} for group in matched],
+            "threshold_days": min(thresholds) if thresholds else None,
         }
     return snapshots
 

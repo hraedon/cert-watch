@@ -260,9 +260,9 @@ def test_enter_on_tag_link_filters_instead_of_opening_certificate(
     row = page.get_by_test_id("cert-row").filter(has_text="kb-tag.example.com")
     row.click()
     page.wait_for_url("**/certificates/*")
-    page.get_by_text("Edit tags", exact=True).click()
+    page.get_by_test_id("edit-host").click()
     page.locator('input[name="tags"]').fill("keyboard-team")
-    page.get_by_role("button", name="Save tags", exact=True).click()
+    page.get_by_role("button", name="Save certificate", exact=True).click()
     page.goto(f"{cert_watch_server}/browse?source=uploaded&sort_order=desc&grouped=0")
     link = page.get_by_test_id("cert-row").filter(has_text="kb-tag.example.com").get_by_role(
         "link", name="keyboard-team", exact=True,

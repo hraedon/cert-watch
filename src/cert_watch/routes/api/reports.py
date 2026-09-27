@@ -22,6 +22,7 @@ from cert_watch.routes.api._shared import (
     status_api_row,
 )
 from cert_watch.status_model import AxisSettings, overall_state
+from cert_watch.tags import parse_tags
 
 logger = logging.getLogger("cert_watch.routes.api.reports")
 
@@ -29,9 +30,7 @@ router = APIRouter()
 
 
 @router.get("/api/export/hosts.csv")
-def api_export_hosts_csv(
-    request: Request, _auth: str = Depends(require_auth)
-) -> PlainTextResponse:
+def api_export_hosts_csv(request: Request, _auth: str = Depends(require_auth)) -> PlainTextResponse:
     """Export tracked hosts as CSV."""
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
     repo = SqliteHostRepository(_db_path(request))
@@ -40,20 +39,36 @@ def api_export_hosts_csv(
     writer = csv.writer(output)
     writer.writerow(
         [
-            "hostname", "port", "threshold_days", "tags", "scan_interval_hours",
-            "owner_name", "owner_email", "owner_slack", "renewal_status", "notes",
-            "starttls_mode", "added_at",
+            "hostname",
+            "port",
+            "threshold_days",
+            "tags",
+            "scan_interval_hours",
+            "owner_name",
+            "owner_email",
+            "owner_slack",
+            "renewal_status",
+            "notes",
+            "starttls_mode",
+            "added_at",
         ]
     )
     for host in hosts:
+        reveal = delivery_details_allowed(request, effective_tags=parse_tags(host.tags))
         writer.writerow(
             [
-                _csv_safe(host.hostname), _csv_safe(host.port),
-                _csv_safe(host.threshold_days or ""), _csv_safe(host.tags),
-                _csv_safe(host.scan_interval_hours or ""), _csv_safe(host.owner_name),
-                _csv_safe(host.owner_email), _csv_safe(host.owner_slack),
-                _csv_safe(host.renewal_status), _csv_safe(host.notes),
-                _csv_safe(host.starttls_mode), _csv_safe(host.added_at.isoformat()),
+                _csv_safe(host.hostname),
+                _csv_safe(host.port),
+                _csv_safe(host.threshold_days or ""),
+                _csv_safe(host.tags),
+                _csv_safe(host.scan_interval_hours or ""),
+                _csv_safe(host.owner_name),
+                _csv_safe(host.owner_email if reveal else ""),
+                _csv_safe(host.owner_slack if reveal else ""),
+                _csv_safe(host.renewal_status),
+                _csv_safe(host.notes),
+                _csv_safe(host.starttls_mode),
+                _csv_safe(host.added_at.isoformat()),
             ]
         )
     return PlainTextResponse(
@@ -71,7 +86,9 @@ def api_export_certificates_csv(
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
     rows, _ = list_dashboard_page(
-        db, per_page=100000, scope_tags=scope_tags,
+        db,
+        per_page=100000,
+        scope_tags=scope_tags,
         axis_settings=AxisSettings.from_settings(_get_settings(request)),
     )
     output = io.StringIO()
@@ -137,7 +154,9 @@ def api_export_certificates_json(
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
     rows, _ = list_dashboard_page(
-        db, per_page=100000, scope_tags=scope_tags,
+        db,
+        per_page=100000,
+        scope_tags=scope_tags,
         axis_settings=AxisSettings.from_settings(_get_settings(request)),
     )
     return JSONResponse(
@@ -145,7 +164,7 @@ def api_export_certificates_json(
             "certificates": [
                 status_api_row(
                     row,
-                    reveal_delivery_details=delivery_details_allowed(request),
+                    request=request,
                 )
                 for row in rows
             ]
@@ -162,7 +181,9 @@ def api_report_inventory_csv(
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
     rows, _ = list_dashboard_page(
-        db, per_page=100000, scope_tags=scope_tags,
+        db,
+        per_page=100000,
+        scope_tags=scope_tags,
         axis_settings=AxisSettings.from_settings(_get_settings(request)),
     )
     output = io.StringIO()
@@ -226,7 +247,9 @@ def api_report_expiring_csv(
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
     rows, _ = list_dashboard_page(
-        db, per_page=100000, scope_tags=scope_tags,
+        db,
+        per_page=100000,
+        scope_tags=scope_tags,
         axis_settings=AxisSettings.from_settings(_get_settings(request)),
     )
     expiring = [
@@ -328,9 +351,7 @@ def api_compliance_report_csv(
 
 
 @router.get("/api/readiness.json")
-def api_readiness_report_json(
-    request: Request, _auth: str = Depends(require_auth)
-) -> JSONResponse:
+def api_readiness_report_json(request: Request, _auth: str = Depends(require_auth)) -> JSONResponse:
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
     report = build_readiness_report(db, scope_tags=scope_tags)

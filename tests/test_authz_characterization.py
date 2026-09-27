@@ -146,6 +146,11 @@ def _seed(db: Path, principal: Principal) -> Seeded:
     ids["host_b"] = hosts.add("b.example.com", 443, tags="B")
     ids["cert_a"] = seed_scanned(db, "a.example.com", 443, _cert("a.example.com", "a"))
     ids["cert_b"] = seed_scanned(db, "b.example.com", 443, _cert("b.example.com", "b"))
+    ids["host_split"] = hosts.add("split.example.com", 443, tags="B")
+    ids["cert_split"] = seed_scanned(db, "split.example.com", 443, _cert("split.example.com", "s"))
+    from cert_watch.database import SqliteCertificateRepository
+
+    SqliteCertificateRepository(db).set_tags(ids["cert_split"], "A")
     ids["alert"] = SqliteAlertRepository(db).create(
         Alert(cert_id=ids["cert_a"], alert_type="expiry_warning", status="pending", message="m")
     )
@@ -190,6 +195,7 @@ def _order_key(item: tuple[str, str, Any]) -> tuple[int, str, str]:
 
 
 _PARAM_TARGETS = {
+    "resource_id": ("host_a", "host_b", "cert_a", "cert_b", "cert_split"),
     "host_id": ("host_a", "host_b"),
     "cert_id": ("cert_a", "cert_b"),
     "alert_id": ("alert",),
@@ -209,9 +215,7 @@ def _expansions(path: str) -> list[dict[str, str]]:
     return combos
 
 
-def _fresh_api_delete_target(
-    db: Path, path: str, label: str, seeded: Seeded
-) -> None:
+def _fresh_api_delete_target(db: Path, path: str, label: str, seeded: Seeded) -> None:
     """Give each new DELETE adapter its own target after the HTML delete ran.
 
     The matrix deliberately executes both presentations in one app. Reusing
@@ -261,6 +265,22 @@ def _body_for(route: Any, path: str) -> dict[str, Any]:
                 "renewal_status": "pending",
             }
         }
+    if path in {"/api/hosts/{resource_id}", "/hosts/{resource_id}/edit"}:
+        values: dict[str, Any] = {
+            "owner_name": "probe",
+            "owner_email": "",
+            "owner_slack": "",
+            "renewal_method": "",
+            "runbook_url": "",
+            "scan_interval_hours": None,
+            "threshold_days": None,
+            "renewal_status": "pending",
+            "notes": "probe",
+            "tags": "A",
+        }
+        if path.startswith("/api/"):
+            return {"json": values}
+        return {"data": {k: "" if v is None else str(v) for k, v in values.items()}}
     data: dict[str, str] = {"_probe": "1"}
     files: dict[str, Any] = {}
     dependant = getattr(route, "dependant", None)
@@ -423,11 +443,12 @@ def run_matrix_for(
                 url = path
                 for name, label in combo.items():
                     url = url.replace("{" + name + "}", seeded.ids[label])
-                key = f"{method} {path}" + (
-                    " [" + ",".join(combo.values()) + "]" if combo else ""
-                )
+                key = f"{method} {path}" + (" [" + ",".join(combo.values()) + "]" if combo else "")
                 resp = client.request(
-                    method, url, headers=headers, follow_redirects=False,
+                    method,
+                    url,
+                    headers=headers,
+                    follow_redirects=False,
                     **_body_for(route, path),
                 )
                 outcomes[key] = _classify(resp, seeded)

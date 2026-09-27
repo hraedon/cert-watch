@@ -62,672 +62,578 @@
     <main class="cw-page" id="main">
 
 
-      <div id="cw-health" class="cw-health cw-hidden">
-        <span class="cw-status"><span class="dot" id="cw-health-dot" aria-hidden="true"></span><span id="cw-health-text">Loading…</span></span>
-        <button type="button" class="x" data-dismiss="cw-health" data-dismiss-key="cw-health-dismissed" id="cw-health-dismiss" title="Dismiss" aria-label="Dismiss">&times;</button>
-      </div>
 
 
-<div class="cw-wrap">
-  <nav class="cw-crumbs" aria-label="Breadcrumb">
-    <a href="/browse">Browse</a>
 
+    <div class="cw-wrap cw-detail-wrap">
+        <nav class="cw-crumbs" aria-label="Breadcrumb">
+            <a href="/browse">Browse</a>
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
 
+<span class="mono">mail.demo.test</span>
+        </nav>
+        <header class="cw-detail-head">
+            <div class="cw-detail-title">
+                <h1 class="mono"
+                    data-testid="cert-detail-heading">mail.demo.test<span class="cw-detail-port">:443</span>
+                </h1>
+                <div class="cw-chiprow cw-metarow">
+                    <span>Scanned
+                        · Messaging Team
+                    </span>
 
-    <span class="mono">mail.demo.test</span>
-  </nav>
+                        <span class="cw-chip">leaf-tag
 
+                        </span>
 
-  <div class="cw-page-head">
-    <div>
-      <div class="cw-chiprow">
-        <h1 class="mono" data-testid="cert-detail-heading">mail.demo.test</h1>
+                        <span class="cw-chip">production
+                            <span class="cw-muted">(host)</span>
+                        </span>
 
-          <span class="cw-status t-ok">
-  <span class="dot" aria-hidden="true"></span>OK
-</span>
-          <span class="cw-grade t-warn" title="Posture grade B">B</span>
+                        <span class="cw-chip">mail
+                            <span class="cw-muted">(host)</span>
+                        </span>
 
+                </div>
+            </div>
+            <div class="cw-page-actions">
 
-      </div>
-      <div class="cw-chiprow cw-metarow">
-
-          <span class="cw-chip">
-
-    <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2V6z"/><path d="M3 15a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2v-3z"/></svg>
-
-Scanned</span>
-
-        <span class="cw-muted">
-          scanned from mail.demo.test:443
-
-        </span>
-      </div>
-    </div>
-    <div class="cw-page-actions">
-
-        <form method="post" action="/hosts/{{HOST_1_ID}}/scan" class="cw-inline">
-          <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
-          <input type="hidden" name="return_to" value="detail">
-          <button type="submit" class="cw-btn primary" data-testid="cert-scan-btn">
+                    <form method="post" action="/hosts/{{HOST_1_ID}}/scan" class="cw-inline">
+                        <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
+                        <input type="hidden" name="return_to" value="detail">
+                        <button type="submit"
+                                class="cw-btn primary"
+                                data-testid="cert-scan-btn">
 
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
 
 Scan now</button>
-        </form>
+                    </form>
 
-
-        <a href="/api/certificates/{{CERT_4_ID}}/pem" class="cw-btn" data-testid="cert-download-pem">
+                <a href="/api/certificates/{{CERT_4_ID}}/pem"
+   class="cw-btn"
+   data-testid="cert-download-pem">
 
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
 
 Download PEM</a>
 
-        <form method="post" action="/certificates/{{CERT_4_ID}}/delete" class="cw-inline confirm-form" data-confirm="Delete this certificate?">
-          <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
-          <button type="submit" class="cw-iconbtn" title="Delete" data-testid="cert-delete-btn">
+                    <form method="post"
+                          action="/certificates/{{CERT_4_ID}}/delete"
+                          class="cw-inline confirm-form"
+                          data-confirm="Delete this certificate?">
+                        <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
+                        <button type="submit"
+                                class="cw-iconbtn"
+                                title="Delete certificate"
+                                data-testid="cert-delete-btn">
 
     <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
 
 </button>
-        </form>
+                    </form>
 
-
-    </div>
-  </div>
-
-
-
-  <div class="cw-cols">
-
-    <div>
-
-
-
-      <div class="cw-panel">
-        <div class="cw-panel-body">
-          <div class="cw-kv-label">Time remaining</div>
-          <div class="cw-hero">
-            <span class="tnum t-warn cw-hero-num">60</span>
-            <span class="cw-muted">days</span>
-          </div>
-
-
-
-          <svg class="cw-bar thick t-warn" role="img" aria-label="83% of validity elapsed" preserveAspectRatio="none">
-            <rect class="track" width="100%" height="100%"/>
-            <rect class="fill" width="83%" height="100%"/>
-            <rect class="mark" x="83%" width="2" height="100%"/>
-          </svg>
-          <div class="cw-validity-ends tnum">
-            <span class="cw-muted">2025-11-21 · issued</span>
-            <span class="cw-muted">2026-11-21 · expires</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="cw-panel" data-testid="certificate-alerts">
-        <div class="cw-panel-head">
-          <h2>Recent alerts</h2>
-          <a href="/alerts" class="cw-link">View all</a>
-        </div>
-
-        <div class="cw-panel-body">
-          <div class="cw-chiprow">
-            <span>Certificate expires in 60 days</span>
-            <span class="cw-spacer"></span>
-            <span class="cw-status t-muted">
-  <span class="dot" aria-hidden="true"></span>Sending
-</span>
-          </div>
-        </div>
-
-      </div>
-
-
-
-      <div class="cw-panel" data-testid="scan-evidence">
-        <div class="cw-panel-head">
-          <h2>Scan evidence</h2>
-          <span class="cw-chip t-muted">Current scan</span>
-        </div>
-        <div class="cw-panel-body">
-          <dl class="cw-kv">
-
-  <div>
-    <dt>Last successful scan</dt>
-    <dd>2026-09-22 12:00:00 UTC</dd>
-  </div>
-
-
-  <div>
-    <dt>Latest attempt</dt>
-    <dd>2026-09-22 12:00:00 UTC<div class="cw-muted">Success</div></dd>
-  </div>
-
-
-  <div>
-    <dt>Observation due</dt>
-    <dd>2026-09-23 00:00:00 UTC</dd>
-  </div>
-
-
-  <div>
-    <dt>Next eligible attempt</dt>
-    <dd>2026-09-23 00:00:00 UTC</dd>
-  </div>
-
-          </dl>
-
-          <p class="cw-hint">Cadence uses the last successful scan. Incomplete attempts do not refresh it. Times show eligibility; a running job can delay the next attempt.</p>
-        </div>
-      </div>
-
-
-
-
-      <div class="cw-panel">
-        <div class="cw-panel-head">
-          <h2>Operational summary</h2>
-
-          <details class="cw-editor">
-            <summary class="cw-btn ghost sm" data-testid="owner-edit-btn">
-
-    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-
-Edit host details</summary>
-            <div class="cw-editor-body">
-              <form method="post" action="/hosts/{{HOST_1_ID}}/owner" class="cw-form">
-                <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
-                <div class="cw-form-grid">
-                  <div class="cw-field">
-                    <label class="cw-label" for="host-owner-name">Owner name</label>
-                    <input type="text" id="host-owner-name" name="owner_name" class="cw-input" maxlength="200" value="Messaging Team" placeholder="Team or individual">
-                  </div>
-                  <div class="cw-field">
-                    <label class="cw-label" for="host-owner-email">Owner email</label>
-                    <input type="text" id="host-owner-email" name="owner_email" class="cw-input" maxlength="254" value="messaging@example.test" placeholder="ops@example.com">
-                  </div>
-
-                  <div class="cw-field">
-                    <label class="cw-label" for="host-renewal-method">Renewal method</label>
-                    <select id="host-renewal-method" name="renewal_method" class="cw-select">
-                      <option value="" >—</option>
-                      <option value="acme" >ACME</option>
-                      <option value="cert-manager" >cert-manager</option>
-                      <option value="manual" selected>Manual</option>
-                    </select>
-                  </div>
-                  <div class="cw-field wide">
-                    <label class="cw-label" for="host-runbook-url">Runbook URL</label>
-                    <input type="text" id="host-runbook-url" name="runbook_url" class="cw-input" maxlength="2048" value="https://runbooks.example.test/mail-tls" placeholder="https://wiki.example.com/cert-renewal">
-                  </div>
-                </div>
-                <div class="cw-form-foot">
-                  <button class="cw-btn primary sm" type="submit" data-testid="owner-save-btn">Save</button>
-                  <span class="cw-hint">Owner and renewal apply to every certificate on this host.</span>
-                </div>
-              </form>
             </div>
-          </details>
-
-        </div>
-        <div class="cw-panel-body">
-          <dl class="cw-kv">
-
-  <div>
-    <dt>Owner</dt>
-    <dd>
-              Messaging Team
-              <div class="cw-muted">messaging@example.test</div>
-            </dd>
-  </div>
-
-
-  <div>
-    <dt>Renewal</dt>
-    <dd>
-              Manual
-
-                <span class="cw-chip t-neutral">requires manual action</span>
-
-            </dd>
-  </div>
-
-
-  <div>
-    <dt>Scan cadence</dt>
-    <dd>Every 12 hours</dd>
-  </div>
-
-
-  <div>
-    <dt>Alert threshold</dt>
-    <dd>Automatic thresholds</dd>
-  </div>
-
-
-  <div class="wide">
-    <dt>Renewal report</dt>
-    <dd>
-              In progress — operator reported
-              <div class="cw-hint">Operator report, not proof of renewal.</div>
-            </dd>
-  </div>
-
-
-
-  <div class="wide">
-    <dt>Runbook</dt>
-    <dd>
-
-                <a href="https://runbooks.example.test/mail-tls" target="_blank" rel="noopener" class="cw-link">https://runbooks.example.test/mail-tls</a>
-
-            </dd>
-  </div>
+        </header>
 
 
 
 
-  <div class="wide">
-    <dt>Chain status</dt>
-    <dd>
-              <a href="#chain-guidance" class="cw-link">Unable to reach a trusted root</a>
+        <section class="cw-detail-axes"
+                 aria-label="Certificate status"
+                 data-testid="detail-state-axes">
 
-            </dd>
-  </div>
+                <div class="cw-detail-axis">
+                    <div class="cw-detail-axis-label">Certificate</div>
+                    <div class="cw-detail-axis-value t-ok"
+                         ><span class="cw-dot"></span>Expires in 60 days</div>
+                    <div class="cw-detail-axis-detail">Issued 2025-11-21 · expires 2026-11-21.</div>
+                </div>
 
+                <div class="cw-detail-axis">
+                    <div class="cw-detail-axis-label">Monitoring</div>
+                    <div class="cw-detail-axis-value t-ok"
+                         ><span class="cw-dot"></span>Current</div>
+                    <div class="cw-detail-axis-detail">Last scanned 2026-09-22 12:00 UTC · next due 2026-09-23 00:00 UTC</div>
+                </div>
 
-          </dl>
-        </div>
-        <div class="cw-panel-body" id="endpoint-settings">
+                <div class="cw-detail-axis">
+                    <div class="cw-detail-axis-label">Renewal</div>
+                    <div class="cw-detail-axis-value t-warn"
+                         ><span class="cw-dot"></span>In progress</div>
+                    <div class="cw-detail-axis-detail">An operator reported that renewal work is under way.</div>
+                </div>
 
+                <div class="cw-detail-axis">
+                    <div class="cw-detail-axis-label">Alerts</div>
+                    <div class="cw-detail-axis-value t-warn"
+                         ><span class="cw-dot"></span>Delivery failing</div>
+                    <div class="cw-detail-axis-detail">The configured route cannot currently deliver an alert.</div>
+                </div>
 
+        </section>
+        <div class="cw-detail-stack">
 
-          <details class="cw-editor" >
-            <summary class="cw-btn ghost sm" data-testid="endpoint-settings-edit">
-
-    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-
-<span class="when-closed">Edit endpoint settings</span><span class="when-open">Cancel editing</span></summary>
-            <div class="cw-editor-body">
-              <form method="post" action="/hosts/{{HOST_1_ID}}/settings" class="cw-form">
-                <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
-                <div class="cw-form-grid">
-
-                  <div class="cw-field">
-                    <label class="cw-label" for="endpoint-scan-interval">Scan interval (hours)</label>
-                    <input id="endpoint-scan-interval" type="number" name="scan_interval_hours" class="cw-input" step="1" min="1" max="8760" value="12" placeholder="Daily schedule" aria-describedby="endpoint-scan-help">
-                    <p class="cw-hint" id="endpoint-scan-help">Blank uses the configured daily UTC schedule. A custom interval is 1–8760 hours after the last successful scan. Failed scans retry after at least one hour.</p>
-
-                  </div>
-                  <div class="cw-field">
-                    <label class="cw-label" for="endpoint-threshold">Alert threshold (days)</label>
-                    <input id="endpoint-threshold" type="number" name="threshold_days" class="cw-input" min="1" step="1" value="" placeholder="Automatic thresholds" aria-describedby="endpoint-threshold-help">
-                    <p class="cw-hint" id="endpoint-threshold-help">Blank uses automatic expiry thresholds. A custom value alerts at this many days, half, one quarter, and one day. Matching alert-group thresholds take precedence.</p>
-                  </div>
-                  <div class="cw-field wide">
-                    <label class="cw-label" for="endpoint-renewal-status">Renewal status reported by operator</label>
-                    <select id="endpoint-renewal-status" name="renewal_status" class="cw-select" aria-describedby="endpoint-renewal-help">
-                      <option value="pending" >No completion reported</option>
-                      <option value="in_progress" selected>In progress — operator reported</option>
-                    </select>
-                    <div class="cw-hint" id="endpoint-renewal-help">
-                      <p>In progress suppresses new renewal-stalled notices and the Home stalled status until you change this report.</p>
-                      <p>This operator report never suppresses expiry or expired alerts. cert-watch observes a completed renewal only when a scan sees the replacement certificate.</p>
+                <section class="cw-panel" data-testid="what-to-do">
+                    <div class="cw-panel-head">
+                        <h2>What to do</h2>
                     </div>
-                  </div>
+                    <div class="cw-panel-body">
+                        <ol class="cw-detail-steps">
+
+                                <li>
+                                    <b>Unable to reach a trusted root.</b> <span >Check the CA&#39;s chain bundle for the expected issuer. Configure the TLS endpoint with its leaf certificate and required intermediate certificates, in issuer order, then scan again. If the issuer is a private root, verify it and add it in Settings → Trust anchors instead. Public roots normally come from the system CA bundle.</span>
+
+
+                                </li>
+
+                                <li>
+                                    <b>Configure email delivery.</b> <span >Recipients are resolved, but SMTP and the From address are not configured.</span>
+
+
+                                </li>
+
+                        </ol>
+                    </div>
+                </section>
+
+            <section class="cw-panel" data-testid="owner-routing-panel">
+                <div class="cw-panel-head">
+                    <h2>Owner &amp; who gets alerted</h2>
                 </div>
-                <div class="cw-form-foot"><button type="submit" class="cw-btn primary sm" data-testid="endpoint-settings-save">Save endpoint settings</button></div>
-              </form>
-            </div>
-          </details>
 
-
-        </div>
-        <div class="cw-panel-body">
-          <div class="cw-panel-head-inline">
-            <span class="cw-kv-label">Notes <span class="cw-muted">— operational notes for this host</span></span>
-
-            <details class="cw-editor">
-              <summary class="cw-btn ghost sm" data-testid="notes-edit-toggle">
-
+                    <details id="edit-host"
+                             class="cw-editor"
+                             >
+                        <summary class="cw-btn ghost sm" data-testid="edit-host">
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
 
-<span class="when-closed">Edit notes</span><span class="when-open">Cancel editing</span>
-              </summary>
-              <div class="cw-editor-body">
-                <form method="post" action="/hosts/{{HOST_1_ID}}/notes" class="cw-form">
-                  <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
-                  <label class="cw-label" for="host-notes">Host notes</label>
-                  <textarea id="host-notes" name="notes" class="cw-textarea" rows="5" maxlength="10000" spellcheck="false" data-testid="notes-editor">Renew through the messaging runbook.</textarea>
-                  <div class="cw-form-foot"><button class="cw-btn primary sm" type="submit" data-testid="notes-save">Save notes</button></div>
-                </form>
-              </div>
-            </details>
+Edit host</summary>
+                        <div class="cw-editor-body cw-detail-editor">
 
-          </div>
-          <div class="cw-notes-view" data-testid="notes-view">Renew through the messaging runbook.</div>
-        </div>
-      </div>
+                            <form method="post" action="/hosts/{{CERT_4_ID}}/edit" class="cw-form">
+                                <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
+                                <div class="cw-form-grid">
+                                    <div class="cw-field">
+                                        <label class="cw-label" for="host-owner-name">Owner name</label>
+                                        <input id="host-owner-name"
+                                               name="owner_name"
+                                               class="cw-input"
+                                               maxlength="200"
+                                               value="Messaging Team">
+                                    </div>
+                                    <div class="cw-field">
+                                        <label class="cw-label" for="host-owner-email">Owner email</label>
+                                        <input id="host-owner-email"
+                                               name="owner_email"
+                                               type="email"
+                                               class="cw-input"
+                                               maxlength="254"
+
+                                               value="messaging@example.test">
+
+                                    </div>
+                                    <div class="cw-field">
+                                        <label class="cw-label" for="host-owner-slack">Slack channel</label>
+                                        <input id="host-owner-slack"
+                                               name="owner_slack"
+                                               class="cw-input"
+                                               maxlength="100"
+                                               value="">
+                                    </div>
+                                    <div class="cw-field">
+                                        <label class="cw-label" for="host-renewal-method">Renewal method</label>
+                                        <select id="host-renewal-method" name="renewal_method" class="cw-select">
+
+                                            <option value="" >Unknown</option>
+                                            <option value="acme" >ACME</option>
+                                            <option value="cert-manager"
+                                                    >cert-manager</option>
+                                            <option value="manual"
+                                                    selected>Manual</option>
+                                        </select>
+                                    </div>
+                                    <div class="cw-field wide">
+                                        <label class="cw-label" for="host-runbook-url">Runbook URL</label>
+                                        <input id="host-runbook-url"
+                                               name="runbook_url"
+                                               type="url"
+                                               class="cw-input"
+                                               maxlength="2048"
+
+                                               value="https://runbooks.example.test/mail-tls">
+
+                                    </div>
+                                    <div class="cw-field">
+                                        <label class="cw-label" for="endpoint-scan-interval">Scan interval (hours)</label>
+                                        <input id="endpoint-scan-interval"
+                                               name="scan_interval_hours"
+                                               type="number"
+                                               step="1"
+                                               min="1" max="8760"
+                                               class="cw-input"
+
+                                               value="12"
+                                               placeholder="Daily schedule">
 
 
+                                    </div>
+                                    <div class="cw-field">
+                                        <label class="cw-label" for="endpoint-threshold">Alert threshold (days)</label>
+                                        <input id="endpoint-threshold"
+                                               name="threshold_days"
+                                               type="number"
+                                               min="1"
+                                               step="1"
+                                               class="cw-input"
+
+                                               value=""
+                                               placeholder="Automatic">
+
+                                    </div>
+                                    <div class="cw-field wide">
+                                        <label class="cw-label" for="endpoint-renewal-status">Renewal status reported by operator</label>
+                                        <select id="endpoint-renewal-status" name="renewal_status" class="cw-select">
+
+                                            <option value="pending"
+                                                    >No completion reported</option>
+                                            <option value="in_progress"
+                                                    selected>In progress — operator reported</option>
+                                        </select>
+                                        <p class="cw-hint" id="endpoint-renewal-help">Operator-reported progress is not proof of renewal; it never suppresses expiry or expired alerts. A later scan confirms the replacement certificate.</p>
+                                    </div>
+                                    <div class="cw-field wide">
+                                        <label class="cw-label" for="host-tags">Tags</label>
+                                        <input id="host-tags"
+                                               name="tags"
+                                               class="cw-input"
+
+                                               value="leaf-tag"
+                                               list="cw-all-tags">
+
+                                        <datalist id="cw-all-tags">
+                                            <option value="edge"></option><option value="leaf-tag"></option><option value="mail"></option><option value="production"></option><option value="staging"></option>
+                                        </datalist>
+                                        <p class="cw-hint">
+
+                                                Edits this certificate’s own tags; inherited host tags remain visible.
+
+                                            Tags control scope, routing and grouping.
+                                        </p>
+                                    </div>
+                                    <div class="cw-field wide">
+                                        <label class="cw-label" for="host-notes">Notes</label>
+                                        <textarea id="host-notes"
+                                                  name="notes"
+                                                  class="cw-textarea"
+                                                  rows="5"
+                                                  maxlength="10000"
+
+                                                  data-testid="notes-editor">Renew through the messaging runbook.</textarea>
+
+                                    </div>
+                                </div>
+                                <div class="cw-form-foot">
+                                    <button type="submit" class="cw-btn primary sm" data-testid="save-host">Save host</button>
+                                </div>
+                            </form>
+                        </div>
+                    </details>
+
+                <div class="cw-panel-body">
+                    <dl class="cw-detail-owner">
+                        <div>
+                            <dt>Owner</dt>
+                            <dd>
+                                Messaging Team
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>Contact</dt>
+                            <dd>
+
+                                    messaging@example.test
+
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>Runbook</dt>
+                            <dd>
 
 
-
-      <div class="cw-panel">
-        <div class="cw-panel-head">
-          <h2>
-
-    <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>
-
- Security posture</h2>
-          <div class="cw-chiprow">
-
-            <span class="cw-grade t-warn" title="Posture grade B">B</span>
-          </div>
-        </div>
-        <div class="cw-panel-body">
+                                        <a class="cw-link" href="https://runbooks.example.test/mail-tls">https://runbooks.example.test/mail-tls</a>
 
 
-          <div class="cw-findings">
+                            </dd>
+                        </div>
+                    </dl>
+                    <div class="cw-table-wrap cw-detail-route-wrap">
+                        <table class="cw-table cw-detail-route">
+                            <thead>
+                                <tr>
+                                    <th>Recipient</th>
+                                    <th>Via</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
 
-              <div class="cw-finding">
-                <span class="t-ok">
+                                    <tr>
+                                        <td>messaging@example.test</td>
+                                        <td>Email</td>
+                                        <td>
+                                            <span class="t-warn">Not configured</span>
+                                            <div class="cw-sub">Email is not configured.</div>
+                                        </td>
+                                    </tr>
+
+                                    <tr>
+                                        <td>Global webhook</td>
+                                        <td>Webhook</td>
+                                        <td>
+                                            <span class="t-warn">Not configured</span>
+                                            <div class="cw-sub">Webhook is not configured.</div>
+                                        </td>
+                                    </tr>
+
+                                    <tr>
+                                        <td>Alert groups matched by tag: none</td>
+                                        <td>Alert groups</td>
+                                        <td>
+                                            <span class="t-muted">None</span>
+                                            <div class="cw-sub">No alert group matches the effective tags.</div>
+                                        </td>
+                                    </tr>
+
+                            </tbody>
+                        </table>
+                    </div>
+
+
+                        <dl class="cw-detail-owner cw-detail-host-facts">
+                            <div>
+                                <dt>Renewal method</dt>
+                                <dd>
+                                    Manual
+                                    <div class="cw-sub">requires manual action</div>
+                                </dd>
+                            </div>
+                            <div>
+                                <dt>Scan cadence</dt>
+                                <dd>
+                                    Every 12 hours
+                                </dd>
+                            </div>
+                            <div>
+                                <dt>Alert threshold</dt>
+                                <dd>
+                                    Automatic thresholds
+                                </dd>
+                            </div>
+
+                            <div>
+                                <dt>Notes</dt>
+                                <dd data-testid="notes-view">
+                                    Renew through the messaging runbook.
+                                </dd>
+                            </div>
+                        </dl>
+
+                </div>
+            </section>
+
+                <section class="cw-panel cw-detail-disclosures">
+                    <details id="certificate-facts" data-testid="certificate-facts">
+                        <summary>
+                            <span><b>Certificate facts</b><span class="cw-sub">Unable to reach a trusted root · Key: RSA 2048 · 2 names
+                                · posture B
+                            </span></span>
+                        </summary>
+                        <div class="cw-detail-disclosure-body">
+                            <section id="chain-guidance">
+                                <h3>Certificate chain</h3>
+                                <p><b>Unable to reach a trusted root</b> — The stored chain ends at O=Demo Estate,CN=mail.demo.test. Its expected issuer is unavailable to this instance; it may be an intermediate or a root absent from its trust store.</p>
+                                <p><b>Next step:</b> Check the CA&#39;s chain bundle for the expected issuer. Configure the TLS endpoint with its leaf certificate and required intermediate certificates, in issuer order, then scan again. If the issuer is a private root, verify it and add it in Settings → Trust anchors instead. Public roots normally come from the system CA bundle.</p>
+                                <ol class="cw-detail-chain">
+                                    <li><span class="mono">mail.demo.test</span> · leaf · RSA 2048 · 60 days left</li>
+
+                                </ol>
+                            </section>
+                            <section>
+                                <h3>Subject Alternative Names</h3>
+                                <div class="cw-chiprow">
+                                    <span class="cw-chip mono">mail.demo.test</span><span class="cw-chip mono">www.mail.demo.test</span>
+
+                                </div>
+                            </section>
+                            <section>
+                                <h3>Identity</h3>
+                                <dl class="cw-detail-owner">
+                                    <div>
+                                        <dt>Issuer</dt>
+                                        <dd>
+                                            CN=Demo Internal CA
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt>Validity</dt>
+                                        <dd>
+                                            2025-11-21 → 2026-11-21
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt>Key · signature</dt>
+                                        <dd>
+                                            RSA 2048 · sha256WithRSAEncryption
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt>Serial</dt>
+                                        <dd class="mono cw-break">
+                                            {{CERT_4_SERIAL}}
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt>SHA-256</dt>
+                                        <dd class="mono cw-break">
+                                            {{CERT_4_FINGERPRINT_COLON}}
+                                        </dd>
+                                    </div>
+                                </dl>
+                            </section>
+
+                                <section>
+                                    <h3>Security posture</h3>
+                                    <div class="cw-chiprow">
+
+                                        <span class="cw-grade t-warn" title="Posture grade B">B</span>
+                                    </div>
+
+
+                                    <div class="cw-findings">
+
+                                            <div class="cw-finding"><span class="t-ok">
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
 
-</span>
+</span><span>RSA 2048 bits</span></div>
 
-                <span class="">RSA 2048 bits</span>
-              </div>
-
-              <div class="cw-finding">
-                <span class="t-ok">
+                                            <div class="cw-finding"><span class="t-ok">
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
 
-</span>
+</span><span>No SHA-1 signature</span></div>
 
-                <span class="">No SHA-1 signature</span>
-              </div>
-
-              <div class="cw-finding">
-                <span class="t-ok">
+                                            <div class="cw-finding"><span class="t-ok">
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
 
-</span>
+</span><span>Validity 365 days within limit</span></div>
 
-                <span class="">Validity 365 days within limit</span>
-              </div>
-
-              <div class="cw-finding">
-                <span class="t-ok">
+                                            <div class="cw-finding"><span class="t-ok">
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
 
-</span>
+</span><span>Not self-signed</span></div>
 
-                <span class="">Not self-signed</span>
-              </div>
-
-              <div class="cw-finding">
-                <span class="cw-muted">—</span>
-                <span class="cw-muted">OCSP Must-Staple not required</span>
-              </div>
-
-              <div class="cw-finding">
-                <span class="t-warn">
+                                            <div class="cw-finding"><span class="t-warn">
 
     <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
 
-</span>
+</span><span>OCSP Must-Staple not required</span></div>
 
-                <span class="">Unable to reach a trusted root</span>
-              </div>
+                                            <div class="cw-finding"><span class="t-warn">
 
-          </div>
+    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
 
+</span><span>Unable to reach a trusted root</span></div>
 
-          <div class="cw-chiprow cw-metarow">
-            <button class="cw-btn ghost sm" type="button" id="check-revocation" data-cert-id="{{CERT_4_ID}}">
+                                    </div>
 
-    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+                                        <button class="cw-btn ghost sm"
+                                                type="button"
+                                                id="check-revocation"
+                                                data-cert-id="{{CERT_4_ID}}">Check endpoint reachability</button>
+                                        <span id="revocation-status" class="cw-hint"></span>
+                                        <div id="revocation-results" class="cw-findings cw-hidden"></div>
+                                        <p class="cw-hint">Checks OCSP/CRL endpoint reachability; this does not determine whether this certificate is revoked.</p>
 
-Check endpoint reachability</button>
-            <span id="revocation-status" class="cw-hint"></span>
-          </div>
-          <p class="cw-hint">Checks OCSP/CRL endpoint reachability; this does not determine whether this certificate is revoked.</p>
-          <div id="revocation-results" class="cw-findings cw-hidden"></div>
+                                </section>
 
-        </div>
-      </div>
+                        </div>
+                    </details>
+                    <details id="history" data-testid="history-disclosure">
+                        <summary><span><b>History</b><span class="cw-sub">scans, alerts and renewals</span></span></summary>
+                        <div class="cw-detail-disclosure-body">
 
+                                <dl class="cw-detail-owner" data-testid="scan-evidence">
+                                    <div>
+                                        <dt>Last successful scan</dt>
+                                        <dd>
 
+    2026-09-22 12:00 UTC
 
-      <div class="cw-panel">
-        <div class="cw-panel-head">
-          <h2>
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt>Latest attempt</dt>
+                                        <dd>
 
-    <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/><path d="M3 12h18"/><path d="M12 3a14 14 0 000 18 14 14 0 000-18z"/></svg>
+    2026-09-22 12:00 UTC
 
- Subject Alternative Names</h2>
-          <span class="cw-chip inset">2</span>
-        </div>
-        <div class="cw-panel-body">
-          <div class="cw-chiprow">
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt>Observation due</dt>
+                                        <dd>
 
-              <span class="cw-chip inset mono">
+    2026-09-23 00:00 UTC
 
-    <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/><path d="M3 12h18"/><path d="M12 3a14 14 0 000 18 14 14 0 000-18z"/></svg>
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt>Next eligible attempt</dt>
+                                        <dd>
 
-mail.demo.test</span>
+    2026-09-23 00:00 UTC
 
-              <span class="cw-chip inset mono">
-
-    <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/><path d="M3 12h18"/><path d="M12 3a14 14 0 000 18 14 14 0 000-18z"/></svg>
-
-www.mail.demo.test</span>
-
-
-          </div>
-        </div>
-      </div>
-
-
-      <div class="cw-panel">
-        <div class="cw-panel-head"><h2>Certificate details</h2></div>
-        <div class="cw-panel-body">
-          <dl class="cw-kv">
-
-
-  <div class="wide">
-    <dt>Issuer</dt>
-    <dd>CN=Demo Internal CA</dd>
-  </div>
+                                        </dd>
+                                    </div>
+                                </dl>
 
 
-  <div>
-    <dt>Key</dt>
-    <dd>RSA 2048</dd>
-  </div>
+                                <h3>Recent alerts</h3>
+                                <ul class="cw-detail-history">
+
+                                        <li>Certificate expires in 60 days · <span class="t-muted">Sending</span></li>
+
+                                </ul>
 
 
-  <div>
-    <dt>Signature</dt>
-    <dd>sha256WithRSAEncryption</dd>
-  </div>
+                                <h3>Renewal history</h3>
+                                <ul class="cw-detail-history">
+
+                                        <li>
+                                            2025-11-21 · <a class="cw-link mono" href="/certificates/{{CERT_4_ID}}">{{CERT_4_FINGERPRINT_SHORT}}…</a>
+                                            · current
+                                        </li>
+
+                                </ul>
 
 
-  <div class="wide">
-    <dt>Serial number</dt>
-    <dd class="mono">{{CERT_4_SERIAL}}</dd>
-  </div>
 
-
-  <div class="wide">
-    <dt>SHA-256 fingerprint</dt>
-    <dd class="mono">{{CERT_4_FINGERPRINT_COLON}}</dd>
-  </div>
-
-
-  <div>
-    <dt>Issued</dt>
-    <dd>2025-11-21</dd>
-  </div>
-
-          </dl>
-        </div>
-      </div>
-
-
-      <div class="cw-panel">
-        <div class="cw-panel-head"><h2>
-
-    <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
-
- Renewal history</h2></div>
-        <div class="cw-panel-body">
-
-          <div class="cw-tl">
-
-            <div class="cw-tl-node t-ink">
-              <span class="cw-tl-dot"></span><span class="cw-tl-line"></span>
-              <div class="cw-chiprow">
-                <span class="tnum">2025-11-21</span>
-                <span class="cw-chip t-ok">current</span>
-                <a href="/certificates/{{CERT_4_ID}}" class="cw-chip mono">{{CERT_4_FINGERPRINT_SHORT}}…</a>
-              </div>
-            </div>
-
-          </div>
+                        </div>
+                    </details>
+                </section>
 
         </div>
-      </div>
-
-
-
-
-
-
-      <div class="cw-panel">
-        <div class="cw-panel-head">
-          <h2>
-
-    <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4l-7.2 7.2a2 2 0 01-2.8 0l-7.2-7.2A2 2 0 013 11.8V5a2 2 0 012-2h6.8a2 2 0 011.4.6l7.4 7.4a2 2 0 010 2.4z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/></svg>
-
- Tags</h2>
-
-          <details class="cw-editor">
-            <summary class="cw-btn ghost sm">
-
-    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-
-Edit tags</summary>
-            <div class="cw-editor-body">
-              <form method="post" action="/certificates/{{CERT_4_ID}}/tags" class="cw-form">
-                <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
-                <input class="cw-input" type="text" name="tags" aria-label="Tags" value="leaf-tag"
-                       list="cw-all-tags" placeholder="comma-separated, e.g. prod, payments">
-                <datalist id="cw-all-tags">
-                  <option value="edge"></option><option value="leaf-tag"></option><option value="mail"></option><option value="production"></option><option value="staging"></option>
-                </datalist>
-                <div class="cw-hint">
-                  Edits this certificate's own tags; host tags are inherited automatically.
-
-                  Tags group the estate, scope team access, and route alerts.
-                </div>
-                <div class="cw-form-foot"><button type="submit" class="cw-btn primary sm">Save tags</button></div>
-              </form>
-            </div>
-          </details>
-
-        </div>
-        <div class="cw-panel-body">
-
-
-          <div class="cw-chiprow">
-
-              <span class="cw-chip">leaf-tag</span>
-
-              <span class="cw-chip t-muted">production <span class="cw-muted">(host)</span></span>
-
-              <span class="cw-chip t-muted">mail <span class="cw-muted">(host)</span></span>
-
-          </div>
-
-        </div>
-      </div>
-
-
-
-
     </div>
-
-
-
-    <div class="cw-panel">
-      <div class="cw-panel-head"><h2>
-
-    <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg>
-
- Certificate chain</h2></div>
-      <div class="cw-panel-body">
-        <div class="cw-tl">
-          <div class="cw-tl-node t-ink">
-            <span class="cw-tl-dot"></span><span class="cw-tl-line"></span>
-            <div class="cw-chaincard">
-              <div class="cw-chiprow between">
-                <span class="cw-id">mail.demo.test</span>
-                <span class="cw-tl-role t-ink">Leaf · end-entity</span>
-              </div>
-              <div class="cw-chiprow cw-metarow">
-                <span class="cw-chip">
-
-    <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2"/><path d="M15 7a4 4 0 11-6 6l-6 6v3h3l6-6a4 4 0 016-6l1-1-3-3z"/></svg>
-
-RSA 2048</span>
-                <span class="cw-muted tnum">exp 2026-11-21</span>
-                <span class="cw-spacer"></span>
-                <span class="cw-status t-warn">
-  <span class="dot" aria-hidden="true"></span>60d
-</span>
-              </div>
-            </div>
-          </div>
-
-        </div>
-
-
-        <div id="chain-guidance" data-testid="chain-guidance" class="cw-metarow">
-          <div class="cw-note t-muted">
-
-    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg>
-
-<b>Unable to reach a trusted root</b></div>
-          <p class="cw-sub">The stored chain ends at O=Demo Estate,CN=mail.demo.test. Its expected issuer is unavailable to this instance; it may be an intermediate or a root absent from its trust store.</p>
-
-          <dl class="cw-kv"><div class="wide"><dt>Expected issuer</dt><dd>CN=Demo Internal CA</dd></div></dl>
-
-          <p class="cw-sub"><strong>Next step:</strong> Check the CA&#39;s chain bundle for the expected issuer. Configure the TLS endpoint with its leaf certificate and required intermediate certificates, in issuer order, then scan again. If the issuer is a private root, verify it and add it in Settings → Trust anchors instead. Public roots normally come from the system CA bundle.</p>
-        </div>
-      </div>
-    </div>
-
-  </div>
-</div>
 
     </main>
   </div>
   <script src="/static/js/core.js" nonce="{{CSP_NONCE}}"></script>
-
-
-<script src="/static/js/detail.js" nonce="{{CSP_NONCE}}"></script>
-
-
+  <script src="/static/js/detail.js" nonce="{{CSP_NONCE}}"></script>
 </body>
 </html>

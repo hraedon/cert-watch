@@ -281,9 +281,7 @@ def delivery_state(
     return "ok"
 
 
-def register_status_model_functions(
-    conn: sqlite3.Connection, context: StatusModelContext
-) -> None:
+def register_status_model_functions(conn: sqlite3.Connection, context: StatusModelContext) -> None:
     """Register request-bound SQL functions used by filtering and agreement tests."""
     cfg = context.settings
     # Converting the request clock to its SQL representation is request work,
@@ -310,6 +308,7 @@ def register_status_model_functions(
             (str(hostname or ""), int(port or 0)), "unknown"
         ),
     )
+
     def sql_renewal(
         hostname: object,
         port: object,
@@ -408,59 +407,66 @@ def delivery_state_sql(
     )
 
 
-def routing_gap_sql(cert_alias: str | None, host_alias: str | None) -> str:
-    """Return whether a row has neither an owner nor a matching alert group."""
+def routing_gap_sql(
+    cert_alias: str | None,
+    host_alias: str | None,
+    settings: AxisSettings | None = None,
+) -> str:
+    """Return whether a row has no owner, group, or global alert route."""
     owner_route = (
-        f"NULLIF(TRIM(COALESCE({host_alias}.owner_name, '')), '') IS NOT NULL OR "
         f"NULLIF(TRIM(COALESCE({host_alias}.owner_email, '')), '') IS NOT NULL"
         if host_alias
         else "0"
     )
+    cfg = settings or AxisSettings()
+    global_route = int(bool(cfg.global_recipients or cfg.webhook_configured))
     return (
-        f"CASE WHEN NOT ({owner_route}) AND NOT "
+        f"CASE WHEN NOT ({global_route}) AND NOT ({owner_route}) AND NOT "
         f"{alert_group_match_sql(cert_alias, host_alias)} THEN 1 ELSE 0 END"
     )
 
 
 def _latest_channel_outcomes(
     db_path: str | Path, cert_ids: tuple[str, ...]
-) -> dict[str, dict[str, str]]:
+) -> dict[str, dict[str, dict[str, str | None]]]:
     if not cert_ids:
         return {}
-    result: dict[str, dict[str, str]] = {}
+    result: dict[str, dict[str, dict[str, str | None]]] = {}
     from cert_watch.alerting.model import normalize_channel
 
     with _connect(db_path) as conn:
-        conn.create_function(
-            "cw_normalize_channel", 1, lambda value: normalize_channel(str(value))
-        )
+        conn.create_function("cw_normalize_channel", 1, lambda value: normalize_channel(str(value)))
         for start in range(0, len(cert_ids), 350):
             chunk = cert_ids[start : start + 350]
             placeholders = ",".join("?" for _ in chunk)
             rows = conn.execute(
                 f"""WITH normalized AS (
                     SELECT a.cert_id, cw_normalize_channel(e.channel) AS channel,
-                           e.details, e.id
+                           e.details, e.occurred_at, e.id
                     FROM alert_delivery_events e
                     JOIN alerts a ON a.id = e.alert_id
                     WHERE e.event_kind = 'completed' AND a.cert_id IN ({placeholders})
                 ), completed AS (
-                    SELECT cert_id, channel, details, id,
+                    SELECT cert_id, channel, details, occurred_at, id,
                            ROW_NUMBER() OVER (
                                PARTITION BY cert_id, channel ORDER BY id DESC
                            ) AS n
                     FROM normalized
                 )
-                SELECT cert_id, channel, json_extract(details, '$.outcome') AS outcome
+                SELECT cert_id, channel, occurred_at,
+                       json_extract(details, '$.outcome') AS outcome
                 FROM completed WHERE n = 1""",
                 chunk,
             ).fetchall()
             for row in rows:
                 channel = str(row["channel"])
                 outcome = row["outcome"]
-                result.setdefault(row["cert_id"], {})[channel] = (
-                    outcome if outcome in {"accepted", "partial", "failed"} else "unknown"
-                )
+                result.setdefault(row["cert_id"], {})[channel] = {
+                    "outcome": (
+                        outcome if outcome in {"accepted", "partial", "failed"} else "unknown"
+                    ),
+                    "at": row["occurred_at"],
+                }
     return result
 
 
@@ -481,9 +487,7 @@ def load_delivery_statuses(
     for cert_id in missing:
         snapshot = routing.get(cert_id, {"recipients": [], "groups": []})
         specific = tuple(
-            str(value).strip()
-            for value in snapshot.get("recipients", [])
-            if str(value).strip()
+            str(value).strip() for value in snapshot.get("recipients", []) if str(value).strip()
         )
         groups = tuple(
             str(group.get("name") or group.get("id") or "")
@@ -492,6 +496,8 @@ def load_delivery_statuses(
         )
         smtp_recipients = tuple(dict.fromkeys((*cfg.global_recipients, *specific)))
         latest = outcomes.get(cert_id, {})
+        smtp_latest = latest.get("smtp", {})
+        webhook_latest = latest.get(f"webhook:{cfg.webhook_kind}", {})
         smtp_ok = cfg.smtp_configured and bool(smtp_recipients)
         webhook_ok = cfg.webhook_configured
         channels = (
@@ -500,14 +506,16 @@ def load_delivery_statuses(
                 "recipients": list(smtp_recipients),
                 "configured": cfg.smtp_configured,
                 "can_deliver": smtp_ok,
-                "last_outcome": latest.get("smtp"),
+                "last_outcome": smtp_latest.get("outcome"),
+                "last_attempt_at": smtp_latest.get("at"),
             },
             {
                 "channel": f"webhook:{cfg.webhook_kind}",
                 "recipients": list(groups),
                 "configured": cfg.webhook_configured,
                 "can_deliver": webhook_ok,
-                "last_outcome": latest.get(f"webhook:{cfg.webhook_kind}"),
+                "last_outcome": webhook_latest.get("outcome"),
+                "last_attempt_at": webhook_latest.get("at"),
             },
         )
         state = delivery_state(
@@ -516,14 +524,71 @@ def load_delivery_statuses(
             smtp_ok,
             cfg.webhook_configured,
             webhook_ok,
-            latest.get("smtp"),
-            latest.get(f"webhook:{cfg.webhook_kind}"),
+            smtp_latest.get("outcome"),
+            webhook_latest.get("outcome"),
         )
         context.delivery[cert_id] = {
             "state": state,
             "recipients": list(specific),
             "matching_groups": list(groups),
             "channels": list(channels),
+        }
+
+
+def load_pending_delivery_statuses(
+    db_path: str | Path,
+    host_ids: tuple[str, ...],
+    context: StatusModelContext,
+) -> None:
+    """Populate the same delivery model for not-yet-scanned hosts."""
+    missing = tuple(dict.fromkeys(hid for hid in host_ids if hid not in context.delivery))
+    if not missing:
+        return
+    from cert_watch.alerting.routing import resolve_pending_host_routing
+
+    routing = resolve_pending_host_routing(db_path, missing)
+    cfg = context.settings
+    for host_id in missing:
+        snapshot = routing.get(host_id, {"recipients": [], "groups": []})
+        specific = tuple(str(value) for value in snapshot.get("recipients", []) if value)
+        groups = tuple(
+            str(group.get("name") or group.get("id") or "")
+            for group in snapshot.get("groups", [])
+            if isinstance(group, dict)
+        )
+        smtp_recipients = tuple(dict.fromkeys((*cfg.global_recipients, *specific)))
+        smtp_ok = cfg.smtp_configured and bool(smtp_recipients)
+        channels = [
+            {
+                "channel": "smtp",
+                "recipients": list(smtp_recipients),
+                "configured": cfg.smtp_configured,
+                "can_deliver": smtp_ok,
+                "last_outcome": None,
+                "last_attempt_at": None,
+            },
+            {
+                "channel": f"webhook:{cfg.webhook_kind}",
+                "recipients": list(groups),
+                "configured": cfg.webhook_configured,
+                "can_deliver": cfg.webhook_configured,
+                "last_outcome": None,
+                "last_attempt_at": None,
+            },
+        ]
+        context.delivery[host_id] = {
+            "state": delivery_state(
+                bool(specific or groups or cfg.global_recipients or cfg.webhook_configured),
+                cfg.smtp_configured,
+                smtp_ok,
+                cfg.webhook_configured,
+                cfg.webhook_configured,
+                None,
+                None,
+            ),
+            "recipients": list(specific),
+            "matching_groups": list(groups),
+            "channels": channels,
         }
 
 
@@ -536,7 +601,7 @@ def _monitoring_axis(row: dict[str, Any]) -> dict[str, Any]:
         cause = (
             "No successful scan is recorded."
             if not row.get("monitoring_last_success")
-            else "The endpoint has no current successful observation."
+            else "The scheduled certificate observation is overdue."
         )
     return {
         "state": state,
@@ -571,32 +636,25 @@ def attach_status_models(
     for row in rows:
         leaves.extend(row.get("hosts") or [row])
     cert_ids = tuple(
-        str(row.get("id"))
-        for row in leaves
-        if row.get("id") and row.get("kind") != "pending"
+        str(row.get("id")) for row in leaves if row.get("id") and row.get("kind") != "pending"
     )
     load_delivery_statuses(db_path, cert_ids, context)
+    pending_ids = tuple(
+        str(row.get("id")) for row in leaves if row.get("id") and row.get("kind") == "pending"
+    )
+    load_pending_delivery_statuses(db_path, pending_ids, context)
     for row in leaves:
         days = row.get("effective_days")
         condition = str(row.get("condition") or condition_state(days) or "") or None
         chain_status = row.get("chain_status")
-        delivery = (
+        delivery = context.delivery.get(
+            str(row.get("id") or ""),
             {
                 "state": str(row.get("delivery") or "unrouted"),
                 "recipients": [],
                 "matching_groups": [],
                 "channels": [],
-            }
-            if row.get("kind") == "pending"
-            else context.delivery.get(
-                str(row.get("id") or ""),
-                {
-                    "state": "unrouted",
-                    "recipients": [],
-                    "matching_groups": [],
-                    "channels": [],
-                },
-            )
+            },
         )
         row["status"] = {
             "condition": {"state": condition, "effective_days": days},
@@ -634,9 +692,7 @@ def attach_status_models(
         }
         delivery_order = {"failing": 0, "unrouted": 1, "ok": 2}
         row["condition"] = (
-            min(conditions, key=lambda value: condition_order[value])
-            if conditions
-            else None
+            min(conditions, key=lambda value: condition_order[value]) if conditions else None
         )
         row["monitoring"] = monitoring
         row["renewal"] = min(

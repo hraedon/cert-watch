@@ -70,7 +70,12 @@ def visual_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
             proc.kill()
 
 # Regions that legitimately vary between runs/builds.
-_MASKS = ["[data-testid=auth-user]", ".cw-ver", "#cw-health"]
+_MASKS = [
+    "[data-testid=auth-user]",
+    ".cw-ver",
+    "#cw-health",
+    ".cw-home-foot span:nth-child(2)",  # Next run crosses at the configured schedule.
+]
 
 # Empty-state pages with stable layout (no certs/dates seeded).
 _VISUAL_PAGES = {

@@ -191,9 +191,7 @@ def test_hosts_csv_export_includes_notes(tmp_path, reload_app):
     assert "csv note" in lines[1]
 
 
-def test_certificate_detail_shows_host_notes(
-    tmp_path, reload_app, leaf_pem_file, monkeypatch
-):
+def test_certificate_detail_shows_host_notes(tmp_path, reload_app, leaf_pem_file, monkeypatch):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)
@@ -211,6 +209,7 @@ def test_certificate_detail_shows_host_notes(
 
     # Update the cert to link to the host
     import sqlite3
+
     with sqlite3.connect(str(db)) as conn:
         conn.execute(
             "UPDATE certificates SET hostname = ?, port = ? WHERE id = ?",
@@ -221,7 +220,7 @@ def test_certificate_detail_shows_host_notes(
     with TestClient(app_mod.app) as client:
         r = client.get(f"/certificates/{cert_id}")
     assert r.status_code == 200
-    assert "operational notes for this host" in r.text
+    assert "operational notes for this host" not in r.text
     assert "host-level note" in r.text
     assert r.text.count('data-testid="notes-view"') == 1
     assert r.text.count('data-testid="notes-editor"') == 1
@@ -283,9 +282,7 @@ def test_import_hosts_accepts_notes_csv(tmp_path, reload_app, monkeypatch):
     assert host.notes == "imported note"
 
 
-def test_dashboard_host_row_shows_notes_indicator(
-    tmp_path, reload_app, leaf_pem_file, monkeypatch
-):
+def test_dashboard_host_row_shows_notes_indicator(tmp_path, reload_app, leaf_pem_file, monkeypatch):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)

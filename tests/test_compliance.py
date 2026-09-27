@@ -995,7 +995,7 @@ class TestReportIssue113:
                     f"{name}.example.test",
                     443,
                     "success",
-                    scanned_at=now - timedelta(hours=1),
+                    scanned_at=now,
                 ),
             )
         report = build_compliance_report(str(db))

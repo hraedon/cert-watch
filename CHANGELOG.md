@@ -15,6 +15,13 @@ All notable changes to cert-watch are documented in this file.
 
 ### Changed
 
+- Detail A (#126 S4) reorganizes endpoint and uploaded-certificate pages around
+  certificate, monitoring, renewal and alert-delivery state; state-derived
+  next steps; an alert-recipient table; one atomic Edit host form; and collapsed
+  certificate facts and history. Routing identities are visible to
+  administrators and callers with effective write access to that certificate;
+  read-only callers receive channel types, states and anonymous counts in both
+  the UI and JSON APIs.
 - Posture now leads with a scoped, linked grade distribution and the
   lowest-grade certificates with their failing reason instead of a fleet grade
   determined by the worst certificate. Grade and TLS trends remain hidden
@@ -41,6 +48,16 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Detail pages keep the Edit host disclosure full-width at desktop and mobile,
+  preserve submitted values beside field errors, open disclosures addressed by
+  URL fragments, and give viewers role-appropriate next steps. Pending hosts
+  now resolve owner, tag-group and global alert routes exactly like scanned
+  endpoints; unmatched groups are informational unless no route exists.
+- Combined host edits authorize host fields and certificate tags against their
+  separate resources, including the transactional recheck. Tag changes require
+  write-tier access to every submitted tag and cannot remove the last tag that
+  keeps a scoped writer in scope. Read-only APIs and exports redact owner email
+  and channel handles while retaining the owner's display name.
 - S5 follow-up: mobile content wraps or uses labeled keyboard-scrollable table
   regions instead of being clipped; Posture explains the checks that actually
   determine a grade; moved and activity links keep accessible dark-theme
@@ -49,7 +66,6 @@ All notable changes to cert-watch are documented in this file.
   across editing, Add, JSON, and CSV writes. Invalid daily schedule values are
   rejected by both HTML and JSON policy writes, and an idempotent Add reports
   when ownership seeds were intentionally not applied to an existing endpoint.
-
 - Accessibility (#126 S2): every page has a `<main>` landmark, every form
   field has an associated label, empty action-column headers are named for
   screen readers, and secondary text no longer uses `--text-3`, which failed
@@ -79,10 +95,11 @@ All notable changes to cert-watch are documented in this file.
   refresh it transactionally, and stale evidence fails closed to Unknown.
   Delivery uses the latest outcome for the configured, normalized channel name
   (#126 S1).
-- `GET /api/certificates/{id}/alert-routing` no longer exposes alert-group names
-  or recipient addresses to viewer/operator sessions or read/write API keys.
-  Non-admin callers receive delivery state, channel types and anonymous route
-  counts; administrators retain the full routing preview (#126 S1).
+- `GET /api/certificates/{id}/alert-routing` and every status block expose
+  alert-group names and recipient addresses only to administrators and callers
+  with effective write access to that certificate. Read-only sessions and API
+  keys receive delivery state, channel types and anonymous route counts
+  (#126 S1, S4).
 
 ## [1.0.4] - 2026-09-25
 

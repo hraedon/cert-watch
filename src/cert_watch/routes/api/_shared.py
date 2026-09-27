@@ -10,6 +10,7 @@ from typing import Any, cast
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from cert_watch.auth.scope import may_reveal_routing_identities
 from cert_watch.status_model import invalid_status_filters, overall_state
 from cert_watch.tags import format_tags, parse_tags
 
@@ -39,14 +40,22 @@ def status_filter_error(
     )
 
 
-def delivery_details_allowed(request: Request) -> bool:
-    """Only administrators may read routing identities from status blocks."""
-    auth = getattr(request.state, "auth_context", None)
-    return auth is None or bool(getattr(auth, "is_admin", False))
+def delivery_details_allowed(
+    request: Request, *, effective_tags: list[str] | tuple[str, ...] = ()
+) -> bool:
+    """Whether this caller may read routing identities for one certificate.
+
+    Routing identities follow the certificate's write boundary: administrators,
+    global writers, and callers with an effective per-tag write tier may see
+    them.  Read-only callers still receive channel types and anonymous counts.
+    """
+    return may_reveal_routing_identities(
+        getattr(request.state, "auth_context", None), effective_tags
+    )
 
 
 def delivery_for_api(raw: dict[str, Any], *, reveal_details: bool) -> dict[str, Any]:
-    """Return full routing detail for admins and anonymous counts otherwise."""
+    """Return routing identities for writers and anonymous counts otherwise."""
     if reveal_details:
         return dict(raw)
     raw_channels = raw.get("channels")
@@ -72,26 +81,42 @@ def status_for_api(model: dict[str, Any], *, reveal_delivery_details: bool) -> d
     raw = model.get("delivery")
     if not isinstance(raw, dict):
         return result
-    result["delivery"] = delivery_for_api(
-        raw, reveal_details=reveal_delivery_details
-    )
+    result["delivery"] = delivery_for_api(raw, reveal_details=reveal_delivery_details)
     return result
 
 
 def status_api_row(
-    row: dict[str, Any], *, reveal_delivery_details: bool = False
+    row: dict[str, Any],
+    *,
+    reveal_delivery_details: bool = False,
+    request: Request | None = None,
 ) -> dict[str, Any]:
     """Copy a dashboard row with an honest compatibility status token."""
     result = dict(row)
     result["urgency"] = overall_state(row)
     result["overall_state"] = result["urgency"]
+    reveal = (
+        delivery_details_allowed(request, effective_tags=parse_tags(row.get("tags", "")))
+        if request is not None
+        else reveal_delivery_details
+    )
     if isinstance(row.get("status"), dict):
-        result["status"] = status_for_api(
-            row["status"], reveal_delivery_details=reveal_delivery_details
-        )
+        result["status"] = status_for_api(row["status"], reveal_delivery_details=reveal)
+    if not reveal:
+        # Contact addresses and channel handles identify alert recipients just
+        # as directly as the expanded routing model does. Preserve the
+        # response shape while withholding those values from read-only users.
+        if "owner_email" in result:
+            result["owner_email"] = ""
+        if "owner_slack" in result:
+            result["owner_slack"] = ""
     if row.get("hosts"):
         result["hosts"] = [
-            status_api_row(child, reveal_delivery_details=reveal_delivery_details)
+            status_api_row(
+                child,
+                reveal_delivery_details=reveal_delivery_details,
+                request=request,
+            )
             for child in row["hosts"]
         ]
     return result
@@ -223,7 +248,11 @@ def tags_from_json_body(raw: bytes) -> str:
 
 
 def _pagination_links(
-    request: Request, path: str, page: int, limit: int, total: int,
+    request: Request,
+    path: str,
+    page: int,
+    limit: int,
+    total: int,
 ) -> dict[str, str | None]:
     """Build HATEOAS pagination links for a JSON API response."""
     pages = (total + limit - 1) // limit if limit else 0

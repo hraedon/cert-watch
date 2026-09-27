@@ -1,4 +1,5 @@
 """SQL-paginated ungrouped dashboard query path (BC-073)."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -174,14 +175,12 @@ def inventory_candidates_sql(
         """
 
     history_join = (
-        " LEFT JOIN history_summary hs"
-        " ON hs.hostname = h.hostname AND hs.port = h.port"
+        " LEFT JOIN history_summary hs ON hs.hostname = h.hostname AND hs.port = h.port"
         if need_monitoring
         else ""
     )
     renewal_join = (
-        " LEFT JOIN endpoint_renewal_analytics ra"
-        " ON ra.hostname = h.hostname AND ra.port = h.port"
+        " LEFT JOIN endpoint_renewal_analytics ra ON ra.hostname = h.hostname AND ra.port = h.port"
         if need_renewal
         else ""
     )
@@ -219,9 +218,7 @@ def inventory_candidates_sql(
         else "NULL AS renewal"
     )
     renewal_analytics_col = (
-        "COALESCE(ra.classification, 'unknown')"
-        if need_renewal
-        else "'unknown'"
+        "COALESCE(ra.classification, 'unknown')" if need_renewal else "'unknown'"
     )
     delivery_col = (
         delivery_state_sql("c", "h", delivery_settings)
@@ -238,9 +235,15 @@ def inventory_candidates_sql(
         if need_delivery and sql_delivery
         else "'unrouted'"
     )
-    scanned_routing_gap_col = routing_gap_sql("c", "h") if need_routing else "0"
-    pending_routing_gap_col = routing_gap_sql(None, "h") if need_routing else "0"
-    uploaded_routing_gap_col = routing_gap_sql("c", None) if need_routing else "0"
+    scanned_routing_gap_col = (
+        routing_gap_sql("c", "h", delivery_settings) if need_routing else "0"
+    )
+    pending_routing_gap_col = (
+        routing_gap_sql(None, "h", delivery_settings) if need_routing else "0"
+    )
+    uploaded_routing_gap_col = (
+        routing_gap_sql("c", None, delivery_settings) if need_routing else "0"
+    )
 
     select_parts: list[str] = []
     params: list[Any] = []
@@ -479,9 +482,7 @@ def build_inventory_entries(
     pending_hosts: list[Any] = []
     for chunk in _chunks(pending_ids):
         ph = ",".join("?" * len(chunk))
-        pending_hosts += conn.execute(
-            f"SELECT * FROM hosts WHERE id IN ({ph})", chunk
-        ).fetchall()
+        pending_hosts += conn.execute(f"SELECT * FROM hosts WHERE id IN ({ph})", chunk).fetchall()
     pairs = sorted({(h["hostname"], h["port"]) for h in [*host_rows, *pending_hosts]})
     scan_rows: list[Any] = []
     for chunk in _chunks(pairs):
@@ -508,8 +509,13 @@ def build_inventory_entries(
     missing = [lid for lid in leaf_ids if lid not in selected]
     chain_statuses = {**leaf_chain_statuses(conn, missing, status), **selected}
     built = _build_unified_for_leaf_ids(
-        conn, leaf_ids, host_rows=host_rows, scan_rows=scan_rows, anchor_rows=anchor_rows,
-        now=status.now, chain_statuses=chain_statuses,
+        conn,
+        leaf_ids,
+        host_rows=host_rows,
+        scan_rows=scan_rows,
+        anchor_rows=anchor_rows,
+        now=status.now,
+        chain_statuses=chain_statuses,
     )
     built += _build_pending_entries(pending_hosts, scan_rows)
     result = _reorder_by_candidates(built, ordered)
@@ -521,10 +527,21 @@ def build_inventory_entries(
             continue
         keys = set(candidate.keys())
         for key in (
-            "eff_days", "condition", "monitoring", "monitoring_last_success",
-            "monitoring_last_attempt", "monitoring_attempt_status", "monitoring_error",
-            "monitoring_first_failed", "renewal", "delivery",
-            "renewal_analytics", "has_successor", "overall_state", "hostname", "port",
+            "eff_days",
+            "condition",
+            "monitoring",
+            "monitoring_last_success",
+            "monitoring_last_attempt",
+            "monitoring_attempt_status",
+            "monitoring_error",
+            "monitoring_first_failed",
+            "renewal",
+            "delivery",
+            "renewal_analytics",
+            "has_successor",
+            "overall_state",
+            "hostname",
+            "port",
         ):
             if key in keys:
                 entry["effective_days" if key == "eff_days" else key] = candidate[key]
@@ -636,8 +653,14 @@ def list_dashboard_page(
     # The full four-axis projection is applied after LIMIT to the returned
     # keys, so an unfiltered 20k estate evaluates at most 25/50 display rows.
     candidates = inventory_candidates_sql(
-        source=source, q=q, scope_tags=scope_tags, status=status, axes=axes,
-        entry_id=entry_id, sql_delivery=bool(delivery), axis_columns=filter_axes,
+        source=source,
+        q=q,
+        scope_tags=scope_tags,
+        status=status,
+        axes=axes,
+        entry_id=entry_id,
+        sql_delivery=bool(delivery),
+        axis_columns=filter_axes,
     )
     if candidates is None:
         return [], 0

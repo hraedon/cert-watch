@@ -18,7 +18,7 @@ from cert_watch.database import (
 )
 from cert_watch.routes._deps import _db_path, _get_settings
 from cert_watch.routes._scoped import scope_tags_from_auth
-from cert_watch.routes.api._shared import delivery_details_allowed, status_api_row
+from cert_watch.routes.api._shared import status_api_row
 from cert_watch.status_model import AxisSettings
 
 logger = logging.getLogger("cert_watch.routes.api.insights")
@@ -108,7 +108,7 @@ def api_pivot_group_entries(
     entries = [
         status_api_row(
             e,
-            reveal_delivery_details=delivery_details_allowed(request),
+            request=request,
         )
         for e in entries
     ]

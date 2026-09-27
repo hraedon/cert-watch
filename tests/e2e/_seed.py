@@ -15,6 +15,7 @@ tests must mask the expiry column (see test_visual_regression._POPULATED_MASKS).
 from __future__ import annotations
 
 import datetime
+import sqlite3
 from pathlib import Path
 
 from cryptography import x509
@@ -92,6 +93,180 @@ def seed_demo_certs(
             store_uploaded(entry, db)
             stored += 1
     return stored
+
+
+def seed_detail_estate(data_dir: Path | str) -> dict[str, str]:
+    """Seed real scanned, pending and uploaded Detail A states.
+
+    Unlike the upload-only visual estate, these rows exercise scan freshness,
+    failures, endpoint routing and chain evidence through the same persisted
+    inputs used by the scheduler.
+    """
+    from cert_watch.certificate_model import (
+        Certificate,
+        parse_certificate,
+        parse_pem_certificate,
+    )
+    from cert_watch.database import (
+        SqliteHostRepository,
+        SqliteTrustAnchorRepository,
+        init_schema,
+        replace_scanned,
+    )
+    from cert_watch.scheduler import ScanHistory, record_scan_history
+
+    root = Path(data_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    db = root / "cert-watch.sqlite3"
+    init_schema(db)
+    now = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+    hosts = SqliteHostRepository(db)
+    ids: dict[str, str] = {}
+
+    root_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    root_name = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "Detail Test Root CA")]
+    )
+    root_cert = (
+        x509.CertificateBuilder()
+        .subject_name(root_name)
+        .issuer_name(root_name)
+        .public_key(root_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=365))
+        .not_valid_after(now + datetime.timedelta(days=3650))
+        .add_extension(
+            x509.BasicConstraints(ca=True, path_length=None), critical=True
+        )
+        .sign(root_key, hashes.SHA256())
+    )
+    parsed_root = parse_certificate(
+        root_cert.public_bytes(serialization.Encoding.DER)
+    )
+    assert isinstance(parsed_root, Certificate)
+    SqliteTrustAnchorRepository(db).add(parsed_root)
+
+    def certificate(hostname: str, days: int, *, trusted: bool = True) -> Certificate:
+        if not trusted:
+            parsed = parse_pem_certificate(
+                make_cert_pem(hostname, "Unknown Detail CA", days, now=now).decode()
+            )
+            assert isinstance(parsed, Certificate)
+            return parsed
+
+        leaf_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = x509.Name(
+            [x509.NameAttribute(NameOID.COMMON_NAME, hostname)]
+        )
+        leaf = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(root_name)
+            .public_key(leaf_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(days=365))
+            .not_valid_after(now + datetime.timedelta(days=days))
+            .add_extension(
+                x509.BasicConstraints(ca=False, path_length=None), critical=True
+            )
+            .add_extension(
+                x509.SubjectAlternativeName([x509.DNSName(hostname)]),
+                critical=False,
+            )
+            .sign(root_key, hashes.SHA256())
+        )
+        parsed = parse_certificate(leaf.public_bytes(serialization.Encoding.DER))
+        assert isinstance(parsed, Certificate)
+        return parsed
+
+    def scanned(
+        key: str,
+        hostname: str,
+        days: int,
+        *,
+        success_hours: int,
+        chain_valid: bool = True,
+        failure_hours: int | None = None,
+        owner: bool = True,
+        trusted: bool = True,
+    ) -> None:
+        hosts.add(
+            hostname,
+            443,
+            tags="detail-team" if owner else "routing-gap",
+            owner_email="detail-owner@example.test" if owner else "",
+            renewal_method="manual",
+            scan_interval_hours=24,
+        )
+        cert_id, _, _ = replace_scanned(
+            db,
+            hostname,
+            443,
+            certificate(hostname, days, trusted=trusted),
+            [],
+            chain_valid,
+        )
+        ids[key] = cert_id
+        record_scan_history(
+            db,
+            ScanHistory(
+                hostname=hostname,
+                port=443,
+                status="success",
+                scanned_at=now - datetime.timedelta(hours=success_hours),
+            ),
+        )
+        if failure_hours is not None:
+            record_scan_history(
+                db,
+                ScanHistory(
+                    hostname=hostname,
+                    port=443,
+                    status="failure",
+                    error_message="[Errno 111] Connection refused",
+                    scanned_at=now - datetime.timedelta(hours=failure_hours),
+                ),
+            )
+
+    scanned("current", "current.detail.test", 60, success_hours=1)
+    scanned("expiring", "expiring.detail.test", 5, success_hours=1)
+    scanned("expired", "expired.detail.test", -3, success_hours=1)
+    scanned(
+        "failing",
+        "failing.detail.test",
+        60,
+        success_hours=72,
+        failure_hours=2,
+    )
+    scanned("overdue", "overdue.detail.test", 60, success_hours=72)
+    scanned(
+        "chain",
+        "chain.detail.test",
+        60,
+        success_hours=1,
+        chain_valid=False,
+        trusted=False,
+    )
+    scanned(
+        "routing_gap",
+        "routing-gap.detail.test",
+        60,
+        success_hours=1,
+        owner=False,
+    )
+    ids["never"] = hosts.add(
+        "never.detail.test", 443, tags="detail-team", renewal_method="manual"
+    )
+
+    seed_demo_certs(root, now=now)
+    with sqlite3.connect(db) as conn:
+        row = conn.execute(
+            "SELECT id FROM certificates WHERE source = 'uploaded' "
+            "AND subject LIKE '%intranet.demo.test%'"
+        ).fetchone()
+    assert row is not None
+    ids["uploaded"] = str(row[0])
+    return ids
 
 
 if __name__ == "__main__":  # pragma: no cover

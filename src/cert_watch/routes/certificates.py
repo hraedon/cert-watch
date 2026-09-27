@@ -13,16 +13,18 @@ from cert_watch import __commit__, __version__
 from cert_watch.audit import resolve_actor, resolve_source_ip
 from cert_watch.auth.guards import (
     admin_form_guard,
+    form_write_error,
     get_auth_context,
     write_form_guard,
 )
-from cert_watch.auth.scope import ScopeDeniedError
+from cert_watch.auth.scope import ScopeDeniedError, may_reveal_routing_identities
 from cert_watch.database import resolve_current_certificate
 from cert_watch.presenters.certificate_detail import present_certificate_detail
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth, get_templates
 from cert_watch.routes._scoped import (
     scope_read_denied,
     scope_tags_from_auth,
+    scope_write_denied,
     superseded_redirect,
     tags_with_scope,
 )
@@ -91,9 +93,7 @@ def _redirect_to_current_certificate(
     if scope_read_denied(request, db, cert_id=ref.cert_id):
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     params = [
-        (key, value)
-        for key, value in request.query_params.multi_items()
-        if key != "superseded"
+        (key, value) for key, value in request.query_params.multi_items() if key != "superseded"
     ]
     if ref.superseded:
         params.append(("superseded", "1"))
@@ -101,8 +101,15 @@ def _redirect_to_current_certificate(
     return RedirectResponse(url=f"/certificates/{ref.cert_id}{query}", status_code=303)
 
 
-@router.get("/certificates/{cert_id}", response_class=HTMLResponse, response_model=None)
-def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | RedirectResponse:
+def _render_certificate_detail(
+    request: Request,
+    cert_id: str,
+    *,
+    edit_values: dict[str, str] | None = None,
+    edit_errors: dict[str, str] | None = None,
+    edit_error: str = "",
+    status_code: int = 200,
+) -> HTMLResponse | RedirectResponse:
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
     settings = _get_settings(request)
@@ -117,6 +124,19 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
     if data is None or isinstance(data, PendingHostDetailData):
         moved = _redirect_to_current_certificate(request, db, cert_id)
         if moved is not None:
+            if edit_values is not None:
+                current = resolve_current_certificate(db, cert_id)
+                if current is not None and not scope_read_denied(
+                    request, db, cert_id=current.cert_id
+                ):
+                    return _render_certificate_detail(
+                        request,
+                        current.cert_id,
+                        edit_values=edit_values,
+                        edit_errors=edit_errors,
+                        edit_error=edit_error,
+                        status_code=status_code,
+                    )
             return moved
     if data is None:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
@@ -128,17 +148,42 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
     if denied:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     host_id = data.host.id if data.host is not None else ""
+    resource_writable = (
+        endpoint_settings_writable(request, db, host_id)
+        if host_id
+        else (
+            form_write_error(request) is None
+            and scope_write_denied(request, db, cert_id=cert_id) is None
+        )
+    )
+    may_edit_host = bool(
+        host_id
+        and form_write_error(request) is None
+        and scope_write_denied(request, db, host_id=host_id) is None
+        and (
+            isinstance(data, PendingHostDetailData)
+            or scope_write_denied(request, db, cert_id=cert_id) is None
+        )
+    )
+    effective_tags = (
+        data.effective_tags
+        if not isinstance(data, PendingHostDetailData)
+        else tuple(tag.strip() for tag in data.host.tags.split(",") if tag.strip())
+    )
+    auth_template = get_auth_context(request)
     view = present_certificate_detail(
         data,
-        settings_writable=(
-            endpoint_settings_writable(request, db, host_id) if host_id else False
-        ),
+        settings_writable=resource_writable,
+        is_admin=bool(auth_template["is_admin"]),
         slack_configured=settings.webhook_kind == "slack",
         endpoint_saved=bool(request.query_params.get("endpoint_saved")),
-        endpoint_error=request.query_params.get("endpoint_error", ""),
+        endpoint_error=edit_error or request.query_params.get("endpoint_error", ""),
         superseded=bool(request.query_params.get("superseded")),
         scanned=bool(request.query_params.get("scanned")),
         added=bool(request.query_params.get("added")),
+        reveal_delivery_identities=may_reveal_routing_identities(
+            getattr(request.state, "auth_context", None), effective_tags
+        ),
     )
     return templates.TemplateResponse(
         request=request,
@@ -147,20 +192,38 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             **view.template_context(),
             "version": __version__,
             "commit": __commit__,
-            **get_auth_context(request),
+            **auth_template,
+            "may_write": resource_writable,
+            "may_edit_host": may_edit_host,
             "active_page": "browse",
+            # Estate-wide "last scan failed" is misleading beside this
+            # endpoint's own monitoring state. Detail has the authoritative
+            # per-host four-axis block instead.
+            "hide_health_banner": True,
             # Flash messages from actions that return here (tags, owner,
             # Scan now); base.html renders them.
             "error": request.query_params.get("error", ""),
             "warning": request.query_params.get("warning", ""),
+            "host_saved": bool(request.query_params.get("host_saved")),
+            "edit_open": bool(edit_values is not None or request.query_params.get("edit")),
+            "edit_values": edit_values or {},
+            "edit_errors": edit_errors or {},
             **get_csrf_context(request),
         },
+        status_code=status_code,
     )
+
+
+@router.get("/certificates/{cert_id}", response_class=HTMLResponse, response_model=None)
+def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | RedirectResponse:
+    return _render_certificate_detail(request, cert_id)
 
 
 @router.post("/certificates/{cert_id}/delete")
 async def delete_certificate(
-    request: Request, cert_id: IdParam, _auth: str = Depends(write_form_guard),
+    request: Request,
+    cert_id: IdParam,
+    _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
     db = _db_path(request)
     try:
@@ -187,9 +250,12 @@ async def delete_certificate(
 # Note: POST /certificates/{id}/notes was removed (UI-INVENTORY V1). Notes are
 # a host-scoped concept now — the single write surface is POST /hosts/{id}/notes.
 
+
 @router.post("/certificates/{cert_id}/tags")
 async def update_certificate_tags(
-    request: Request, cert_id: IdParam, tags: str = Form(""),
+    request: Request,
+    cert_id: IdParam,
+    tags: str = Form(""),
     _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
     db = _db_path(request)
@@ -206,7 +272,8 @@ async def update_certificate_tags(
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     except ResourceMetadataValidationError as exc:
         return RedirectResponse(
-            url=f"/certificates/{cert_id}?error={quote(str(exc))}", status_code=303,
+            url=f"/certificates/{cert_id}?error={quote(str(exc))}",
+            status_code=303,
         )
     except ResourceMetadataNotFoundError:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
@@ -246,11 +313,10 @@ async def update_certificate_owner(
     except HostOwnershipTargetError as exc:
         if exc.reason == "resource_not_found":
             return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
-        message = (
-            "no host associated" if exc.reason == "no_host_associated" else "host not found"
-        )
+        message = "no host associated" if exc.reason == "no_host_associated" else "host not found"
         return RedirectResponse(
-            url=f"/certificates/{cert_id}?error={quote(message)}", status_code=303,
+            url=f"/certificates/{cert_id}?error={quote(message)}",
+            status_code=303,
         )
 
     host_id = target.host_id
@@ -274,11 +340,13 @@ async def update_certificate_owner(
     except HostOwnershipValidationError as exc:
         message = "invalid renewal method" if exc.field == "renewal_method" else str(exc)
         return RedirectResponse(
-            url=f"/certificates/{cert_id}?error={quote(message)}", status_code=303,
+            url=f"/certificates/{cert_id}?error={quote(message)}",
+            status_code=303,
         )
     except HostNotFoundError:
         return RedirectResponse(
-            url=f"/certificates/{cert_id}?error={quote('host not found')}", status_code=303,
+            url=f"/certificates/{cert_id}?error={quote('host not found')}",
+            status_code=303,
         )
     except CertificateSupersededError as exc:
         return superseded_redirect(exc)
@@ -340,14 +408,16 @@ async def add_trust_anchor(
         )
     except CertificateValidationError as exc:
         return RedirectResponse(
-            url=f"/settings/trust-anchors?error={quote(str(exc))}", status_code=303,
+            url=f"/settings/trust-anchors?error={quote(str(exc))}",
+            status_code=303,
         )
     return RedirectResponse(url="/settings/trust-anchors?saved=1", status_code=303)
 
 
 @router.post("/trust-anchors/{anchor_id}/delete")
 async def delete_trust_anchor(
-    request: Request, anchor_id: IdParam,
+    request: Request,
+    anchor_id: IdParam,
     _auth: str = Depends(admin_form_guard),  # #65: admin-only
 ) -> RedirectResponse:
     delete_trust_anchor_service(

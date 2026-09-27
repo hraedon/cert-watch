@@ -147,8 +147,8 @@ def _record_scan_failure(
 
 
 def _scoped_tags(auth: Any, tags: str) -> str:
-    scope = getattr(auth, "scope_tag", "") if auth is not None else ""
-    return format_tags(merge_tags(tags, scope or ""))
+    scope = writable_scope_tags(auth)
+    return format_tags(merge_tags(tags, ",".join(scope or ())))
 
 
 def _add_endpoints_authorized(
