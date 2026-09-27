@@ -38,6 +38,42 @@ if TYPE_CHECKING:
 logger = logging.getLogger("cert_watch.auth.request_context")
 
 
+class BearerCredentials(NamedTuple):
+    """A strictly parsed Authorization header.
+
+    cert-watch accepts exactly one ``Authorization`` field containing an
+    exact-case ``Bearer`` scheme, one ASCII space, and a whitespace-free
+    token.  Keeping this parser shared prevents the report-key precheck,
+    API-key authentication, and metrics authentication from disagreeing.
+    """
+
+    token: str | None = None
+    malformed: bool = False
+
+
+def parse_bearer_credentials(request: Request) -> BearerCredentials:
+    """Return the single strict bearer token, or classify a malformed header."""
+    values = [
+        value
+        for name, value in request.scope.get("headers", ())
+        if name.lower() == b"authorization"
+    ]
+    if not values:
+        return BearerCredentials()
+    if len(values) != 1:
+        return BearerCredentials(malformed=True)
+    try:
+        value = values[0].decode("latin-1")
+    except UnicodeDecodeError:
+        return BearerCredentials(malformed=True)
+    if not value.startswith("Bearer "):
+        return BearerCredentials(malformed=True)
+    token = value[7:]
+    if not token or any(char.isspace() for char in token):
+        return BearerCredentials(malformed=True)
+    return BearerCredentials(token=token)
+
+
 def _is_auth_enabled(request: Request) -> bool:
     """Return True when an auth provider is configured (not NoAuthProvider)."""
     auth = getattr(request.app.state, "auth_provider", None)
@@ -99,11 +135,10 @@ def check_metrics_token(request: Request) -> bool:
     metrics_token = _metrics_token(request)
     if not metrics_token:
         return True
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-        return hmac.compare_digest(token, metrics_token)
-    return False
+    credentials = parse_bearer_credentials(request)
+    return credentials.token is not None and hmac.compare_digest(
+        credentials.token, metrics_token
+    )
 
 
 def metrics_token_configured(request: Request) -> bool:
@@ -128,6 +163,15 @@ _RENEWAL_REPORT_ROUTES = frozenset({
 _RENEWAL_REPORT_FORBIDDEN = "forbidden for this key"
 
 
+def _is_renewal_report_route(request: Request) -> bool:
+    raw_path = request.scope.get("raw_path")
+    if not isinstance(raw_path, bytes):
+        raw_path = request.scope.get("path", "").encode("utf-8")
+    return (request.method, raw_path) in {
+        (method, path.encode("ascii")) for method, path in _RENEWAL_REPORT_ROUTES
+    }
+
+
 def authenticate_api_key(
     request: Request,
     db_path: str | Path | None,
@@ -142,20 +186,31 @@ def authenticate_api_key(
     path), and returns the context. Returns ``None`` when no valid key is
     presented — leaving cookie-session auth and metrics-token auth untouched.
     """
-    header = request.headers.get("authorization", "")
-    if not header.startswith("Bearer "):
+    credentials = parse_bearer_credentials(request)
+    token = credentials.token
+    if token is None:
         return None
-    token = header[7:].strip()
     if not token.startswith("cwk_") or not db_path:
         return None
     from cert_watch.database.api_keys import SqliteApiKeyRepository
 
-    result = SqliteApiKeyRepository(
-        db_path, security=_request_security(request)
-    ).verify_key(token, renewal_report_only=renewal_report_only)
+    repo = SqliteApiKeyRepository(db_path, security=_request_security(request))
+    # Verification is deliberately side-effect free until route authorization
+    # succeeds. A report credential refused by the capability allowlist must
+    # not gain last_used_at or a signing-pepper hash upgrade.
+    result = repo.verify_key(
+        token, renewal_report_only=renewal_report_only, record_use=False
+    )
     if result is None:
         return None
     if result.scope == _RENEWAL_REPORT_SCOPE:
+        if not _is_renewal_report_route(request):
+            request.state.api_key_forbidden = True
+            return None
+        if repo.verify_key(
+            token, renewal_report_only=True, record_use=True
+        ) is None:
+            return None
         ctx = AuthContext.renewal_report_key(
             result.name,
             principal_id=result.id,
@@ -165,13 +220,12 @@ def authenticate_api_key(
         request.scope["auth_user"] = result.name
         request.state.auth_context = ctx
         request.state.api_key_auth = True
-        if (request.method, request.url.path) not in _RENEWAL_REPORT_ROUTES:
-            request.state.api_key_forbidden = True
-            return None
         return ctx
     role = _API_KEY_SCOPE_ROLE.get(result.scope)
     if role is None:
         logger.warning("rejecting API key %s with unknown scope", result.id)
+        return None
+    if repo.verify_key(token, record_use=True) is None:
         return None
     ctx = AuthContext.from_tier(
         result.name,
@@ -283,8 +337,12 @@ async def auth_middleware(
     # allowlist. Inspect them before public-path routing so every other path,
     # including static files and unknown routes, has one indistinguishable
     # refusal. Existing key scopes retain their normal route behaviour.
-    authorization = request.headers.get("authorization", "")
-    if authorization.startswith("Bearer cwk_"):
+    credentials = parse_bearer_credentials(request)
+    if credentials.malformed:
+        return JSONResponse(
+            content={"error": "malformed authorization"}, status_code=401
+        )
+    if credentials.token and credentials.token.startswith("cwk_"):
         api_ctx = authenticate_api_key(
             request, _request_db_path(request), renewal_report_only=True
         )
@@ -306,7 +364,9 @@ async def auth_middleware(
         return await call_next(request)
 
     # Unauthenticated
-    cert_watch_key_presented = authorization.startswith("Bearer cwk_")
+    cert_watch_key_presented = bool(
+        credentials.token and credentials.token.startswith("cwk_")
+    )
     if (
         cert_watch_key_presented
         or path.rstrip("/") == "/metrics"

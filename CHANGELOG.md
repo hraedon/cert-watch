@@ -10,7 +10,10 @@ All notable changes to cert-watch are documented in this file.
   all-endpoints or host-tag binding. These keys have no certificate or
   settings permissions and are uniformly refused outside the future
   `GET`/`POST /api/renewal-reports` routes. A separate hash prefix makes older
-  binaries reject them rather than reinterpret them after a downgrade (#118 S1).
+  binaries reject them rather than reinterpret them after a downgrade. Their
+  tag bindings are limited to 20 visible labels of at most 64 characters each,
+  and malformed or duplicate Authorization headers are rejected consistently
+  across every route (#118 S1).
 
 - Generic JSON webhook templates now JSON-escape certificate-derived values
   for one string level. JSON mode requires a `{`-leading template whose neutral

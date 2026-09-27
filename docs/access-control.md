@@ -126,8 +126,10 @@ rule applies to usernames listed in a role mapping.
 Scripts and other systems authenticate with API keys, created by an
 administrator under **Settings → API keys**. A key has one of four scopes:
 `read` (viewer), `write` (operator), `admin`, or `renewal-report`. The token is
-shown once; only its hash is stored. Send it as
-`Authorization: Bearer cwk_…`.
+shown once; only its hash is stored. Send exactly one header as
+`Authorization: Bearer cwk_…`. The scheme is case-sensitive and the token
+cannot have leading, trailing or embedded whitespace; malformed or duplicate
+Authorization headers are rejected.
 
 Read, write and admin keys are not tag-scoped: a `read` key can read the whole
 estate. A `renewal-report` key has no read, write or settings permissions. It
@@ -140,7 +142,8 @@ A renewal-report key must be bound explicitly either to all endpoints or to
 one or more tags. Tag bindings match the endpoint's **host tags only**;
 certificate-only tags never bring an endpoint into the binding. A binding is
 checked live on each report request and cannot be edited. Revoke the key and
-create another to change its binding.
+create another to change its binding. A key can bind at most 20 tags, each at
+most 64 characters and containing at least one visible character.
 
 Create keys for systems, not people, and revoke them when they are no longer needed.
 Creating, listing and revoking keys needs an administrator's browser session,

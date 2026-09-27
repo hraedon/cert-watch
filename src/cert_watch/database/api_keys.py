@@ -26,6 +26,7 @@ import hmac
 import logging
 import os
 import secrets
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -41,6 +42,8 @@ logger = logging.getLogger("cert_watch.database.api_keys")
 VALID_SCOPES = ("read", "write", "admin", "renewal-report")
 VALID_BINDINGS = ("all", "tags")
 RENEWAL_REPORT_SCOPE = "renewal-report"
+MAX_RENEWAL_REPORT_TAG_LENGTH = 64
+MAX_RENEWAL_REPORT_TAGS = 20
 
 # Raw tokens are prefixed so they are recognisable in logs/configs and so a
 # bearer token can be told apart from other Authorization schemes at a glance.
@@ -132,6 +135,26 @@ def generate_token() -> str:
     return _TOKEN_PREFIX + secrets.token_urlsafe(32)
 
 
+def _validate_renewal_report_tags(tags: list[str] | tuple[str, ...]) -> None:
+    if len(tags) > MAX_RENEWAL_REPORT_TAGS:
+        raise ValueError(
+            f"renewal-report keys may bind at most {MAX_RENEWAL_REPORT_TAGS} tags"
+        )
+    for tag in tags:
+        normalized = unicodedata.normalize("NFKC", tag).strip()
+        visible = any(
+            not char.isspace() and unicodedata.category(char) not in {"Cc", "Cf", "Cs"}
+            for char in normalized
+        )
+        if not visible:
+            raise ValueError("renewal-report tags must contain visible characters")
+        if len(normalized) > MAX_RENEWAL_REPORT_TAG_LENGTH:
+            raise ValueError(
+                "renewal-report tags may contain at most "
+                f"{MAX_RENEWAL_REPORT_TAG_LENGTH} characters"
+            )
+
+
 class SqliteApiKeyRepository:
     """SQLite-backed API key store."""
 
@@ -197,6 +220,7 @@ class SqliteApiKeyRepository:
                 raise ValueError("tag-bound renewal-report keys require at least one tag")
             if binding == "all" and tags:
                 raise ValueError("all-bound renewal-report keys cannot include tags")
+            _validate_renewal_report_tags(tags)
         else:
             if binding not in (None, "", "all") or tags:
                 raise ValueError(f"{scope} keys must use binding='all'")
@@ -241,7 +265,11 @@ class SqliteApiKeyRepository:
         return entry, raw
 
     def verify_key(
-        self, raw_token: str, *, renewal_report_only: bool = False
+        self,
+        raw_token: str,
+        *,
+        renewal_report_only: bool = False,
+        record_use: bool = True,
     ) -> ApiKeyAuth | None:
         """Return the auth result for a valid, non-revoked token, else None.
 
@@ -297,12 +325,18 @@ class SqliteApiKeyRepository:
                     return None
                 if row["binding"] == "all" and tags:
                     return None
+                try:
+                    _validate_renewal_report_tags(tags)
+                except ValueError:
+                    return None
             elif (
                 row["key_hash"].startswith(_RENEWAL_REPORT_HMAC_PREFIX)
                 or row["binding"] != "all"
                 or tags
             ):
                 return None
+            if not record_use:
+                return auth
             now_iso = datetime.now(UTC).isoformat()
             updates = ["last_used_at = ?"]
             params: list[str] = [now_iso]

@@ -190,8 +190,17 @@ def _check_auth(
     require_write: bool = False,
     require_admin: bool = False,
     admin_legacy: bool = False,
+    allow_renewal_report: bool = False,
 ) -> SessionUser:
     if not _is_auth_enabled(request):
+        existing: AuthContext | None = getattr(request.state, "auth_context", None)
+        if (
+            allow_renewal_report
+            and existing is not None
+            and existing.principal_kind == "renewal-report"
+            and getattr(request.state, "api_key_auth", False)
+        ):
+            return SessionUser(user=existing.username, api_key_auth=True)
         request.state.auth_context = AuthContext.system()
         return SessionUser(user="")
 
@@ -209,6 +218,14 @@ def _check_auth(
         return SessionUser(error=error)
     if not user:
         return SessionUser(error="unauthenticated")
+
+    context: AuthContext | None = getattr(request.state, "auth_context", None)
+    if (
+        not allow_renewal_report
+        and context is not None
+        and context.principal_kind == "renewal-report"
+    ):
+        return SessionUser(user=user, error="forbidden for this key", api_key_auth=True)
 
     if require_write and _write_denied(request, user):
         return SessionUser(user=user, error="read-only user")
@@ -307,7 +324,11 @@ class ReadGuard:
         if not self.form:
             result = _check_auth(request, require_admin=self.admin)
             if result.error:
-                _raise_json(result.error if self.admin else "unauthenticated")
+                _raise_json(
+                    result.error
+                    if self.admin or result.error == "forbidden for this key"
+                    else "unauthenticated"
+                )
             if self.session_only and result.api_key_auth:
                 raise HTTPException(status_code=403, detail="admin browser session required")
             return result.user or ""
@@ -449,7 +470,7 @@ class RenewalReportGuard(MutationGuard):
         super().__init__("write", form=False)
 
     async def __call__(self, request: Request) -> str:
-        result = _check_auth(request)
+        result = _check_auth(request, allow_renewal_report=True)
         if result.error:
             _raise_json(result.error)
         context: AuthContext | None = getattr(request.state, "auth_context", None)

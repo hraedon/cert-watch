@@ -75,6 +75,11 @@ async def api_create_key(
     if isinstance(bound_tags_value, list) and all(
         isinstance(tag, str) for tag in bound_tags_value
     ):
+        if any("," in tag for tag in bound_tags_value):
+            return JSONResponse(
+                content={"error": "bound_tags list elements cannot contain commas"},
+                status_code=400,
+            )
         bound_tags = ",".join(bound_tags_value)
     elif isinstance(bound_tags_value, str) or bound_tags_value is None:
         bound_tags = bound_tags_value

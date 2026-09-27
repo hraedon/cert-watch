@@ -50,12 +50,14 @@ async def setup_redirect_middleware(
 def install_middleware(application: FastAPI) -> None:
     """Register the HTTP middleware stack on *application*."""
     # Order matters: last registered = first executed.
-    application.middleware("http")(security_headers_middleware)
     application.middleware("http")(csrf_session_middleware)
     application.middleware("http")(setup_redirect_middleware)
     application.middleware("http")(auth_middleware)
     application.middleware("http")(rate_limit_headers_middleware)
     application.middleware("http")(open_mode_host_middleware)
+    # Security headers wrap authentication and rate limiting too, so their
+    # early 401/403/429 responses carry the same protections as route output.
+    application.middleware("http")(security_headers_middleware)
     # Outermost (runs first): issue the per-request CSP nonce into scope state
     # before any other middleware/endpoint, so the template context processor and
     # security_headers_middleware share it (BC-075).

@@ -281,6 +281,31 @@ def test_create_renewal_report_key_requires_and_displays_binding(
     assert detail["bound_tags"] == ["Prod", "edge"]
 
 
+def test_corrupt_key_binding_is_displayed_as_disabled(
+    reload_app, tmp_path, monkeypatch,
+):
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    db = _seed_local_admin(tmp_path)
+    repo = SqliteApiKeyRepository(db)
+    entry, _ = repo.create_key("corrupt", "read")
+    from cert_watch.database.connection import _connect
+
+    with _connect(db) as conn:
+        conn.execute("PRAGMA ignore_check_constraints = ON")
+        conn.execute(
+            "UPDATE api_keys SET binding = 'future' WHERE id = ?", (entry.id,)
+        )
+        conn.commit()
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        response = client.get("/settings/api-keys")
+
+    assert response.status_code == 200
+    assert "invalid binding (key disabled)" in response.text
+
+
 def test_create_existing_scope_refuses_tag_binding(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
     db = _seed_local_admin(tmp_path)

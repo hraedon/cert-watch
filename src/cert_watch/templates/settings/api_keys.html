@@ -100,7 +100,7 @@
         <td><span class="cw-strong">{{ k.name }}</span></td>
         <td><span class="cw-chip {{ 't-ink' if k.scope in ('write', 'admin') else '' }}">{{ k.scope }}</span></td>
         <td>
-          {% if k.binding == 'tags' %}host tags: {{ k.bound_tags | join(', ') }}{% else %}all endpoints{% endif %}
+          {% if k.binding == 'tags' %}host tags: {{ k.bound_tags | join(', ') }}{% elif k.binding == 'all' %}all endpoints{% else %}invalid binding (key disabled){% endif %}
         </td>
         <td class="tnum">{{ k.created_at.strftime('%Y-%m-%d') }}</td>
         <td class="tnum">

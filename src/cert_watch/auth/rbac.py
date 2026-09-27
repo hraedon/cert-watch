@@ -268,6 +268,10 @@ class AuthContext:
             scope_tag=",".join(bound_tags) if binding == "tags" else "",
             api_key_binding=binding,
             api_key_bound_tags=bound_tags,
+            # S2's binding enforcement consumes operator-tier tag entries via
+            # ensure_write_scope_on. Until then, the route allowlist plus
+            # renewal_report_guard are the barrier; ordinary guards explicitly
+            # reject this principal kind despite these entries.
             tag_tiers={tag: ROLE_OPERATOR for tag in bound_tags},
         )
 
