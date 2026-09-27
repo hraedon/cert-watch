@@ -374,6 +374,40 @@ def test_bearer_auth_http_end_to_end(reload_app):
         assert allowed.status_code != 403
 
 
+def test_unknown_scope_is_unauthenticated_on_api_and_html_routes(
+    reload_app, caplog,
+):
+    from fastapi.testclient import TestClient
+
+    from cert_watch.auth.local_admin import _scrypt_hash
+    from cert_watch.config import Settings
+
+    app_mod = reload_app(
+        CERT_WATCH_LOCAL_ADMIN_USER="admin",
+        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("pw-for-tests-1"),
+    )
+    db = Settings.from_env().db_path
+    init_schema(db)
+    repo = SqliteApiKeyRepository(db)
+    entry, raw = repo.create_key("corrupt-scope", "read")
+    with repo_conn(repo) as conn:
+        conn.execute("UPDATE api_keys SET scope = 'bogus' WHERE id = ?", (entry.id,))
+        conn.commit()
+
+    headers = {"Authorization": f"Bearer {raw}"}
+    with (
+        caplog.at_level("WARNING", logger="cert_watch.auth.request_context"),
+        TestClient(app_mod.app) as client,
+    ):
+        assert client.get("/api/hosts", headers=headers).status_code == 401
+        assert client.get(
+            "/", headers=headers, follow_redirects=False
+        ).status_code == 401
+
+    assert any(entry.id in record.message for record in caplog.records)
+    assert all(raw not in record.message for record in caplog.records)
+
+
 def test_api_keys_management_routes(reload_app):
     """API-key CRUD requires an admin browser session, never another API key."""
     from fastapi.testclient import TestClient

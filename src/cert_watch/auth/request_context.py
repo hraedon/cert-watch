@@ -11,6 +11,7 @@ request) and by the guards' session re-resolution
 from __future__ import annotations
 
 import hmac
+import logging
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -32,6 +33,9 @@ from cert_watch.security import _request_security
 
 if TYPE_CHECKING:
     from cert_watch.auth.session import SessionInfo
+
+
+logger = logging.getLogger("cert_watch.auth.request_context")
 
 
 def _is_auth_enabled(request: Request) -> bool:
@@ -141,7 +145,10 @@ def authenticate_api_key(
     ).verify_key(token)
     if result is None:
         return None
-    role = _API_KEY_SCOPE_ROLE.get(result.scope, ROLE_VIEWER)
+    role = _API_KEY_SCOPE_ROLE.get(result.scope)
+    if role is None:
+        logger.warning("rejecting API key %s with unknown scope", result.id)
+        return None
     ctx = AuthContext.from_tier(result.name, tier=role, roles=[role])
     request.scope["auth_user"] = result.name
     request.state.auth_context = ctx
@@ -241,6 +248,11 @@ async def auth_middleware(
         return await call_next(request)
 
     # Unauthenticated
-    if path.rstrip("/") == "/metrics" or path.startswith("/api/"):
+    bearer_presented = request.headers.get("authorization", "").startswith("Bearer ")
+    if (
+        bearer_presented
+        or path.rstrip("/") == "/metrics"
+        or path.startswith("/api/")
+    ):
         return JSONResponse(content={"error": "unauthenticated"}, status_code=401)
     return RedirectResponse(url="/login", status_code=303)

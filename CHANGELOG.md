@@ -10,6 +10,8 @@ All notable changes to cert-watch are documented in this file.
   and reject invalid rendered JSON before delivery. Plain-text templates strip
   control characters, and Slack, Discord and Teams payloads neutralize
   untrusted mention and link markup.
+- API keys with an unknown or corrupt scope are now rejected as
+  unauthenticated instead of silently receiving viewer access.
 
 ### Fixed
 
