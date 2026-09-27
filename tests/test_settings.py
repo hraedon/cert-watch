@@ -238,7 +238,7 @@ def test_save_alert_config(reload_app):
         "{{message}}",
         ' \ufeff\ufeff {"text":"{{message}}"}',
         '{"payload":"{\\"text\\":\\"{{message}}\\"}"}',
-        '{"text": {{message}}}',
+        '{"days": {{threshold_days}}, "text": "{{message}}"}',
     ],
 )
 def test_save_alert_config_accepts_valid_text_and_json_templates(
@@ -261,6 +261,7 @@ def test_save_alert_config_accepts_valid_text_and_json_templates(
     [
         '{"text":"{{message}}"',
         '{not-json}',
+        '{"text": {{message}}}',
     ],
 )
 def test_save_alert_config_rejects_unsafe_json_template(reload_app, template):
@@ -277,7 +278,8 @@ def test_save_alert_config_rejects_unsafe_json_template(reload_app, template):
     assert response.status_code == 303
     assert "error=" in response.headers["location"]
     assert "saved=1" not in response.headers["location"]
-    assert "not a valid JSON object" in unquote(response.headers["location"])
+    location = unquote(response.headers["location"])
+    assert "not a valid JSON object" in location or "must be inside quotes" in location
 
 
 @pytest.mark.parametrize(

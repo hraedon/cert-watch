@@ -138,6 +138,8 @@ _TEMPLATE_PLACEHOLDER = re.compile(
     r"{{(" + "|".join(sorted(_TEMPLATE_VALUES)) + r")}}"
 )
 _JSON_SAMPLE_MARKER = "cert_watch_template_sample"
+# Placeholders whose value is always a JSON number or null.
+_BARE_TEMPLATE_KEYS = frozenset({"threshold_days"})
 _INVALID_JSON = object()
 
 
@@ -198,6 +200,15 @@ def validate_generic_webhook_template(template: str) -> bool:
             "Webhook template starts with '{' but is not a valid JSON object "
             "after placeholder substitution."
         )
+    for match in _TEMPLATE_PLACEHOLDER.finditer(template):
+        key = match.group(1)
+        if key not in _BARE_TEMPLATE_KEYS and not _placeholder_is_in_string(
+            template, match.start()
+        ):
+            raise InvalidWebhookTemplateError(
+                f"Webhook JSON template placeholder {{{{{key}}}}} must be inside quotes; "
+                "only {{threshold_days}} may appear unquoted."
+            )
     return True
 
 class GenericAdapter:

@@ -49,8 +49,9 @@ whitespace are ignored. A template uses JSON mode only when the remaining text
 starts with `{` and a neutral substitution parses as a JSON object. Everything
 else, including bracketed, placeholder-only, and form-looking templates, uses
 `text/plain`. In JSON templates, put string-valued placeholders inside JSON
-string literals. A bare placeholder is delivered only when its value is a JSON
-number or `null`; otherwise that delivery is refused.
+string literals. Only `{{threshold_days}}` (a number or `null`) may appear
+unquoted; a JSON template with any other unquoted placeholder is refused when
+saved, and at send time if it came from the environment.
 
 Placeholder values are escaped for exactly one JSON string level. A
 placeholder inside a string that itself contains an encoded JSON document gets

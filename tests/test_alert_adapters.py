@@ -120,7 +120,7 @@ class TestGenericAdapter:
 
         assert result.outcome == "failed"
         assert result.reached_transport is False
-        assert "not a JSON number or null" in result.operator_message
+        assert "must be inside quotes" in result.operator_message
         urlopen.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -203,7 +203,7 @@ class TestGenericAdapter:
         assert req.body == b"null"
 
     def test_bare_string_value_is_refused_at_delivery(self):
-        with pytest.raises(InvalidWebhookTemplateError, match="number or null"):
+        with pytest.raises(InvalidWebhookTemplateError, match="must be inside quotes"):
             GenericAdapter().build(
                 _alert(message="not-a-number"),
                 _config(template='{"text":{{message}}}'),
