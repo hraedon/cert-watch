@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from itertools import pairwise
 from typing import Any
@@ -17,6 +17,7 @@ from cert_watch.chain_guidance import ChainGuidance, describe_chain
 from cert_watch.database import LatestScanRecord
 from cert_watch.filters import compute_urgency, friendly_issuer, issuer_cn, subject_cn
 from cert_watch.posture import GRADE_WORST_ORDER
+from cert_watch.presenters.status_display import condition_display
 from cert_watch.scan_error_guidance import ScanErrorGuidance, describe_scan_error
 from cert_watch.scan_freshness import ScanEvidence
 from cert_watch.services.certificate_detail import (
@@ -158,6 +159,31 @@ class CertificateAlertView:
 
 
 @dataclass(frozen=True)
+class DetailAxisView:
+    label: str
+    value: str
+    detail: str
+    tone: str = "t-muted"
+
+
+@dataclass(frozen=True)
+class DetailActionView:
+    title: str
+    detail: str
+    command: str = ""
+    raw_error: str = ""
+
+
+@dataclass(frozen=True)
+class DeliveryRouteView:
+    recipient: str
+    via: str
+    status: str
+    detail: str
+    tone: str = "t-muted"
+
+
+@dataclass(frozen=True)
 class CertificateDetailView:
     cert: CertificateView | None
     cert_id: str
@@ -218,6 +244,10 @@ class CertificateDetailView:
     delivery: str = "unrouted"
     overall_label: str = "Unknown"
     overall_tone: str = "t-muted"
+    axes: tuple[DetailAxisView, ...] = ()
+    actions: tuple[DetailActionView, ...] = ()
+    delivery_routes: tuple[DeliveryRouteView, ...] = ()
+    reveal_delivery_identities: bool = False
 
     def template_context(self) -> dict[str, Any]:
         """Expose one stable boundary to Jinja or a future JSON serializer."""
@@ -515,16 +545,409 @@ def _axis_display(
     return condition, monitoring, renewal, delivery, label, tone
 
 
+def _when(value: object) -> str:
+    return _scan_time_label(str(value)) if value else "an unknown time"
+
+
+def _condition_words(days: int, condition: str | None) -> str:
+    if condition == "expired" or days < 0:
+        amount = abs(days)
+        return f"Expired {amount} day{'s' if amount != 1 else ''} ago"
+    return f"Expires in {days} day{'s' if days != 1 else ''}"
+
+
+def _detail_axes(
+    *,
+    model: dict[str, Any] | None,
+    cert: Certificate | None,
+    host: Any,
+    evidence: ScanEvidence | None,
+    days: int,
+    now: datetime,
+) -> tuple[DetailAxisView, ...]:
+    status = model or {}
+    condition = str((status.get("condition") or {}).get("state") or "") or None
+    monitoring_data = status.get("monitoring") or {}
+    monitoring = str(monitoring_data.get("state") or "never_scanned")
+    renewal = str((status.get("renewal") or {}).get("state") or "unknown")
+    delivery_data = status.get("delivery") or {}
+    delivery = str(delivery_data.get("state") or "unrouted")
+
+    if cert is None:
+        display = condition_display(condition, None, monitoring)
+        certificate_axis = DetailAxisView(
+            "Certificate",
+            display.label,
+            "A successful scan has not stored certificate evidence yet.",
+            display.tone,
+        )
+    else:
+        condition_data = status.get("condition") or {}
+        effective_days = condition_data.get("effective_days")
+        display = condition_display(
+            condition,
+            int(effective_days) if effective_days is not None else days,
+            monitoring,
+        )
+        detail = f"Issued {cert.not_before:%Y-%m-%d} · expires {cert.not_after:%Y-%m-%d}."
+        if monitoring not in {"current", "not_monitored"}:
+            last_seen = evidence.last_success if evidence else None
+            detail = (
+                "Certificate facts are earlier evidence from the last successful "
+                f"scan at {_when(last_seen)}. "
+                "cert-watch can't confirm what the server serves now."
+            )
+        certificate_axis = DetailAxisView(
+            "Certificate", display.label, detail, display.tone
+        )
+
+    if monitoring == "not_monitored":
+        monitoring_axis = DetailAxisView(
+            "Monitoring",
+            "Not monitored",
+            "Uploaded certificate evidence does not have an endpoint or scan cadence.",
+        )
+    elif monitoring == "current":
+        detail = f"Last scanned {_when(evidence.last_success if evidence else None)}"
+        if evidence and evidence.due_at:
+            detail += f" · next due {_when(evidence.due_at)}"
+        monitoring_axis = DetailAxisView("Monitoring", "Current", detail, "t-ok")
+    elif monitoring == "failing":
+        since = monitoring_data.get("since")
+        cause = str(monitoring_data.get("cause") or "No current successful observation.")
+        if evidence and evidence.next_attempt_at:
+            retry = evidence.next_attempt_at
+            if retry.tzinfo is None:
+                retry = retry.replace(tzinfo=UTC)
+            cause += (
+                f" Automatic retry eligible {_when(retry)}."
+                if retry > now
+                else " Automatic retry is due now."
+            )
+        value = f"Failing since {_when(since)}"
+        if evidence and evidence.state == "overdue" and evidence.attempt_status != "failure":
+            value = f"Scan overdue since {_when(evidence.due_at)}"
+        monitoring_axis = DetailAxisView("Monitoring", value, cause, "t-warn")
+    else:
+        monitoring_axis = DetailAxisView(
+            "Monitoring",
+            "Never scanned",
+            "No successful certificate observation is recorded.",
+        )
+
+    renewal_value, renewal_tone = {
+        "automation_configured": ("Automation configured", "t-ok"),
+        "manual": ("Manual", "t-muted"),
+        "stalled": ("Stalled", "t-crit"),
+        "in_progress": ("In progress", "t-warn"),
+        "unknown": ("Unknown", "t-muted"),
+    }.get(renewal, (renewal.replace("_", " ").title(), "t-muted"))
+    method = getattr(host, "renewal_method", "") if host else ""
+    renewal_detail = {
+        "stalled": "The renewal window is open and no replacement certificate has appeared.",
+        "in_progress": "An operator reported that renewal work is under way.",
+        "manual": "This endpoint is recorded as requiring manual renewal.",
+        "automation_configured": (
+            f"{_renewal_display(method)[0] or 'Automated renewal'} is configured."
+        ),
+    }.get(renewal, "No renewal method or reliable renewal pattern is recorded.")
+    renewal_axis = DetailAxisView("Renewal", renewal_value, renewal_detail, renewal_tone)
+
+    failed_delivery = any(
+        isinstance(channel, dict) and channel.get("last_outcome") == "failed"
+        for channel in delivery_data.get("channels") or []
+    )
+    delivery_value, delivery_tone = {
+        "ok": ("Delivery ready", "t-ok"),
+        "failing": ("Delivery failing", "t-crit" if failed_delivery else "t-warn"),
+        "unrouted": ("No specific route", "t-warn"),
+    }.get(delivery, (delivery.replace("_", " ").title(), "t-muted"))
+    channels = delivery_data.get("channels") or []
+    ready = sum(bool(c.get("can_deliver")) for c in channels if isinstance(c, dict))
+    delivery_detail = (
+        f"{ready} delivery channel{'s' if ready != 1 else ''} ready."
+        if delivery == "ok"
+        else (
+            "The configured route cannot currently deliver an alert."
+            if delivery == "failing"
+            else "Assign an owner or matching alert group for certificate-specific routing."
+        )
+    )
+    return (
+        certificate_axis,
+        monitoring_axis,
+        renewal_axis,
+        DetailAxisView("Alerts", delivery_value, delivery_detail, delivery_tone),
+    )
+
+
+def _detail_actions(
+    *,
+    view_status: dict[str, Any] | None,
+    hostname: str,
+    port: int,
+    days: int,
+    runbook_url: str,
+    chain_guidance: ChainGuidance | None,
+    may_write: bool,
+    is_admin: bool,
+    has_host: bool,
+    uploaded: bool,
+) -> tuple[DetailActionView, ...]:
+    status = view_status or {}
+    monitoring = status.get("monitoring") or {}
+    condition = (status.get("condition") or {}).get("state")
+    delivery = status.get("delivery") or {}
+    actions: list[DetailActionView] = []
+    if monitoring.get("state") == "failing" and monitoring.get("raw_error"):
+        cause = str(monitoring.get("cause") or "The endpoint has no current observation.")
+        actions.append(
+            DetailActionView(
+                (
+                    f"Check the service on {hostname}:{port}."
+                    if may_write
+                    else (
+                        "Ask an administrator or the certificate's owner to check "
+                        f"{hostname}:{port}."
+                    )
+                ),
+                cause,
+                (
+                    f"openssl s_client -connect {hostname}:{port} -servername {hostname}"
+                    if may_write
+                    else ""
+                ),
+                str(monitoring.get("raw_error") or ""),
+            )
+        )
+        if may_write:
+            actions.append(
+                DetailActionView(
+                    "Press Scan now once it is fixed.",
+                    "A successful scan will replace the stale certificate evidence.",
+                )
+            )
+    elif monitoring.get("state") == "failing":
+        actions.append(
+            DetailActionView(
+                (
+                    "Run the overdue scan and check the scheduler."
+                    if may_write
+                    else (
+                        "Ask an administrator or the certificate's owner to check "
+                        "the overdue scan."
+                    )
+                ),
+                "The scheduled scan is overdue; no failed connection attempt is recorded.",
+            )
+        )
+    if condition in {"expired", "le7", "8to30"}:
+        timing = "now" if condition == "expired" else ("today" if condition == "le7" else "soon")
+        detail = _condition_words(days, str(condition)) + "."
+        if runbook_url:
+            detail += f" Follow the runbook: {runbook_url}"
+        actions.append(
+            DetailActionView(
+                (
+                    f"Renew the certificate {timing}."
+                    if may_write
+                    else f"Ask the certificate's owner to renew it {timing}."
+                ),
+                detail,
+            )
+        )
+    if bool(status.get("chain_trust_problem")) and chain_guidance:
+        # chain_guidance arrives already adjusted for the viewer's role
+        # (_chain_guidance_for_role); rewriting it again doubled the phrase.
+        remediation = chain_guidance.remediation
+        actions.append(
+            DetailActionView(
+                (
+                    chain_guidance.title + "."
+                    if may_write
+                    else "Ask an administrator to review the certificate chain."
+                ),
+                remediation,
+            )
+        )
+    if delivery.get("state") == "unrouted":
+        actions.append(
+            DetailActionView(
+                (
+                    (
+                        "Assign an owner or alert group."
+                        if is_admin
+                        else "Assign an owner, or ask an administrator to add an alert group."
+                    )
+                    if has_host and may_write
+                    else (
+                        "Ask an administrator or the certificate's owner to add an alert route."
+                        if has_host
+                        else (
+                            "Add an alert group for this uploaded certificate."
+                            if is_admin and uploaded
+                            else (
+                                "Ask an administrator to add an alert group for this "
+                                "uploaded certificate."
+                            )
+                        )
+                    )
+                ),
+                "No owner, matching alert group, global email recipient, or global "
+                "webhook routes alerts.",
+            )
+        )
+    for channel in delivery.get("channels") or []:
+        if not isinstance(channel, dict):
+            continue
+        name = str(channel.get("channel") or "delivery channel")
+        if channel.get("recipients") and not channel.get("configured") and name == "smtp":
+            actions.append(
+                DetailActionView(
+                    (
+                        "Configure email delivery."
+                        if is_admin
+                        else "Ask an administrator to configure email delivery."
+                    ),
+                    "Recipients are resolved, but SMTP and the From address are not configured.",
+                )
+            )
+        outcome = channel.get("last_outcome")
+        if outcome in {"failed", "partial", "unknown"}:
+            display = (
+                "Email"
+                if name == "smtp"
+                else ("Slack webhook" if name == "webhook:slack" else "Webhook")
+            )
+            outcome_words = {
+                "failed": "failed",
+                "partial": "was only partially delivered",
+                "unknown": "has an unknown outcome",
+            }[str(outcome)]
+            actions.append(
+                DetailActionView(
+                    (
+                        f"Check {display} delivery."
+                        if is_admin
+                        else f"Ask an administrator to check {display} delivery."
+                    ),
+                    f"The latest attempt {outcome_words} at "
+                    f"{_when(channel.get('last_attempt_at'))}.",
+                )
+            )
+    return tuple(actions)
+
+
+def _chain_guidance_for_role(guidance: ChainGuidance, is_admin: bool) -> ChainGuidance:
+    """Delegate trust-anchor settings work without hiding endpoint remediation."""
+    if is_admin or "ask an administrator" in guidance.remediation:
+        return guidance
+    remediation = guidance.remediation.replace(
+        "configure the verified issuing CA in Settings → Trust anchors",
+        "ask an administrator to configure the verified issuing CA in "
+        "Settings → Trust anchors",
+    ).replace(
+        "verify the root with your CA and add it in Settings → Trust anchors",
+        "ask an administrator to verify the root with your CA and add it in "
+        "Settings → Trust anchors",
+    ).replace(
+        "verify it and add it in Settings → Trust anchors",
+        "ask an administrator to verify it and add it in Settings → Trust anchors",
+    )
+    return replace(guidance, remediation=remediation)
+
+
+def _delivery_routes(
+    model: dict[str, Any] | None, *, reveal: bool
+) -> tuple[DeliveryRouteView, ...]:
+    delivery = (model or {}).get("delivery") or {}
+    rows: list[DeliveryRouteView] = []
+    for channel in delivery.get("channels") or []:
+        if not isinstance(channel, dict):
+            continue
+        raw_channel = str(channel.get("channel") or "")
+        via = "Email" if raw_channel == "smtp" else "Webhook"
+        recipients = [str(value) for value in channel.get("recipients") or []]
+        if reveal and recipients and not raw_channel.startswith("webhook:"):
+            labels = recipients
+        elif raw_channel == "smtp":
+            labels = [f"{len(recipients)} recipient{'s' if len(recipients) != 1 else ''}"]
+        elif recipients:
+            labels = [f"{len(recipients)} matched alert group{'s' if len(recipients) != 1 else ''}"]
+        else:
+            labels = ["Global webhook"]
+        configured = bool(channel.get("configured"))
+        outcome = channel.get("last_outcome")
+        if not configured:
+            state, tone, detail = "Not configured", "t-warn", f"{via} is not configured."
+        elif outcome == "failed":
+            state, tone = "Failed", "t-crit"
+            detail = f"Latest delivery failed at {_when(channel.get('last_attempt_at'))}."
+        elif outcome == "partial":
+            state, tone = "Partially delivered", "t-warn"
+            detail = f"Latest delivery was partial at {_when(channel.get('last_attempt_at'))}."
+        elif outcome == "unknown":
+            state, tone = "Outcome unknown", "t-warn"
+            detail = (
+                f"Latest delivery outcome is unknown at {_when(channel.get('last_attempt_at'))}."
+            )
+        elif channel.get("can_deliver"):
+            state, tone = (
+                ("Last delivery worked", "t-ok") if outcome == "accepted" else ("Ready", "t-ok")
+            )
+            detail = "The channel is configured and has a route."
+        else:
+            state, tone, detail = "No route", "t-warn", "No recipient route is available."
+        rows.extend(DeliveryRouteView(label, via, state, detail, tone) for label in labels)
+    groups = [str(value) for value in delivery.get("matching_groups") or []]
+    if reveal:
+        rows.extend(
+            DeliveryRouteView(group, "Alert group", "Matched", "Routes by effective tags.")
+            for group in groups
+        )
+    elif groups:
+        rows.append(
+            DeliveryRouteView(
+                f"{len(groups)} matching group{'s' if len(groups) != 1 else ''}",
+                "Alert group",
+                "Matched",
+                "Group identities are hidden for read-only access.",
+            )
+        )
+    if not groups:
+        rows.append(
+            DeliveryRouteView(
+                "Alert groups matched by tag: none",
+                "Alert groups",
+                "None",
+                "No alert group matches the effective tags.",
+            )
+        )
+    if delivery.get("state") == "unrouted":
+        rows.append(
+            DeliveryRouteView(
+                "No owner, alert group, or global route",
+                "Routing",
+                "Routing gap",
+                "Assign an owner or add a matching or global alert route.",
+                "t-warn",
+            )
+        )
+    return tuple(rows)
+
+
 def present_certificate_detail(
     data: CertificateDetailData,
     *,
     settings_writable: bool,
+    is_admin: bool,
     slack_configured: bool,
     endpoint_saved: bool = False,
     endpoint_error: str = "",
     superseded: bool = False,
     scanned: bool = False,
     added: bool = False,
+    reveal_delivery_identities: bool = False,
     now: datetime | None = None,
 ) -> CertificateDetailView:
     """Build either stored-certificate or pending-host detail view."""
@@ -537,6 +960,14 @@ def present_certificate_detail(
         shown_tags = tuple(TagView(tag, False) for tag in parse_tags(host.tags))
         condition, monitoring, renewal, delivery, overall_label, overall_tone = _axis_display(
             data.status, endpoint=True
+        )
+        axes = _detail_axes(
+            model=data.status,
+            cert=None,
+            host=host,
+            evidence=data.scan_evidence,
+            days=0,
+            now=current,
         )
         return CertificateDetailView(
             cert=None,
@@ -600,6 +1031,21 @@ def present_certificate_detail(
             delivery=delivery,
             overall_label=overall_label,
             overall_tone=overall_tone,
+            axes=axes,
+            actions=_detail_actions(
+                view_status=data.status,
+                hostname=host.hostname,
+                port=host.port,
+                days=0,
+                runbook_url=host.runbook_url or "",
+                chain_guidance=None,
+                may_write=settings_writable,
+                is_admin=is_admin,
+                has_host=True,
+                uploaded=False,
+            ),
+            delivery_routes=_delivery_routes(data.status, reveal=reveal_delivery_identities),
+            reveal_delivery_identities=reveal_delivery_identities,
         )
 
     technical = present_certificate_technical_details(
@@ -607,6 +1053,7 @@ def present_certificate_detail(
     )
     chain_certs = [cert for _, cert in data.chain]
     guidance = describe_chain(data.cert, chain_certs, data.chain_status)
+    display_guidance = _chain_guidance_for_role(guidance, is_admin)
     chain_changed = bool(
         data.posture_is_stored
         and data.posture
@@ -626,6 +1073,14 @@ def present_certificate_detail(
     cert_tag_set = set(data.cert_tags)
     condition, monitoring, renewal, delivery, overall_label, overall_tone = _axis_display(
         data.status, endpoint=data.host is not None
+    )
+    axes = _detail_axes(
+        model=data.status,
+        cert=data.cert,
+        host=data.host,
+        evidence=data.scan_evidence,
+        days=technical.days_remaining,
+        now=current,
     )
     return CertificateDetailView(
         cert=CertificateView(
@@ -659,7 +1114,7 @@ def present_certificate_detail(
         issuer_cn=technical.issuer_cn,
         chain_issue=technical.chain_issue,
         chain_status=data.chain_status,
-        chain_guidance=guidance,
+        chain_guidance=display_guidance,
         chain_note=_chain_note(data.chain_status),
         chain_posture_changed=chain_changed,
         chain_posture_recorded=bool(data.posture and data.posture.get("chain_status")),
@@ -679,7 +1134,7 @@ def present_certificate_detail(
         posture=_posture_view(
             data.posture,
             chain_changed=chain_changed,
-            guidance=guidance,
+            guidance=display_guidance,
         ),
         drift_events=_drift_events(data.history_entries),
         certificate_alerts=tuple(
@@ -716,4 +1171,19 @@ def present_certificate_detail(
         delivery=delivery,
         overall_label=overall_label,
         overall_tone=overall_tone,
+        axes=axes,
+        actions=_detail_actions(
+            view_status=data.status,
+            hostname=data.hostname or technical.subject_cn,
+            port=data.port,
+            days=technical.days_remaining,
+            runbook_url=data.host.runbook_url if data.host else "",
+            chain_guidance=display_guidance,
+            may_write=settings_writable,
+            is_admin=is_admin,
+            has_host=data.host is not None,
+            uploaded=data.cert.source == "uploaded",
+        ),
+        delivery_routes=_delivery_routes(data.status, reveal=reveal_delivery_identities),
+        reveal_delivery_identities=reveal_delivery_identities,
     )

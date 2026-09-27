@@ -170,7 +170,7 @@ def api_list_certificates(
             "certificates": [
                 status_api_row(
                     row,
-                    reveal_delivery_details=delivery_details_allowed(request),
+                    request=request,
                 )
                 for row in rows
             ],
@@ -206,7 +206,10 @@ def api_get_certificate(
     status = row.get("status") if row else None
     if isinstance(status, dict):
         status = status_for_api(
-            status, reveal_delivery_details=delivery_details_allowed(request)
+            status,
+            reveal_delivery_details=delivery_details_allowed(
+                request, effective_tags=repo.effective_tags(cert_id)
+            ),
         )
     return JSONResponse(
         content={

@@ -291,6 +291,17 @@ def test_server_and_js_pivot_rows_render_the_same_condition_and_metadata(
 
         assert pivot == server, view
 
+    for cert_id, expected in server.items():
+        page.goto(f"{browse_rows_server}/certificates/{cert_id}")
+        detail = page.get_by_test_id("detail-state-axes").locator(
+            ".cw-detail-axis"
+        ).first
+        value = detail.locator(".cw-detail-axis-value")
+        assert value.inner_text().strip() == expected["condition"]
+        assert next(
+            name for name in value.get_attribute("class").split() if name.startswith("t-")
+        ) == expected["tone"]
+
 
 def test_pending_delivery_chip_agrees_in_every_browse_path(
     page: Page, browse_rows_server: str,
@@ -302,6 +313,12 @@ def test_pending_delivery_chip_agrees_in_every_browse_path(
         if row["host"].startswith("never.alpha.example.test:")
     )
     assert pending_api["delivery"] == "failing"
+
+    page.goto(f"{browse_rows_server}/certificates/{pending_api['id']}")
+    alerts_axis = page.get_by_test_id("detail-state-axes").locator(
+        ".cw-detail-axis"
+    ).filter(has_text="Alerts")
+    expect(alerts_axis).to_contain_text("Delivery failing")
 
     for path in ("/browse?grouped=0", "/browse", "/browse?delivery=failing"):
         page.goto(f"{browse_rows_server}{path}")

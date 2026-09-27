@@ -943,6 +943,12 @@ def test_scoped_database_reads_match_case_insensitively(estate: _Estate) -> None
 # every kind, so that the chain-cert, uploaded-cert and untagged paths are all
 # exercised without sending every id through every route.
 _TARGET_PARAMS: dict[str, tuple[str, ...]] = {
+    "resource_id": (
+        "host:hrops-portal.hrteam.test:443",
+        "host:untagged-a.shared.test:443",
+        "cert:leaf:scanned:hrops-portal.hrteam.test:",
+        "cert:leaf:scanned:untagged-a.shared.test:",
+    ),
     "host_id": (
         "host:hrops-portal.hrteam.test:443",
         "host:dual.ports.test:443",  # the port another team monitors

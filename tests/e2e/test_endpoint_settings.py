@@ -54,7 +54,7 @@ def test_endpoint_settings_save_reopen_and_restore_defaults(
     if kind == "pending":
         page.set_viewport_size({"width": 390, "height": 844})
     page.goto(f"{base}/certificates/{detail_id}")
-    page.get_by_test_id("endpoint-settings-edit").click()
+    page.get_by_test_id("edit-host").click()
     interval = page.get_by_label("Scan interval (hours)", exact=True)
     threshold = page.get_by_label("Alert threshold (days)", exact=True)
     status = page.get_by_label("Renewal status reported by operator", exact=True)
@@ -68,7 +68,7 @@ def test_endpoint_settings_save_reopen_and_restore_defaults(
     interval.fill("6")
     threshold.fill("45")
     status.select_option("in_progress")
-    page.get_by_test_id("endpoint-settings-save").click()
+    page.get_by_test_id("save-host").click()
     expect(page.get_by_test_id("endpoint-settings-saved")).to_be_visible()
     saved = hosts.get(host_id)
     assert (saved.scan_interval_hours, saved.threshold_days, saved.renewal_status) == (
@@ -78,17 +78,17 @@ def test_endpoint_settings_save_reopen_and_restore_defaults(
     assert saved.renewal_method == "manual"
     assert saved.expected_issuers == "Legacy CA"
 
-    page.get_by_test_id("endpoint-settings-edit").click()
+    page.get_by_test_id("edit-host").click()
     expect(interval).to_have_value("6")
     expect(threshold).to_have_value("45")
     expect(status).to_have_value("in_progress")
     interval.fill("")
     threshold.fill("")
     status.select_option("pending")
-    page.get_by_test_id("endpoint-settings-save").click()
+    page.get_by_test_id("save-host").click()
     expect(page.get_by_test_id("endpoint-settings-saved")).to_be_visible()
     page.reload()
-    page.get_by_test_id("endpoint-settings-edit").click()
+    page.get_by_test_id("edit-host").click()
     expect(interval).to_have_value("")
     expect(threshold).to_have_value("")
     expect(status).to_have_value("pending")

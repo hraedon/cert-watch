@@ -1030,8 +1030,9 @@ def test_host_detail_failure_pill(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.get(f"/certificates/{host_id}")
     assert r.status_code == 200
-    assert "Scan failed" in r.text
-    assert "Scan failed" in r.text
+    assert 'data-testid="cert-scan-failed-status"' in r.text
+    assert "Failing since" in r.text
+    assert "connection refused" in r.text
     # The old hard-coded neutral pill must not appear.
     assert ">Pending<" not in r.text
 

@@ -137,15 +137,35 @@ class TestHostAutoTagging:
     def test_tags_with_scope_merges_scope_tag(self):
         from cert_watch.routes._scoped import tags_with_scope
 
-        class FakeAuth:
-            scope_tag = "ops-team"
-
         class FakeRequest:
-            state = type("S", (), {"auth_context": FakeAuth()})()
+            state = type(
+                "S",
+                (),
+                {
+                    "auth_context": AuthContext.from_tier(
+                        "operator", tier="operator", scope_tag="ops-team"
+                    )
+                },
+            )()
 
         result = tags_with_scope(FakeRequest(), "prod")
         assert "ops-team" in result
         assert "prod" in result
+
+    def test_tags_with_scope_excludes_read_only_scope_tags(self):
+        from cert_watch.routes._scoped import tags_with_scope
+
+        auth = AuthContext.from_tier(
+            "mixed",
+            tier="viewer",
+            scope_tag="team-a,team-b",
+            tag_tiers={"team-a": "operator", "team-b": "viewer"},
+        )
+
+        class FakeRequest:
+            state = type("S", (), {"auth_context": auth})()
+
+        assert tags_with_scope(FakeRequest(), "") == "team-a"
 
     def test_tags_without_scope_returns_input(self):
         from cert_watch.routes._scoped import tags_with_scope
@@ -650,6 +670,42 @@ def _scoped_client(app, groups):
     client = TestClient(app)
     client.cookies.set(SESSION_COOKIE, token)
     return client
+
+
+def test_mixed_tier_operator_can_add_in_write_scope_but_not_read_only_scope(
+    db: Path, tmp_path: Path, monkeypatch
+):
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", lambda self: None)
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.stop", lambda self: None)
+    monkeypatch.setattr(
+        "cert_watch.routes.hosts.resolve_and_validate_host",
+        lambda *args, **kwargs: (None, "192.0.2.1"),
+    )
+
+    async def scan(*args, **kwargs):
+        return "scan_error", "not scanned in this authorization test"
+
+    monkeypatch.setattr("cert_watch.routes.hosts._scan_and_store", scan)
+    app, groups = _make_mixed_tier_app(db, tmp_path)
+    with _scoped_client(app, groups) as client:
+        allowed = client.post(
+            "/hosts",
+            data={"hostname": "write-scope.example.test"},
+            follow_redirects=False,
+        )
+        denied = client.post(
+            "/hosts",
+            data={"hostname": "read-scope.example.test", "tags": "team-b"},
+            follow_redirects=False,
+        )
+
+    assert allowed.status_code == 303
+    assert "error=" not in allowed.headers["location"]
+    created = SqliteHostRepository(db).get_by_endpoint("write-scope.example.test", 443)
+    assert created is not None and created.tags == "team-a"
+    assert denied.status_code == 303
+    assert "read-only" in denied.headers["location"]
+    assert SqliteHostRepository(db).get_by_endpoint("read-scope.example.test", 443) is None
 
 
 class TestScanAllHostsRoute:

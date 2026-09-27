@@ -135,11 +135,22 @@ so an API key can't mint more keys, not even an `admin` key. A key keeps
 working after the person who created it loses administrator access, so review
 keys when access changes.
 
-Routing identities are administrator-only. Certificate status responses and
-`GET /api/certificates/{id}/alert-routing` expose delivery state, channel types
-and anonymous recipient/group route counts to viewers, operators, and `read`
-or `write` API keys. Only administrators and `admin` API keys receive recipient
-addresses and matched alert-group names.
+Recipient identities follow the resource's write boundary. This includes the
+host's owner email and Slack/channel handle as well as addresses and names in
+the expanded alert-routing model. Administrators,
+global operators, `write` and `admin` API keys, and a scoped caller whose
+effective per-tag tier permits writing that certificate receive recipient
+addresses, global recipients, role-member addresses and matched alert-group
+names. A caller who can read but not write that certificate receives only
+delivery state, channel types and anonymous recipient/group route counts. For
+a mixed role, this decision is made independently for each certificate: the
+same list or export can show identities on a writable tag and redact them on a
+read-only tag. The owner's display name remains visible. The owner pivot uses
+that display name (or `Unassigned`), never an email-only identity. This rule is
+consistent on detail pages, certificate and host
+lists, exports, `GET /api/certificates/{id}`, and
+`GET /api/certificates/{id}/alert-routing`. A `read` API key is redacted;
+`write` and `admin` keys are not.
 
 `/metrics` is separate from all of this. It accepts its own bearer token
 (`CERT_WATCH_METRICS_TOKEN`) or an administrator's browser session, and

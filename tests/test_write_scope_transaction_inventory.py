@@ -31,6 +31,7 @@ from cert_watch.database.cert_ops import delete_certificate_cascade
 from cert_watch.services import (
     alert_state,
     certificate_management,
+    host_edit,
     host_management,
     host_ownership,
     resource_metadata,
@@ -110,6 +111,10 @@ _target(
     "POST /hosts/all/scan", "POST /api/hosts/scan",
 )
 _target(
+    _Contract(host_edit.edit_host, host_edit.edit_host, '"UPDATE hosts SET owner_name'),
+    "POST /hosts/{resource_id}/edit", "PUT /api/hosts/{resource_id}",
+)
+_target(
     _Contract(host_management.update_host_settings, host_management.update_host_settings,
               '"UPDATE hosts SET scan_interval_hours'),
     "POST /hosts/{host_id}/settings", "PATCH /api/hosts/{host_id}/settings",
@@ -168,6 +173,11 @@ _route_service(
 )
 _route_service(
     host_management.scan_all_hosts, "POST /hosts/all/scan", "POST /api/hosts/scan"
+)
+_route_service(
+    host_edit.edit_host,
+    "POST /hosts/{resource_id}/edit",
+    "PUT /api/hosts/{resource_id}",
 )
 _route_service(
     host_management.update_host_settings,

@@ -13,6 +13,7 @@ from cert_watch.auth.scope import (
     _effective_tags,
     _folded,
     new_tags_scope_error,
+    writable_scope_tags,
     write_scope_error,
 )
 from cert_watch.services.certificate_identity import CertificateSupersededError
@@ -37,9 +38,10 @@ def scope_tags_from_auth(auth_ctx: Any) -> tuple[str, ...]:
 
 
 def tags_with_scope(request: Request, tags: str) -> str:
-    """Merge the authenticated user's scope tag into *tags* (WI-052)."""
+    """Merge the authenticated user's writable scope tags into *tags* (WI-052)."""
     auth_ctx = getattr(request.state, "auth_context", None)
-    scope = (getattr(auth_ctx, "scope_tag", "") or "") if auth_ctx else ""
+    writable = writable_scope_tags(auth_ctx)
+    scope = ",".join(writable or ())
     if not scope:
         return tags
     from cert_watch.tags import format_tags, merge_tags

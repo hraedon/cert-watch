@@ -167,6 +167,43 @@ def test_certificate_tags(tmp_path, monkeypatch):
     assert SqliteCertificateRepository(db).get_tags(cert_id) == ""
 
 
+def test_combined_certificate_edit_rechecks_host_scope_after_two_process_race(
+    tmp_path, monkeypatch
+):
+    from cert_watch.services.host_edit import HostEditUpdate, edit_host
+
+    db, host_id, cert_id = _estate(tmp_path)
+    SqliteCertificateRepository(db).set_tags(cert_id, "team-a")
+    moved: list = []
+    _move_after_check(monkeypatch, "cert_watch.services.host_edit", db, host_id, moved)
+    auth = AuthContext.from_tier("team-a-operator", tier="operator", scope_tag="team-a")
+    with pytest.raises(PermissionError, match="outside your team scope"):
+        edit_host(
+            db,
+            cert_id,
+            HostEditUpdate(
+                owner_name="attempted",
+                owner_email="owner@example.test",
+                owner_slack="",
+                renewal_method="manual",
+                runbook_url="https://runbooks.example.test/tls",
+                scan_interval_hours=12,
+                threshold_days=30,
+                renewal_status="pending",
+                notes="attempted",
+                tags="team-a",
+            ),
+            auth=auth,
+            actor="team-a-operator",
+            source_ip=None,
+        )
+    assert moved == ["moved"]
+    host = SqliteHostRepository(db).get(host_id)
+    assert host is not None
+    assert (host.tags, host.notes, host.owner_name) == ("team-b", "", "")
+    assert SqliteCertificateRepository(db).get_tags(cert_id) == "team-a"
+
+
 @pytest.mark.parametrize("addressed_by", ["certificate", "host"])
 def test_ownership(tmp_path, monkeypatch, addressed_by):
     db, host_id, cert_id = _estate(tmp_path)

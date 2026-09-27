@@ -24,23 +24,30 @@ retains the selected status, source, sort, and grouping; a clear-filters link
 resets the selection. Fleet grouping and calendar links open their full visible
 population, with the scope stated on the selected view.
 
+Certificate and pending-host detail now use the **Detail A** diagnosis-first
+layout: hostname and tags; the canonical Certificate / Monitoring / Renewal /
+Alerts axes; state-derived actions; routing; one **Edit host** disclosure; and
+collapsed Certificate facts and History. The detail page does not duplicate
+status computation and does not show the estate-wide health strip beside its
+endpoint-specific monitoring state.
+
 ## Certificate (`certificates` table)
 
 | Concept | Column | Editing control today | Write endpoint | Single owner (proposed) |
 |---|---|---|---|---|
 | ~~Notes & procedures~~ | **REMOVED** — `certificates.notes` merged by migration 0031 (deprecated column retained for unmatched notes) | — | `POST /certificates/{id}/notes` and `PATCH /api/certificates/{id}/notes` **removed** | Host-scoped notes won (V1, implemented 2026-08-30) |
-| Own tags | `certificates.tags` | Text input (datalist), cert detail — `certificate_detail.html:370-374` | `POST /certificates/{id}/tags` and `PUT /api/certificates/{id}/tags` are adapters over `services.resource_metadata.update_certificate_tags` | Cert-detail tags editor (host tags inherited, shown `(host)` — OK) |
+| Own tags | `certificates.tags` | The top-level **Edit** disclosure on certificate detail; scanned certificates use the combined **Edit host** form, while uploaded certificates use **Edit certificate** because they have no host. Inherited host tags remain read-only and shown `(host)` | `POST /hosts/{resource_id}/edit` and `PUT /api/hosts/{resource_id}` use `services.host_edit.edit_host`; upload-only and legacy tag-only adapters remain callable | Detail A's top-level editor |
 | Lifecycle (create/delete) | row | Add drawer: upload tab `dashboard.html:377`; delete `certificate_detail.html:72` | `POST /upload` + `POST /api/certificates/upload`; `POST /certificates/{id}/delete` + `DELETE /api/certificates/{id}` use `services.certificate_management` | HTML and JSON are equal adapters |
 
 ## Host (`hosts` table)
 
 | Concept | Column(s) | Editing control(s) today | Write endpoint(s) | Single owner (proposed) |
 |---|---|---|---|---|
-| Ownership & renewal contact | `owner_name`, `owner_email`, `owner_slack`, `renewal_method`, `runbook_url` (schema.py:72-77) | One post-creation form ("Operational summary → Edit"), cert detail — `certificate_detail.html`; creation-time seeds for owner name/email and renewal method in the Add drawer; all five fields are optional JSON/CSV columns | `POST /hosts/{id}/owner` and `PATCH /api/hosts/{id}/owner` are adapters over the single `services.host_ownership.update_host_ownership` transaction; creation uses `POST /hosts` + `POST /api/hosts`; import uses `POST /hosts/import` + `POST /api/hosts/import`; legacy `POST /certificates/{id}/owner` remains callable for compatibility | Detail owns edits; editor/Add/CSV share one normalizing, length-bounded ownership validator (S5) |
-| Host notes | `hosts.notes` (schema.py:78) | **ONE editing control:** textarea ("Notes" panel), endpoint detail page — `certificate_detail.html` (V2 resolved 2026-08-30: the 3 dashboard inline editors in `static/js/dashboard.js` were removed; the dashboard now shows a read-only note indicator chip). Creation-time seeds: `notes` param on `POST /hosts` and CSV `notes` column | `POST /hosts/{id}/notes` and `PATCH /api/hosts/{id}/notes` are adapters over `services.resource_metadata.update_host_notes`; host creation is `POST /hosts` + `POST /api/hosts`; CSV import is `POST /hosts/import` + `POST /api/hosts/import` | Detail-page Notes panel — **resolved (V1/V2)** |
-| Host tags | `hosts.tags` (schema.py:70) | Text input (datalist), cert/host detail (host branch of shared form) — `certificate_detail.html:370-374`; also creation-time seeds | `POST /hosts/{id}/tags` and `PUT /api/hosts/{id}/tags` are adapters over `services.resource_metadata.update_host_tags`; creation uses `POST /hosts` + `POST /api/hosts`; import uses `POST /hosts/import` + `POST /api/hosts/import` | Detail-page tags editor; drawer/CSV are creation-time seeds |
+| Ownership & renewal contact | `owner_name`, `owner_email`, `owner_slack`, `renewal_method`, `runbook_url` (schema.py:72-77) | The one **Edit host** form on endpoint detail; creation-time seeds are also accepted by Add, JSON, and CSV | `POST /hosts/{resource_id}/edit` and `PUT /api/hosts/{resource_id}` use `services.host_edit.edit_host`; field-specific adapters remain callable for compatibility; creation and import use the shared length-bounded ownership validator | Detail A's combined editor (V6); Add/import are creation-time seeds (S5) |
+| Host notes | `hosts.notes` (schema.py:78) | The one **Edit host** form on endpoint detail; dashboard remains read-only. Creation-time seeds: `notes` param on `POST /hosts` and CSV `notes` column | Combined edit uses `services.host_edit.edit_host`; legacy notes-only adapters remain callable; creation/import paths are unchanged | Detail A's combined editor (V1/V2/V6) |
+| Host tags | `hosts.tags` (schema.py:70) | The one **Edit host** form on pending-host detail; certificate detail edits certificate-own tags instead. Creation-time seeds remain. | Combined edit uses `services.host_edit.edit_host`; legacy tag-only adapters and creation/import remain callable | Detail A's combined editor (V6) |
 | Scan target (hostname, port, TLS mode, common-ports) | `hostname`, `port` + scan params | Add drawer, scan tab — `dashboard.html:339-372` | `POST /hosts` + `POST /api/hosts`, through `services.host_management.create_hosts` | Create-only by design — OK |
-| Alert threshold | `threshold_days` (schema.py:69) | Create-only: drawer `dashboard.html:352`; CSV column | `POST /hosts` + `POST /api/hosts`; `POST /hosts/import` + `POST /api/hosts/import` | Endpoint settings owns post-creation edits via its HTML/API pair; see below |
+| Cadence, alert threshold, renewal progress | `scan_interval_hours`, `threshold_days`, `renewal_status` | Creation/import seeds where supported; one **Edit host** form for post-creation edits | Combined edit uses `services.host_edit.edit_host`; legacy settings adapters remain callable | Detail A's combined editor (V6) |
 | Lifecycle (delete, scan) | row | `certificate_detail.html:78` (delete), :64 (scan) | `POST /hosts/{id}/delete` + `DELETE /api/hosts/{id}`; `POST /hosts/{id}/scan` + `POST /api/hosts/{id}/scan`, through `services.host_management` | HTML and JSON are equal adapters |
 
 ## Tags (cross-cutting registry)
@@ -108,16 +115,30 @@ population, with the scope stated on the selected view.
 - **V5 — RESOLVED 2026-09-22.** The add-host drawer now surfaces optional
   `tags`, `notes`, and `scan_interval_hours`, and its bulk-import help documents
   every accepted optional CSV field, including `starttls_mode`.
+- **V6 — RESOLVED 2026-09-26 (#126 S4).** Certificate and pending-host
+  detail have one **Edit host** disclosure for owner/contact, renewal method,
+  runbook, cadence, thresholds, operator-reported renewal progress, tags and
+  notes. `POST /hosts/{resource_id}/edit` and
+  `PUT /api/hosts/{resource_id}` share one atomic service and retain scope,
+  CSRF, renewed-id refusal and in-transaction scope recheck guarantees. The
+  service authorizes host fields against the host and certificate tags against
+  the certificate; a combined edit requires both. Submitted tags must be in
+  write-tier scope, and scoped writers cannot remove their last writable tag.
+  Uploaded certificates expose their tag editor under the same top-level Edit
+  location, labelled **Edit certificate** because no host exists. The
+  field-specific endpoints remain compatible API surfaces, but no longer own
+  separate controls on detail.
 
 ## Endpoint settings and scan evidence (2026-09-12)
 
-The detail page's **Edit endpoint settings** form owns post-creation edits to
-`scan_interval_hours`, `threshold_days`, and `renewal_status`, through
-`POST /hosts/{host_id}/settings`. It is available to permitted endpoint writers,
-uses CSRF protection, records `host.update_settings`, and wakes the scheduler.
+The detail page's single **Edit host** form owns post-creation edits to
+`scan_interval_hours`, `threshold_days`, and `renewal_status`, together with
+ownership, contact, renewal method, runbook, tags and notes, through
+`POST /hosts/{resource_id}/edit`. It is available to permitted endpoint writers,
+uses CSRF protection, records `host.edit`, and wakes the scheduler.
 Blank cadence uses the configured daily UTC schedule; blank threshold uses
-automatic thresholds. Existing owner/contact/method/runbook editing stays in
-its existing form. The two forms do not overwrite each other's fields.
+automatic thresholds. The JSON peer requires the complete form shape so a
+partial client cannot silently overwrite fields it did not read.
 
 Renewal status is explicitly an operator report: in-progress suppresses new
 stalled notices and the Home stalled status. It never suppresses expiry or
@@ -155,6 +176,7 @@ because the HTML and JSON adapters must share their mutation owner too.
 
 | Concept | HTML endpoint | JSON endpoint | Service symbol |
 |---|---|---|---|
+| detail host edit | `POST /hosts/{resource_id}/edit` | `PUT /api/hosts/{resource_id}` | `host_edit.edit_host` |
 | certificate tags | `POST /certificates/{cert_id}/tags` | `PUT /api/certificates/{cert_id}/tags` | `resource_metadata.update_certificate_tags` |
 | certificate upload | `POST /upload` | `POST /api/certificates/upload` | `certificate_management.upload_certificate_bytes` |
 | certificate delete | `POST /certificates/{cert_id}/delete` | `DELETE /api/certificates/{cert_id}` | `certificate_management.delete_certificate` |

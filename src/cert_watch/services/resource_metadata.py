@@ -22,6 +22,7 @@ from typing import Any
 from cert_watch.audit import export_audit, record_audit
 from cert_watch.auth.scope import (
     ensure_new_tags_in_scope,
+    ensure_tag_update_retains_scope,
     ensure_write_scope,
     ensure_write_scope_on,
     require_auth_context,
@@ -164,10 +165,17 @@ def update_host_tags(
         ensure_write_scope(auth, db_path, host_id=host_id)
         normalized = normalize_tags(_value(tags))
         ensure_new_tags_in_scope(auth, normalized)
+        ensure_tag_update_retains_scope(auth, parse_tags(normalized))
+
+        def guard(conn: sqlite3.Connection) -> None:
+            ensure_write_scope_on(conn, auth, host_id=host_id)
+            ensure_new_tags_in_scope(auth, normalized)
+            ensure_tag_update_retains_scope(auth, parse_tags(normalized))
+
         event = _transact(
             db_path,
             persist=lambda conn: persist_host_tags(conn, host_id, normalized),
-            guard=lambda conn: ensure_write_scope_on(conn, auth, host_id=host_id),
+            guard=guard,
             action="host.update_tags",
             target_type="host",
             target_id=host_id,
@@ -190,6 +198,7 @@ def update_certificate_tags(
 ) -> TagUpdateResult:
     require_auth_context(auth)
     with get_write_lock():
+
         def hidden() -> Exception:
             return unknown_target_scope_error(auth, db_path)
 
@@ -198,11 +207,28 @@ def update_certificate_tags(
             # lineage, then the authoritative scope check (#115 rounds 3, 10).
             ensure_not_superseded(conn, cert_id, auth=auth, hidden=hidden)
             ensure_write_scope_on(conn, auth, cert_id=cert_id)
+            ensure_new_tags_in_scope(auth, normalized)
+            host_row = conn.execute(
+                "SELECT h.tags FROM certificates c LEFT JOIN hosts h "
+                "ON h.hostname = c.hostname AND h.port = c.port WHERE c.id = ?",
+                (cert_id,),
+            ).fetchone()
+            inherited = parse_tags(host_row["tags"] if host_row else "")
+            ensure_tag_update_retains_scope(auth, [*parse_tags(normalized), *inherited])
 
         refuse_if_superseded(db_path, cert_id, auth=auth, hidden=hidden)
         ensure_write_scope(auth, db_path, cert_id=cert_id)
         normalized = normalize_tags(_value(tags))
         ensure_new_tags_in_scope(auth, normalized)
+        inherited: list[str] = []
+        with _connect(db_path) as conn:
+            host_row = conn.execute(
+                "SELECT h.tags FROM certificates c LEFT JOIN hosts h "
+                "ON h.hostname = c.hostname AND h.port = c.port WHERE c.id = ?",
+                (cert_id,),
+            ).fetchone()
+        inherited = parse_tags(host_row["tags"] if host_row else "")
+        ensure_tag_update_retains_scope(auth, [*parse_tags(normalized), *inherited])
         event = _transact(
             db_path,
             persist=lambda conn: persist_certificate_tags(conn, cert_id, normalized),
