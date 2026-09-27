@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from cert_watch.certificate_model import Certificate
+from cert_watch.chain_guidance import ChainGuidance
 from cert_watch.database import Alert, HostEntry, LatestScanRecord
 from cert_watch.presenters.certificate_detail import (
     _delivery_routes,
@@ -175,6 +176,7 @@ def test_full_detail_presenter_builds_stored_certificate_view() -> None:
     view = present_certificate_detail(
         data,
         settings_writable=True,
+        is_admin=True,
         slack_configured=False,
         now=now,
     )
@@ -219,6 +221,7 @@ def test_full_detail_presenter_builds_pending_host_view() -> None:
     view = present_certificate_detail(
         data,
         settings_writable=False,
+        is_admin=False,
         slack_configured=True,
     )
 
@@ -265,12 +268,14 @@ def test_detail_delivery_failure_shows_time_but_hides_identity_for_readers() -> 
     reader = present_certificate_detail(
         data,
         settings_writable=False,
+        is_admin=False,
         slack_configured=False,
         reveal_delivery_identities=False,
     )
     writer = present_certificate_detail(
         data,
         settings_writable=True,
+        is_admin=True,
         slack_configured=False,
         reveal_delivery_identities=True,
     )
@@ -287,7 +292,7 @@ def test_detail_delivery_failure_shows_time_but_hides_identity_for_readers() -> 
     )
 
 
-def test_detail_actions_are_role_aware_and_keep_scan_error_with_scan_step() -> None:
+def test_detail_actions_separate_host_steps_from_admin_only_settings_steps() -> None:
     status = {
         "monitoring": {
             "state": "failing",
@@ -295,6 +300,7 @@ def test_detail_actions_are_role_aware_and_keep_scan_error_with_scan_step() -> N
             "raw_error": "[Errno 111] Connection refused",
         },
         "condition": {"state": "le7"},
+        "chain_trust_problem": True,
         "delivery": {
             "state": "failing",
             "channels": [
@@ -309,14 +315,35 @@ def test_detail_actions_are_role_aware_and_keep_scan_error_with_scan_step() -> N
         },
     }
 
-    writer = _detail_actions(
+    guidance = ChainGuidance(
+        "missing_issuer",
+        "Unable to reach a trusted root",
+        "The issuer is unavailable.",
+        "Configure the TLS endpoint with its intermediate, then scan again. If the "
+        "issuer is a private root, verify it and add it in Settings → Trust anchors "
+        "instead.",
+    )
+    admin = _detail_actions(
         view_status=status,
         hostname="vpn.example.test",
         port=443,
         days=5,
         runbook_url="",
-        chain_guidance=None,
+        chain_guidance=guidance,
         may_write=True,
+        is_admin=True,
+        has_host=True,
+        uploaded=False,
+    )
+    operator = _detail_actions(
+        view_status=status,
+        hostname="vpn.example.test",
+        port=443,
+        days=5,
+        runbook_url="",
+        chain_guidance=guidance,
+        may_write=True,
+        is_admin=False,
         has_host=True,
         uploaded=False,
     )
@@ -326,22 +353,46 @@ def test_detail_actions_are_role_aware_and_keep_scan_error_with_scan_step() -> N
         port=443,
         days=5,
         runbook_url="",
-        chain_guidance=None,
+        chain_guidance=guidance,
         may_write=False,
+        is_admin=False,
         has_host=True,
         uploaded=False,
     )
 
-    assert writer[0].raw_error == "[Errno 111] Connection refused"
-    assert writer[0].command.startswith("openssl s_client")
-    assert any(action.title == "Press Scan now once it is fixed." for action in writer)
+    assert admin[0].raw_error == "[Errno 111] Connection refused"
+    assert admin[0].command.startswith("openssl s_client")
+    assert any(action.title == "Press Scan now once it is fixed." for action in admin)
+    assert any(action.title == "Configure email delivery." for action in admin)
+    assert any(action.title == "Check Email delivery." for action in admin)
+    assert any(
+        "verify it and add it in Settings → Trust anchors" in action.detail
+        and "ask an administrator" not in action.detail
+        for action in admin
+    )
+
+    assert operator[0].command.startswith("openssl s_client")
+    assert any(action.title == "Press Scan now once it is fixed." for action in operator)
+    assert any(
+        action.title == "Ask an administrator to configure email delivery."
+        for action in operator
+    )
+    assert any(
+        action.title == "Ask an administrator to check Email delivery."
+        for action in operator
+    )
+    assert any(
+        "ask an administrator to verify it and add it in Settings → Trust anchors"
+        in action.detail
+        for action in operator
+    )
     assert all(not action.command for action in reader)
     assert all(
         action.title.startswith(("Ask an administrator", "Ask the certificate's owner"))
         for action in reader
     )
-    assert any("partially delivered" in action.detail for action in writer)
-    assert all("latest attempt failed" not in action.detail.lower() for action in writer)
+    assert any("partially delivered" in action.detail for action in admin)
+    assert all("latest attempt failed" not in action.detail.lower() for action in admin)
 
 
 def test_overdue_scan_is_not_described_as_a_connection_failure() -> None:
@@ -381,6 +432,7 @@ def test_overdue_scan_is_not_described_as_a_connection_failure() -> None:
         runbook_url="",
         chain_guidance=None,
         may_write=True,
+        is_admin=True,
         has_host=True,
         uploaded=False,
     )
@@ -392,7 +444,7 @@ def test_overdue_scan_is_not_described_as_a_connection_failure() -> None:
 
 
 def test_uploaded_certificate_routing_action_never_suggests_an_owner() -> None:
-    writer = _detail_actions(
+    admin = _detail_actions(
         view_status={"delivery": {"state": "unrouted"}},
         hostname="",
         port=0,
@@ -400,10 +452,23 @@ def test_uploaded_certificate_routing_action_never_suggests_an_owner() -> None:
         runbook_url="",
         chain_guidance=None,
         may_write=True,
+        is_admin=True,
         has_host=False,
         uploaded=True,
     )
-    reader = _detail_actions(
+    operator = _detail_actions(
+        view_status={"delivery": {"state": "unrouted"}},
+        hostname="",
+        port=0,
+        days=60,
+        runbook_url="",
+        chain_guidance=None,
+        may_write=True,
+        is_admin=False,
+        has_host=False,
+        uploaded=True,
+    )
+    viewer = _detail_actions(
         view_status={"delivery": {"state": "unrouted"}},
         hostname="",
         port=0,
@@ -411,15 +476,22 @@ def test_uploaded_certificate_routing_action_never_suggests_an_owner() -> None:
         runbook_url="",
         chain_guidance=None,
         may_write=False,
+        is_admin=False,
         has_host=False,
         uploaded=True,
     )
 
-    assert writer[0].title == "Add an alert group for this uploaded certificate."
-    assert reader[0].title == (
+    assert admin[0].title == "Add an alert group for this uploaded certificate."
+    assert operator[0].title == (
         "Ask an administrator to add an alert group for this uploaded certificate."
     )
-    assert all("owner" not in action.title.lower() for action in (*writer, *reader))
+    assert viewer[0].title == (
+        "Ask an administrator to add an alert group for this uploaded certificate."
+    )
+    assert all(
+        "owner" not in action.title.lower()
+        for action in (*admin, *operator, *viewer)
+    )
 
 
 def test_unconfigured_delivery_is_warning_and_nonfinal_outcomes_are_honest() -> None:

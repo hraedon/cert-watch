@@ -126,6 +126,30 @@ def test_detail_a_edit_host_round_trips_every_control(
     expect(page.get_by_test_id("endpoint-settings-saved")).to_be_visible()
 
 
+def test_detail_a_failed_save_keeps_values_and_reload_uses_detail_get(
+    page: Page,
+    detail_estate_server: tuple[str, dict[str, str]],
+) -> None:
+    base, ids = detail_estate_server
+    detail_url = f"{base}/certificates/{ids['never']}"
+    page.goto(detail_url)
+    page.get_by_test_id("edit-host").click()
+    page.get_by_label("Owner name", exact=True).fill("Unsaved Operations")
+    page.get_by_label("Runbook URL", exact=True).fill("ftp://runbooks.example.test/tls")
+    page.get_by_test_id("save-host").click()
+
+    expect(page.get_by_test_id("endpoint-settings-error")).to_be_visible()
+    expect(page.get_by_label("Owner name", exact=True)).to_have_value("Unsaved Operations")
+    runbook = page.get_by_label("Runbook URL", exact=True)
+    expect(runbook).to_have_attribute("aria-invalid", "true")
+    expect(runbook).to_have_attribute("aria-describedby", "host-runbook-url-error")
+    expect(page).to_have_url(f"{detail_url}?edit=1#edit-host")
+
+    page.reload()
+    expect(page.get_by_test_id("endpoint-settings-error")).to_have_count(0)
+    expect(page).to_have_url(f"{detail_url}?edit=1#edit-host")
+
+
 @pytest.mark.parametrize("width,height", [(1440, 900), (390, 844)])
 def test_detail_a_open_editor_uses_full_width_without_clipping(
     page: Page,

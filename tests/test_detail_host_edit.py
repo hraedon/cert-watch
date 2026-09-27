@@ -157,10 +157,13 @@ def test_invalid_combined_edit_is_atomic(tmp_path, reload_app, self_signed_leaf)
             },
             follow_redirects=False,
         )
-    assert response.status_code == 400
+    assert response.status_code == 422
     assert SqliteHostRepository(db).get(host_id) == before
     assert 'data-testid="endpoint-settings-error"' in response.text
     assert response.text.count("invalid email") == 1
+    assert 'aria-describedby="host-owner-email-error"' in response.text
+    assert 'id="host-owner-email-error"' in response.text
+    assert 'data-replace-url="/certificates/' in response.text
     assert 'value="Unsaved owner"' in response.text
     assert "Unsaved note" in response.text
     assert 'value="Old owner"' not in response.text
@@ -176,8 +179,10 @@ def test_combined_edit_rejects_an_unsafe_runbook_without_writing(tmp_path, reloa
             f"/hosts/{host_id}/edit",
             data={**FORM, "runbook_url": "javascript:alert(1)"},
         )
-    assert response.status_code == 400
+    assert response.status_code == 422
     assert "http(s) URL" in response.text
+    assert 'aria-describedby="host-runbook-url-error"' in response.text
+    assert 'id="host-runbook-url-error"' in response.text
     assert SqliteHostRepository(db).get(host_id) == before
 
 

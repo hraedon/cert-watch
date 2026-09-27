@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from itertools import pairwise
 from typing import Any
@@ -691,6 +691,7 @@ def _detail_actions(
     runbook_url: str,
     chain_guidance: ChainGuidance | None,
     may_write: bool,
+    is_admin: bool,
     has_host: bool,
     uploaded: bool,
 ) -> tuple[DetailActionView, ...]:
@@ -757,6 +758,7 @@ def _detail_actions(
             )
         )
     if bool(status.get("chain_trust_problem")) and chain_guidance:
+        remediation = _chain_guidance_for_role(chain_guidance, is_admin).remediation
         actions.append(
             DetailActionView(
                 (
@@ -764,21 +766,25 @@ def _detail_actions(
                     if may_write
                     else "Ask an administrator to review the certificate chain."
                 ),
-                chain_guidance.remediation,
+                remediation,
             )
         )
     if delivery.get("state") == "unrouted":
         actions.append(
             DetailActionView(
                 (
-                    "Assign an owner or alert group."
+                    (
+                        "Assign an owner or alert group."
+                        if is_admin
+                        else "Assign an owner, or ask an administrator to add an alert group."
+                    )
                     if has_host and may_write
                     else (
                         "Ask an administrator or the certificate's owner to add an alert route."
                         if has_host
                         else (
                             "Add an alert group for this uploaded certificate."
-                            if may_write and uploaded
+                            if is_admin and uploaded
                             else (
                                 "Ask an administrator to add an alert group for this "
                                 "uploaded certificate."
@@ -799,7 +805,7 @@ def _detail_actions(
                 DetailActionView(
                     (
                         "Configure email delivery."
-                        if may_write
+                        if is_admin
                         else "Ask an administrator to configure email delivery."
                     ),
                     "Recipients are resolved, but SMTP and the From address are not configured.",
@@ -821,7 +827,7 @@ def _detail_actions(
                 DetailActionView(
                     (
                         f"Check {display} delivery."
-                        if may_write
+                        if is_admin
                         else f"Ask an administrator to check {display} delivery."
                     ),
                     f"The latest attempt {outcome_words} at "
@@ -829,6 +835,25 @@ def _detail_actions(
                 )
             )
     return tuple(actions)
+
+
+def _chain_guidance_for_role(guidance: ChainGuidance, is_admin: bool) -> ChainGuidance:
+    """Delegate trust-anchor settings work without hiding endpoint remediation."""
+    if is_admin:
+        return guidance
+    remediation = guidance.remediation.replace(
+        "configure the verified issuing CA in Settings → Trust anchors",
+        "ask an administrator to configure the verified issuing CA in "
+        "Settings → Trust anchors",
+    ).replace(
+        "verify the root with your CA and add it in Settings → Trust anchors",
+        "ask an administrator to verify the root with your CA and add it in "
+        "Settings → Trust anchors",
+    ).replace(
+        "verify it and add it in Settings → Trust anchors",
+        "ask an administrator to verify it and add it in Settings → Trust anchors",
+    )
+    return replace(guidance, remediation=remediation)
 
 
 def _delivery_routes(
@@ -914,6 +939,7 @@ def present_certificate_detail(
     data: CertificateDetailData,
     *,
     settings_writable: bool,
+    is_admin: bool,
     slack_configured: bool,
     endpoint_saved: bool = False,
     endpoint_error: str = "",
@@ -1013,6 +1039,7 @@ def present_certificate_detail(
                 runbook_url=host.runbook_url or "",
                 chain_guidance=None,
                 may_write=settings_writable,
+                is_admin=is_admin,
                 has_host=True,
                 uploaded=False,
             ),
@@ -1025,6 +1052,7 @@ def present_certificate_detail(
     )
     chain_certs = [cert for _, cert in data.chain]
     guidance = describe_chain(data.cert, chain_certs, data.chain_status)
+    display_guidance = _chain_guidance_for_role(guidance, is_admin)
     chain_changed = bool(
         data.posture_is_stored
         and data.posture
@@ -1085,7 +1113,7 @@ def present_certificate_detail(
         issuer_cn=technical.issuer_cn,
         chain_issue=technical.chain_issue,
         chain_status=data.chain_status,
-        chain_guidance=guidance,
+        chain_guidance=display_guidance,
         chain_note=_chain_note(data.chain_status),
         chain_posture_changed=chain_changed,
         chain_posture_recorded=bool(data.posture and data.posture.get("chain_status")),
@@ -1105,7 +1133,7 @@ def present_certificate_detail(
         posture=_posture_view(
             data.posture,
             chain_changed=chain_changed,
-            guidance=guidance,
+            guidance=display_guidance,
         ),
         drift_events=_drift_events(data.history_entries),
         certificate_alerts=tuple(
@@ -1149,8 +1177,9 @@ def present_certificate_detail(
             port=data.port,
             days=technical.days_remaining,
             runbook_url=data.host.runbook_url if data.host else "",
-            chain_guidance=guidance,
+            chain_guidance=display_guidance,
             may_write=settings_writable,
+            is_admin=is_admin,
             has_host=data.host is not None,
             uploaded=data.cert.source == "uploaded",
         ),

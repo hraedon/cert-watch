@@ -79,7 +79,7 @@ def _seed(tmp_path, db_name: str = "four-axis.sqlite3"):
                 hostname=host,
                 port=443,
                 status="success",
-                scanned_at=NOW - timedelta(hours=1),
+                scanned_at=NOW,
             ),
         )
 
@@ -807,6 +807,7 @@ def test_pending_delivery_and_routing_gap_share_route_rules(tmp_path, route):
     view = present_certificate_detail(
         detail,
         settings_writable=True,
+        is_admin=True,
         slack_configured=False,
         reveal_delivery_identities=True,
         now=NOW,
@@ -994,7 +995,7 @@ def test_grouped_pagination_filter_and_whole_group_membership(tmp_path):
         hosts.add(hostname, 443, tags="visible")
         replace_scanned(db, hostname, 443, _cert(hostname, 90, f"page-{index:02d}"), [], True)
         record_scan_history(
-            db, ScanHistory(hostname, 443, "success", scanned_at=NOW - timedelta(hours=1))
+            db, ScanHistory(hostname, 443, "success", scanned_at=NOW)
         )
 
     def keys(page: int) -> list[str]:
@@ -1019,7 +1020,13 @@ def test_grouped_pagination_filter_and_whole_group_membership(tmp_path):
         hosts.add(hostname, 443, tags="visible")
         replace_scanned(db, hostname, 443, shared, [], True)
         record_scan_history(
-            db, ScanHistory(hostname, 443, "success", scanned_at=NOW - timedelta(hours=1))
+            db,
+            ScanHistory(
+                hostname,
+                443,
+                "success",
+                scanned_at=NOW - timedelta(minutes=1),
+            ),
         )
     groups, total = list_dashboard_grouped_page(
         db, q="needle", per_page=5, now=NOW, scope_tags=("visible",)
@@ -1031,7 +1038,7 @@ def test_grouped_pagination_filter_and_whole_group_membership(tmp_path):
     }
     record_scan_history(
         db,
-        ScanHistory("needle.example.test", 443, "failure", scanned_at=NOW - timedelta(minutes=1)),
+        ScanHistory("needle.example.test", 443, "failure", scanned_at=NOW),
     )
     groups, total = list_dashboard_grouped_page(
         db, monitoring="failing", per_page=5, now=NOW, scope_tags=("visible",)
@@ -1278,6 +1285,7 @@ def test_delivery_identities_follow_certificate_write_access_across_read_apis(
     secrets = {
         "Team A operators",
         "team-a@example.test",
+        "team-role@example.test",
         "global@example.test",
         "member@example.test",
         "owner-channel-secret",
@@ -1358,8 +1366,9 @@ def test_delivery_identities_follow_certificate_write_access_across_read_apis(
                 assert response.status_code == 200
                 if reveal:
                     assert "owner-channel-secret" in response.text
+                    assert "team-role@example.test" in response.text
                 else:
-                    assert "owner-channel-secret" not in response.text
+                    assert all(secret not in response.text for secret in secrets)
 
         for scope, reveal in (("read", False), ("write", True)):
             client.cookies.delete(SESSION_COOKIE)
@@ -1394,7 +1403,11 @@ def test_delivery_identities_follow_certificate_write_access_across_read_apis(
                     headers=headers,
                 )
                 assert identity_response.status_code == 200
-                assert ("owner-channel-secret" in identity_response.text) is reveal
+                if reveal:
+                    assert "owner-channel-secret" in identity_response.text
+                    assert "team-role@example.test" in identity_response.text
+                else:
+                    assert all(secret not in identity_response.text for secret in secrets)
 
         response = client.get(
             f"/api/certificates/{cert_id}/alert-routing",

@@ -170,9 +170,11 @@ def _render_certificate_detail(
         if not isinstance(data, PendingHostDetailData)
         else tuple(tag.strip() for tag in data.host.tags.split(",") if tag.strip())
     )
+    auth_template = get_auth_context(request)
     view = present_certificate_detail(
         data,
         settings_writable=resource_writable,
+        is_admin=bool(auth_template["is_admin"]),
         slack_configured=settings.webhook_kind == "slack",
         endpoint_saved=bool(request.query_params.get("endpoint_saved")),
         endpoint_error=edit_error or request.query_params.get("endpoint_error", ""),
@@ -190,7 +192,7 @@ def _render_certificate_detail(
             **view.template_context(),
             "version": __version__,
             "commit": __commit__,
-            **get_auth_context(request),
+            **auth_template,
             "may_write": resource_writable,
             "may_edit_host": may_edit_host,
             "active_page": "browse",

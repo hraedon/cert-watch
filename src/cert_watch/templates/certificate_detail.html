@@ -130,6 +130,7 @@
                             {% if endpoint_error %}
                                 <p class="cw-note t-crit"
                                    role="alert"
+                                   {% if edit_errors %}data-replace-url="/certificates/{{ cert_id }}?edit=1#edit-host"{% endif %}
                                    data-testid="endpoint-settings-error">{{ 'Could not save host. Fix the highlighted field.' if edit_errors else endpoint_error }}</p>
                             {% endif %}
                             <form method="post" action="/hosts/{{ cert_id }}/edit" class="cw-form">
@@ -150,9 +151,9 @@
                                                type="email"
                                                class="cw-input"
                                                maxlength="254"
-                                               {% if edit_errors.owner_email %}aria-invalid="true"{% endif %}
+                                               {% if edit_errors.owner_email %}aria-invalid="true" aria-describedby="host-owner-email-error"{% endif %}
                                                value="{{ edit_values.get('owner_email', host_info.owner_email or '') }}">
-                                        {% if edit_errors.owner_email %}<p class="cw-hint t-crit">{{ edit_errors.owner_email }}</p>{% endif %}
+                                        {% if edit_errors.owner_email %}<p id="host-owner-email-error" class="cw-hint t-crit">{{ edit_errors.owner_email }}</p>{% endif %}
                                     </div>
                                     <div class="cw-field">
                                         <label class="cw-label" for="host-owner-slack">Slack channel</label>
@@ -181,9 +182,9 @@
                                                type="url"
                                                class="cw-input"
                                                maxlength="2048"
-                                               {% if edit_errors.runbook_url %}aria-invalid="true"{% endif %}
+                                               {% if edit_errors.runbook_url %}aria-invalid="true" aria-describedby="host-runbook-url-error"{% endif %}
                                                value="{{ edit_values.get('runbook_url', host_info.runbook_url or '') }}">
-                                        {% if edit_errors.runbook_url %}<p class="cw-hint t-crit">{{ edit_errors.runbook_url }}</p>{% endif %}
+                                        {% if edit_errors.runbook_url %}<p id="host-runbook-url-error" class="cw-hint t-crit">{{ edit_errors.runbook_url }}</p>{% endif %}
                                     </div>
                                     <div class="cw-field">
                                         <label class="cw-label" for="endpoint-scan-interval">Scan interval (hours)</label>
@@ -193,10 +194,10 @@
                                                step="1"
                                                {% if not host_info.legacy_interval %}min="1" max="8760"{% endif %}
                                                class="cw-input"
-                                               {% if edit_errors.scan_interval_hours %}aria-invalid="true"{% endif %}
+                                               {% if edit_errors.scan_interval_hours %}aria-invalid="true" aria-describedby="endpoint-scan-interval-error"{% endif %}
                                                value="{{ edit_values.get('scan_interval_hours', host_info.scan_interval_hours if host_info.scan_interval_hours is not none else '') }}"
                                                placeholder="Daily schedule">
-                                        {% if edit_errors.scan_interval_hours %}<p class="cw-hint t-crit">{{ edit_errors.scan_interval_hours }}</p>{% endif %}
+                                        {% if edit_errors.scan_interval_hours %}<p id="endpoint-scan-interval-error" class="cw-hint t-crit">{{ edit_errors.scan_interval_hours }}</p>{% endif %}
                                         {% if host_info.legacy_interval %}
                                             <p class="cw-hint">Legacy cadence — keep this value unchanged or replace it with 1–8760 hours.</p>
                                         {% endif %}
@@ -209,10 +210,10 @@
                                                min="1"
                                                step="1"
                                                class="cw-input"
-                                               {% if edit_errors.threshold_days %}aria-invalid="true"{% endif %}
+                                               {% if edit_errors.threshold_days %}aria-invalid="true" aria-describedby="endpoint-threshold-error"{% endif %}
                                                value="{{ edit_values.get('threshold_days', host_info.threshold_days if host_info.threshold_days is not none else '') }}"
                                                placeholder="Automatic">
-                                        {% if edit_errors.threshold_days %}<p class="cw-hint t-crit">{{ edit_errors.threshold_days }}</p>{% endif %}
+                                        {% if edit_errors.threshold_days %}<p id="endpoint-threshold-error" class="cw-hint t-crit">{{ edit_errors.threshold_days }}</p>{% endif %}
                                     </div>
                                     <div class="cw-field wide">
                                         <label class="cw-label" for="endpoint-renewal-status">Renewal status reported by operator</label>
@@ -230,11 +231,11 @@
                                         <input id="host-tags"
                                                name="tags"
                                                class="cw-input"
-                                               {% if edit_errors.tags %}aria-invalid="true"{% endif %}
+                                               {% if edit_errors.tags %}aria-invalid="true" aria-describedby="host-tags-error"{% endif %}
                                                value="{{ edit_values.get('tags', cert_tags | join(", ") if cert else host_info.tags) }}"
                                                list="cw-all-tags">
                                         {% if edit_errors.tags %}
-                                            <p class="cw-hint t-crit">{{ edit_errors.tags }}</p>
+                                            <p id="host-tags-error" class="cw-hint t-crit">{{ edit_errors.tags }}</p>
                                         {% endif %}
                                         <datalist id="cw-all-tags">
                                             {% for tag in all_tags %}<option value="{{ tag }}"></option>{% endfor %}
@@ -255,9 +256,9 @@
                                                   class="cw-textarea"
                                                   rows="5"
                                                   maxlength="10000"
-                                                  {% if edit_errors.notes %}aria-invalid="true"{% endif %}
+                                                  {% if edit_errors.notes %}aria-invalid="true" aria-describedby="host-notes-error"{% endif %}
                                                   data-testid="notes-editor">{{ edit_values.get('notes', host_info.notes) }}</textarea>
-                                        {% if edit_errors.notes %}<p class="cw-hint t-crit">{{ edit_errors.notes }}</p>{% endif %}
+                                        {% if edit_errors.notes %}<p id="host-notes-error" class="cw-hint t-crit">{{ edit_errors.notes }}</p>{% endif %}
                                     </div>
                                 </div>
                                 <div class="cw-form-foot">

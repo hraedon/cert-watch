@@ -301,7 +301,7 @@ async def edit_host_detail(
             edit_values=submitted,
             edit_errors={field: message},
             edit_error=message,
-            status_code=400,
+            status_code=422,
         )
     return RedirectResponse(url=f"/certificates/{resource_id}?host_saved=1", status_code=303)
 

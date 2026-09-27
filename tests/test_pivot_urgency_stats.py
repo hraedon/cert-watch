@@ -246,9 +246,7 @@ def test_fleet_pivot_surfaces_expired_urgency(tmp_path):
 
     record_scan_history(
         db,
-        ScanHistory(
-            "expired.example.com", 443, "success", scanned_at=now - timedelta(hours=1)
-        ),
+        ScanHistory("expired.example.com", 443, "success", scanned_at=now),
     )
 
     groups = list_fleet_pivot(db, "issuer")
