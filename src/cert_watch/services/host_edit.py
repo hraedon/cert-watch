@@ -9,7 +9,6 @@ from typing import Any
 
 from cert_watch.audit import export_audit, record_audit
 from cert_watch.auth.scope import (
-    ensure_new_tags_in_scope,
     ensure_tag_update_retains_scope,
     ensure_write_scope,
     ensure_write_scope_on,
@@ -36,6 +35,7 @@ from cert_watch.services.host_ownership import (
 from cert_watch.services.resource_metadata import (
     MAX_NOTES_LENGTH,
     ResourceMetadataValidationError,
+    _authorize_tag_transition,
     normalize_tags,
 )
 from cert_watch.tags import parse_tags
@@ -155,7 +155,19 @@ def edit_host(
             raise HostNotFoundError("host not found")
         resolved = update() if callable(update) else update
         ownership, interval, threshold, normalized_tags = _validate(resolved, current)
-        ensure_new_tags_in_scope(auth, normalized_tags)
+        if named_cert:
+            with _connect(db_path) as read_conn:
+                row = read_conn.execute(
+                    "SELECT tags FROM certificates WHERE id = ?", (named_cert,)
+                ).fetchone()
+            if row is None:
+                raise HostNotFoundError("certificate not found")
+            current_resource_tags = row["tags"]
+        else:
+            current_resource_tags = current.tags
+        normalized_tags = _authorize_tag_transition(
+            auth, current_resource_tags, normalized_tags
+        )
         final_effective_tags = parse_tags(normalized_tags)
         if named_cert:
             final_effective_tags.extend(parse_tags(current.tags))
@@ -169,7 +181,21 @@ def edit_host(
             ensure_write_scope_on(conn, auth, host_id=target.host_id)
             if named_cert:
                 ensure_write_scope_on(conn, auth, cert_id=named_cert)
-            ensure_new_tags_in_scope(auth, normalized_tags)
+            if named_cert:
+                resource_tags = conn.execute(
+                    "SELECT tags FROM certificates WHERE id = ?", (named_cert,)
+                ).fetchone()
+            else:
+                resource_tags = conn.execute(
+                    "SELECT tags FROM hosts WHERE id = ?", (target.host_id,)
+                ).fetchone()
+            if resource_tags is None:
+                raise HostNotFoundError(
+                    "certificate not found" if named_cert else "host not found"
+                )
+            normalized_tags = _authorize_tag_transition(
+                auth, resource_tags["tags"], normalized_tags
+            )
             host_tags = conn.execute(
                 "SELECT tags FROM hosts WHERE id = ?", (target.host_id,)
             ).fetchone()

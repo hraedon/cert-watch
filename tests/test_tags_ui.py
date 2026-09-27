@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
 from fastapi.testclient import TestClient
 
-from cert_watch.database import init_schema
+from cert_watch.database import (
+    SqliteCertificateRepository,
+    SqliteHostRepository,
+    init_schema,
+)
 
 
 def _seed_cert_on_host(db, leaf_pem_file, *, hostname="leaf.example.com", port=443):
@@ -66,6 +71,56 @@ def test_host_tags_are_effective_on_cert(tmp_path, reload_app, leaf_pem_file):
     # The host tag is inherited (effective) and flagged as host-sourced.
     assert "team-infra" in page
     assert "(host)" in page
+
+
+@pytest.mark.parametrize("resource", ["certificate", "host"])
+@pytest.mark.parametrize("adapter", ["html", "json"])
+@pytest.mark.parametrize("operation", ["preserve", "remove"])
+def test_tag_routes_preserve_unchanged_foreign_tags_and_refuse_removal(
+    tmp_path, reload_app, leaf_pem_file, resource, adapter, operation
+):
+    from tests.test_tag_scoped_access import _make_scoped_app, _scoped_client
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    cert_id = _seed_cert_on_host(db, leaf_pem_file)
+    with sqlite3.connect(str(db)) as conn:
+        host_id = conn.execute(
+            "SELECT id FROM hosts WHERE hostname = ? AND port = ?",
+            ("leaf.example.com", 443),
+        ).fetchone()[0]
+    target_id = cert_id if resource == "certificate" else host_id
+    initial = "Team-A,team-b"
+    if resource == "certificate":
+        SqliteCertificateRepository(db).set_tags(cert_id, initial)
+        SqliteHostRepository(db).set_tags(host_id, "team-b")
+    else:
+        SqliteHostRepository(db).set_tags(host_id, initial)
+    submitted = "TEAM-A,team-b" if operation == "preserve" else "team-b"
+
+    app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-b")
+    with _scoped_client(app, groups) as client:
+        if adapter == "html":
+            response = client.post(
+                f"/{resource}s/{target_id}/tags",
+                data={"tags": submitted},
+                follow_redirects=False,
+            )
+        else:
+            response = client.put(
+                f"/api/{resource}s/{target_id}/tags", json={"tags": submitted}
+            )
+
+    expected_status = 303 if adapter == "html" else 200
+    if operation == "remove":
+        expected_status = 303 if adapter == "html" else 403
+    assert response.status_code == expected_status, response.text
+    stored = (
+        SqliteCertificateRepository(db).get_tags(cert_id)
+        if resource == "certificate"
+        else SqliteHostRepository(db).get(host_id).tags
+    )
+    assert stored == initial
 
 
 def test_dashboard_search_matches_tags(tmp_path, reload_app, leaf_pem_file):

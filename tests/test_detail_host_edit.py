@@ -138,6 +138,139 @@ def test_edit_host_json_peer_requires_and_returns_the_complete_shape(tmp_path, r
     }
 
 
+def _edit_values(adapter, **changes):
+    values = {
+        **FORM,
+        "scan_interval_hours": 6 if adapter == "json" else "6",
+        "threshold_days": 21 if adapter == "json" else "21",
+        **changes,
+    }
+    return values
+
+
+def _submit_edit(client, resource_id, adapter, values):
+    if adapter == "html":
+        return client.post(
+            f"/hosts/{resource_id}/edit", data=values, follow_redirects=False
+        )
+    return client.put(f"/api/hosts/{resource_id}", json=values)
+
+
+def _email_of_length(length):
+    suffix = "@example.test"
+    return "a" * (length - len(suffix)) + suffix
+
+
+def _runbook_of_length(length):
+    prefix = "https://example.test/"
+    return prefix + "x" * (length - len(prefix))
+
+
+@pytest.mark.parametrize("adapter", ["html", "json"])
+@pytest.mark.parametrize(
+    ("field", "limit", "value_factory"),
+    [
+        ("owner_email", 254, _email_of_length),
+        ("runbook_url", 2048, _runbook_of_length),
+    ],
+)
+def test_edit_host_accepts_exact_and_padded_ownership_limits_after_stripping(
+    tmp_path, reload_app, adapter, field, limit, value_factory
+):
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    host_id = _host(db)
+    exact = value_factory(limit)
+    with TestClient(reload_app().app) as client:
+        exact_response = _submit_edit(
+            client, host_id, adapter, _edit_values(adapter, **{field: exact})
+        )
+        padded_response = _submit_edit(
+            client, host_id, adapter, _edit_values(adapter, **{field: f" {exact} "})
+        )
+    expected = 303 if adapter == "html" else 200
+    assert exact_response.status_code == expected, exact_response.text
+    assert padded_response.status_code == expected, padded_response.text
+    host = SqliteHostRepository(db).get(host_id)
+    assert host is not None and getattr(host, field) == exact
+
+
+@pytest.mark.parametrize("adapter", ["html", "json"])
+@pytest.mark.parametrize(
+    ("field", "limit", "value_factory"),
+    [
+        ("owner_email", 254, _email_of_length),
+        ("runbook_url", 2048, _runbook_of_length),
+    ],
+)
+def test_edit_host_rejects_ownership_values_one_past_the_limit(
+    tmp_path, reload_app, adapter, field, limit, value_factory
+):
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    host_id = _host(db)
+    before = SqliteHostRepository(db).get(host_id)
+    with TestClient(reload_app().app) as client:
+        response = _submit_edit(
+            client,
+            host_id,
+            adapter,
+            _edit_values(adapter, **{field: value_factory(limit + 1)}),
+        )
+    assert response.status_code == (422 if adapter == "html" else 400)
+    assert f"at most {limit} characters" in response.text
+    assert SqliteHostRepository(db).get(host_id) == before
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "owner_name",
+        "owner_email",
+        "owner_slack",
+        "renewal_method",
+        "runbook_url",
+        "renewal_status",
+        "notes",
+        "tags",
+    ],
+)
+def test_edit_host_json_rejects_null_string_fields(tmp_path, reload_app, field):
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    host_id = _host(db)
+    before = SqliteHostRepository(db).get(host_id)
+    with TestClient(reload_app().app) as client:
+        response = _submit_edit(
+            client, host_id, "json", _edit_values("json", **{field: None})
+        )
+    assert response.status_code == 400
+    assert f"{field} must be a string" in response.json()["error"]
+    assert SqliteHostRepository(db).get(host_id) == before
+
+
+@pytest.mark.parametrize("adapter", ["html", "json"])
+@pytest.mark.parametrize("renewal_status", ["renewed", "<x>"])
+def test_edit_host_rejects_invalid_renewal_status(
+    tmp_path, reload_app, adapter, renewal_status
+):
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    host_id = _host(db)
+    before = SqliteHostRepository(db).get(host_id)
+    with TestClient(reload_app().app) as client:
+        response = _submit_edit(
+            client,
+            host_id,
+            adapter,
+            _edit_values(adapter, renewal_status=renewal_status),
+        )
+    assert response.status_code == (422 if adapter == "html" else 400)
+    assert "renewal_status must be" in response.text
+    assert "pending" in response.text and "in_progress" in response.text
+    assert SqliteHostRepository(db).get(host_id) == before
+
+
 def test_invalid_combined_edit_is_atomic(tmp_path, reload_app, self_signed_leaf):
     db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)
@@ -483,6 +616,112 @@ def test_certificate_addressed_edit_requires_host_and_certificate_write_scope(
         403,
         {"error": "operation not permitted outside your team scope"},
     )
+    assert SqliteHostRepository(db).get(host_id) == before
+
+
+@pytest.mark.parametrize("adapter", ["html", "json"])
+def test_certificate_edit_preserves_existing_foreign_tag_for_scoped_writer(
+    tmp_path, reload_app, self_signed_leaf, adapter
+):
+    from tests.test_tag_scoped_access import _make_scoped_app, _scoped_client
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    host_id = _host(db, tags="team-b")
+    cert_id = seed_scanned(
+        db, "detail.example.test", 443, parse_certificate(self_signed_leaf.der)
+    )
+    SqliteCertificateRepository(db).set_tags(cert_id, "team-a,team-b")
+    app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-b")
+    with _scoped_client(app, groups) as client:
+        response = _submit_edit(
+            client,
+            cert_id,
+            adapter,
+            _edit_values(adapter, owner_name="Saved by team B", tags="team-a,team-b"),
+        )
+    assert response.status_code == (303 if adapter == "html" else 200), response.text
+    host = SqliteHostRepository(db).get(host_id)
+    assert host is not None and host.owner_name == "Saved by team B"
+    assert SqliteCertificateRepository(db).get_tags(cert_id) == "team-a,team-b"
+
+
+@pytest.mark.parametrize("adapter", ["html", "json"])
+@pytest.mark.parametrize("operation", ["add", "remove"])
+def test_certificate_edit_refuses_foreign_tag_changes_for_scoped_writer(
+    tmp_path, reload_app, self_signed_leaf, adapter, operation
+):
+    from tests.test_tag_scoped_access import _make_scoped_app, _scoped_client
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    host_id = _host(db, tags="team-b")
+    cert_id = seed_scanned(
+        db, "detail.example.test", 443, parse_certificate(self_signed_leaf.der)
+    )
+    initial = "team-b" if operation == "add" else "team-a,team-b"
+    submitted = "team-a,team-b" if operation == "add" else "team-b"
+    SqliteCertificateRepository(db).set_tags(cert_id, initial)
+    before = SqliteHostRepository(db).get(host_id)
+    app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-b")
+    with _scoped_client(app, groups) as client:
+        response = _submit_edit(
+            client,
+            cert_id,
+            adapter,
+            _edit_values(adapter, owner_name="Must not save", tags=submitted),
+        )
+    assert response.status_code == (303 if adapter == "html" else 403)
+    error = response.headers.get("location", "") if adapter == "html" else response.text
+    assert "scope" in error
+    assert SqliteHostRepository(db).get(host_id) == before
+    assert SqliteCertificateRepository(db).get_tags(cert_id) == initial
+
+
+@pytest.mark.parametrize("adapter", ["html", "json"])
+def test_host_addressed_edit_preserves_foreign_tag_spelling_for_scoped_writer(
+    tmp_path, reload_app, adapter
+):
+    from tests.test_tag_scoped_access import _make_scoped_app, _scoped_client
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    host_id = _host(db, tags="Team-A,team-b")
+    app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-b")
+    with _scoped_client(app, groups) as client:
+        response = _submit_edit(
+            client,
+            host_id,
+            adapter,
+            _edit_values(adapter, owner_name="Saved by team B", tags="TEAM-A,team-b"),
+        )
+    assert response.status_code == (303 if adapter == "html" else 200), response.text
+    host = SqliteHostRepository(db).get(host_id)
+    assert host is not None
+    assert (host.owner_name, host.tags) == ("Saved by team B", "Team-A,team-b")
+
+
+@pytest.mark.parametrize("adapter", ["html", "json"])
+def test_host_addressed_edit_refuses_foreign_tag_removal_for_scoped_writer(
+    tmp_path, reload_app, adapter
+):
+    from tests.test_tag_scoped_access import _make_scoped_app, _scoped_client
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    host_id = _host(db, tags="team-a,team-b")
+    before = SqliteHostRepository(db).get(host_id)
+    app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-b")
+    with _scoped_client(app, groups) as client:
+        response = _submit_edit(
+            client,
+            host_id,
+            adapter,
+            _edit_values(adapter, owner_name="Must not save", tags="team-b"),
+        )
+    assert response.status_code == (303 if adapter == "html" else 403)
+    error = response.headers.get("location", "") if adapter == "html" else response.text
+    assert "scope" in error
     assert SqliteHostRepository(db).get(host_id) == before
 
 

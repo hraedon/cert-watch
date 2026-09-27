@@ -743,16 +743,31 @@ def update_expected_issuers(
         host = repo.get(host_id)
         if host is None:
             raise HostNotFoundError("host not found")
-        repo.set_expected_issuers(host_id, normalized)
-    record_audit(
-        db_path,
-        actor=actor,
-        action=audit_action,
-        target_type="host",
-        target_id=host_id,
-        detail={"hostname": host.hostname, "expected_issuers": normalized},
-        source_ip=source_ip,
-    )
+        conn = _connect(db_path)
+        try:
+            begin_immediate(conn)
+            ensure_write_scope_on(conn, auth, host_id=host_id)
+            cursor = conn.execute(
+                "UPDATE hosts SET expected_issuers = ? WHERE id = ?",
+                (normalized, host_id),
+            )
+            if cursor.rowcount == 0:
+                raise HostNotFoundError("host not found")
+            audit_event = record_audit(
+                db_path,
+                actor=actor,
+                action=audit_action,
+                target_type="host",
+                target_id=host_id,
+                detail={"hostname": host.hostname, "expected_issuers": normalized},
+                source_ip=source_ip,
+                conn=conn,
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    export_audit(audit_event)
     return tuple(values)
 
 
