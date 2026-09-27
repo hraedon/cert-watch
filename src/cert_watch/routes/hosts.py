@@ -72,7 +72,6 @@ from cert_watch.services.host_ownership import (
     HostOwnershipTargetError,
     HostOwnershipUpdate,
     HostOwnershipValidationError,
-    resolve_host_ownership_target,
     update_host_ownership,
 )
 from cert_watch.services.resource_metadata import (
@@ -324,10 +323,9 @@ async def update_host_owner(
         )
     db = _db_path(request)
     try:
-        target = resolve_host_ownership_target(db, host_id, auth=acting_auth(request))
         update_host_ownership(
             db,
-            target,
+            host_id,
             HostOwnershipUpdate(
                 owner_name=owner_name,
                 owner_email=owner_email,

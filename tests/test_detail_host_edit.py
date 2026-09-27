@@ -186,6 +186,68 @@ def test_combined_edit_rejects_an_unsafe_runbook_without_writing(tmp_path, reloa
     assert SqliteHostRepository(db).get(host_id) == before
 
 
+@pytest.mark.parametrize("adapter", ["html", "json"])
+def test_legacy_overlong_owner_loads_but_must_be_cleared_before_save(
+    tmp_path, reload_app, adapter
+):
+    """Historical rows stay readable, while both complete-edit adapters
+    refuse to write the legacy value back and still permit clearing it."""
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    legacy_name = "L" * 201
+    host_id = SqliteHostRepository(db).add(
+        "detail.example.test",
+        443,
+        tags="old-host-tag",
+        owner_name=legacy_name,
+        owner_email="old@example.test",
+        owner_slack="#old",
+        renewal_method="manual",
+        runbook_url="https://old.example.test/runbook",
+        scan_interval_hours=24,
+        threshold_days=14,
+        notes="Old notes",
+    )
+    values = {
+        "owner_name": legacy_name,
+        "owner_email": "old@example.test",
+        "owner_slack": "#old",
+        "renewal_method": "manual",
+        "runbook_url": "https://old.example.test/runbook",
+        "scan_interval_hours": 24 if adapter == "json" else "24",
+        "threshold_days": 14 if adapter == "json" else "14",
+        "renewal_status": "pending",
+        "notes": "Old notes",
+        "tags": "old-host-tag",
+    }
+    with TestClient(reload_app().app) as client:
+        page = client.get(f"/certificates/{host_id}")
+        if adapter == "html":
+            refused = client.post(
+                f"/hosts/{host_id}/edit", data=values, follow_redirects=False
+            )
+        else:
+            refused = client.put(f"/api/hosts/{host_id}", json=values)
+
+        assert page.status_code == 200
+        assert legacy_name in page.text
+        assert refused.status_code == (422 if adapter == "html" else 400)
+        error = refused.text if adapter == "html" else refused.json()["error"]
+        assert "owner_name must be at most 200 characters" in error
+        assert SqliteHostRepository(db).get(host_id).owner_name == legacy_name
+
+        cleared = {**values, "owner_name": ""}
+        if adapter == "html":
+            saved = client.post(
+                f"/hosts/{host_id}/edit", data=cleared, follow_redirects=False
+            )
+            assert saved.status_code == 303
+        else:
+            saved = client.put(f"/api/hosts/{host_id}", json=cleared)
+            assert saved.status_code == 200
+    assert SqliteHostRepository(db).get(host_id).owner_name == ""
+
+
 def test_edit_host_form_rate_limit_prevents_the_write(tmp_path, reload_app, monkeypatch):
     db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)
