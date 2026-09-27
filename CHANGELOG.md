@@ -2,6 +2,23 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Repeated scans of the same deployed certificate keep the persisted renewal
+  classification without rereading the endpoint's retained history. A new
+  fingerprint period, an out-of-order observation, validity recovery,
+  retention pruning, and history updates or deletes still recompute or
+  invalidate the result. Persisted rows now carry a classifier version and
+  are refreshed at startup when the classifier changes (#128).
+
+### Upgrade notes
+
+- Migration 0044 versions and backfills persisted renewal classifications and
+  replaces the certificate-history insert trigger. See
+  [UPGRADING.md](UPGRADING.md).
+
 ## [1.1.0] - 2026-09-27
 
 Four facts per endpoint and a redesigned UI (#126). Every endpoint is now

@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
+import inspect
+import json
+import logging
 import random
 import uuid
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import (
@@ -19,8 +25,11 @@ from cert_watch.database.connection import _connect
 from cert_watch.database.dashboard_axes import dashboard_axis_stats
 from cert_watch.database.dashboard_page import list_dashboard_page
 from cert_watch.renewal_analytics import (
+    CLASSIFIER_SOURCE_HASH,
+    CLASSIFIER_VERSION,
     compute_endpoint_analytics,
     refresh_endpoint_analytics,
+    refresh_stale_classifier_rows,
 )
 
 NOW = datetime(2026, 9, 25, 12, tzinfo=UTC)
@@ -29,6 +38,64 @@ _STATE = {
     "manual": "manual",
     "unknown": "unknown",
 }
+
+
+def test_renewal_classifier_version_matches_logic() -> None:
+    """A classifier change must invalidate rows written by the prior logic."""
+    import cert_watch.database.connection as connection
+    import cert_watch.renewal_analytics as analytics
+
+    parts = [
+        repr(analytics.ACME_ISSUER_FRAGMENTS),
+        inspect.getsource(connection._parse_iso),
+    ]
+    parts.extend(
+        inspect.getsource(getattr(analytics, name))
+        for name in (
+            "_is_acme_issuer",
+            "_compute_trend",
+            "_known_timestamp",
+            "_known_validity_days",
+            "_classify_automation",
+            "_compute_host_from_entries",
+            "_endpoint_entries",
+        )
+    )
+    actual = hashlib.sha256("\n".join(parts).encode()).hexdigest()
+    assert actual == CLASSIFIER_SOURCE_HASH, (
+        "renewal classifier source changed (formatting-only edits also trip this "
+        "guard): bump CLASSIFIER_VERSION, recompute CLASSIFIER_SOURCE_HASH from "
+        "this test's source list, and re-check the harmless-append trigger"
+    )
+
+
+def _assert_cache_matches_from_scratch(db, hostname: str, port: int) -> None:
+    expected = compute_endpoint_analytics(db, ((hostname, port),))[0]
+    with _connect(db) as conn:
+        row = conn.execute(
+            """SELECT classifier_version, classification, evidence_json,
+                      observed_lifetimes_json, lifetime_trend,
+                      renewal_lead_times_json, median_lead_time,
+                      median_cadence_days, deployment_count, basis_history_count
+               FROM endpoint_renewal_analytics
+               WHERE hostname = ? AND port = ?""",
+            (hostname, port),
+        ).fetchone()
+        history_count = conn.execute(
+            "SELECT COUNT(*) FROM cert_history WHERE hostname = ? AND port = ?",
+            (hostname, port),
+        ).fetchone()[0]
+    assert row is not None
+    assert row["classifier_version"] == CLASSIFIER_VERSION
+    assert row["classification"] == expected.automation_classification
+    assert json.loads(row["evidence_json"]) == expected.classification_evidence
+    assert json.loads(row["observed_lifetimes_json"]) == expected.observed_lifetimes
+    assert row["lifetime_trend"] == expected.lifetime_trend
+    assert json.loads(row["renewal_lead_times_json"]) == expected.renewal_lead_times
+    assert row["median_lead_time"] == expected.median_lead_time
+    assert row["median_cadence_days"] == expected.median_cadence_days
+    assert row["deployment_count"] == expected.cert_count
+    assert row["basis_history_count"] == history_count
 
 
 def _live_cert(hostname: str, fingerprint: str) -> Certificate:
@@ -169,6 +236,402 @@ def test_history_writers_refresh_basis_and_host_delete_removes_cache(tmp_path):
             "SELECT 1 FROM endpoint_renewal_analytics WHERE hostname = ?",
             (hostname,),
         ).fetchone() is None
+
+
+def test_repeat_scan_skips_history_refresh_but_new_period_does_not(
+    tmp_path, monkeypatch
+):
+    import cert_watch.renewal_analytics as analytics
+
+    db = tmp_path / "repeat.sqlite3"
+    init_schema(db)
+    hostname = "repeat.example.test"
+    first_seen = NOW - timedelta(days=10)
+
+    def cert(fingerprint: str) -> Certificate:
+        return Certificate(
+            subject=f"CN={hostname}",
+            issuer=_ACME,
+            not_before=first_seen,
+            not_after=first_seen + timedelta(days=90),
+            fingerprint_sha256=fingerprint,
+        )
+
+    record_cert_history(db, hostname, 443, cert("same"), scanned_at=first_seen.isoformat())
+    original = analytics.refresh_endpoint_analytics
+    refreshed: list[str] = []
+
+    def counted(conn, host: str, port: int):
+        refreshed.append(host)
+        return original(conn, host, port)
+
+    monkeypatch.setattr(analytics, "refresh_endpoint_analytics", counted)
+    record_cert_history(
+        db,
+        hostname,
+        443,
+        cert("same"),
+        scanned_at=(first_seen + timedelta(days=1)).isoformat(),
+    )
+    assert refreshed == []
+    _assert_cache_matches_from_scratch(db, hostname, 443)
+
+    record_cert_history(
+        db,
+        hostname,
+        443,
+        cert("new"),
+        scanned_at=(first_seen + timedelta(days=2)).isoformat(),
+    )
+    assert refreshed == [hostname]
+    _assert_cache_matches_from_scratch(db, hostname, 443)
+
+
+def test_same_fingerprint_validity_recovery_still_refreshes(tmp_path, monkeypatch):
+    import cert_watch.renewal_analytics as analytics
+
+    db = tmp_path / "validity-recovery.sqlite3"
+    init_schema(db)
+    hostname = "validity-recovery.example.test"
+    first_seen = NOW - timedelta(days=10)
+    with _connect(db) as conn:
+        conn.execute(
+            """INSERT INTO cert_history
+               (id, hostname, port, fingerprint_sha256, issuer,
+                not_before, not_after, scanned_at)
+               VALUES ('missing', ?, 443, 'same', ?, NULL, ?, ?)""",
+            (
+                hostname,
+                _ACME,
+                (first_seen + timedelta(days=90)).isoformat(),
+                first_seen.isoformat(),
+            ),
+        )
+        refresh_endpoint_analytics(conn, hostname, 443)
+        conn.commit()
+
+    original = analytics.refresh_endpoint_analytics
+    refreshed = 0
+
+    def counted(conn, host: str, port: int):
+        nonlocal refreshed
+        refreshed += 1
+        return original(conn, host, port)
+
+    monkeypatch.setattr(analytics, "refresh_endpoint_analytics", counted)
+    record_cert_history(
+        db,
+        hostname,
+        443,
+        Certificate(
+            subject=f"CN={hostname}",
+            issuer=_ACME,
+            not_before=first_seen,
+            not_after=first_seen + timedelta(days=90),
+            fingerprint_sha256="same",
+        ),
+        scanned_at=(first_seen + timedelta(days=1)).isoformat(),
+    )
+    assert refreshed == 1
+    _assert_cache_matches_from_scratch(db, hostname, 443)
+
+
+@pytest.mark.parametrize("invalid_kind", ["julian-day", "malformed"])
+def test_non_iso_validity_never_takes_the_repeat_scan_fast_path(
+    tmp_path, invalid_kind
+):
+    db = tmp_path / f"non-iso-{invalid_kind}.sqlite3"
+    init_schema(db)
+    hostname = f"non-iso-{invalid_kind}.example.test"
+    first_seen = NOW - timedelta(days=200)
+
+    def cert(fingerprint: str, issued_at: datetime) -> Certificate:
+        return Certificate(
+            subject=f"CN={hostname}",
+            issuer=_ACME,
+            not_before=issued_at,
+            not_after=issued_at + timedelta(days=90),
+            fingerprint_sha256=fingerprint,
+        )
+
+    for index, fingerprint in enumerate(("A", "B")):
+        issued_at = first_seen + timedelta(days=index * 60)
+        record_cert_history(
+            db,
+            hostname,
+            443,
+            cert(fingerprint, issued_at),
+            scanned_at=issued_at.isoformat(),
+        )
+
+    issued_at = first_seen + timedelta(days=120)
+    with _connect(db) as conn:
+        invalid_not_before = "not-a-date"
+        if invalid_kind == "julian-day":
+            invalid_not_before = str(
+                conn.execute(
+                    "SELECT julianday(?)", (issued_at.isoformat(),)
+                ).fetchone()[0]
+            )
+        conn.execute(
+            """INSERT INTO cert_history
+               (id, hostname, port, fingerprint_sha256, issuer,
+                not_before, not_after, scanned_at)
+               VALUES ('invalid-first', ?, 443, 'C', ?, ?, ?, ?)""",
+            (
+                hostname,
+                _ACME,
+                invalid_not_before,
+                (issued_at + timedelta(days=90)).isoformat(),
+                issued_at.isoformat(),
+            ),
+        )
+        refresh_endpoint_analytics(conn, hostname, 443)
+        conn.commit()
+    assert _cached(db, hostname, 443) == "unknown"
+
+    record_cert_history(
+        db,
+        hostname,
+        443,
+        cert("C", issued_at),
+        scanned_at=(issued_at + timedelta(days=1)).isoformat(),
+    )
+    assert _cached(db, hostname, 443) == "likely-automated"
+    _assert_cache_matches_from_scratch(db, hostname, 443)
+
+
+def test_insert_or_replace_invalidates_reused_history_id(tmp_path):
+    """The reviewer's REPLACE probe must fail closed, even with triggers off."""
+    db = tmp_path / "replace.sqlite3"
+    init_schema(db)
+    hostname = "replace.example.test"
+    first_seen = NOW - timedelta(days=200)
+    history_ids: list[str] = []
+
+    for fingerprint, day in (("A", 0), ("A", 40), ("B", 60), ("C", 120), ("C", 121)):
+        issued_at = first_seen + timedelta(days={"A": 0, "B": 60, "C": 120}[fingerprint])
+        history_ids.append(
+            record_cert_history(
+                db,
+                hostname,
+                443,
+                Certificate(
+                    subject=f"CN={hostname}",
+                    issuer=_ACME,
+                    not_before=issued_at,
+                    not_after=issued_at + timedelta(days=90),
+                    fingerprint_sha256=fingerprint,
+                ),
+                scanned_at=(first_seen + timedelta(days=day)).isoformat(),
+            )
+        )
+    assert _cached(db, hostname, 443) == "likely-automated"
+
+    issued_at = first_seen + timedelta(days=120)
+    with _connect(db) as conn:
+        assert conn.execute("PRAGMA recursive_triggers").fetchone()[0] == 0
+        conn.execute(
+            """INSERT OR REPLACE INTO cert_history
+               (id, hostname, port, fingerprint_sha256, issuer,
+                not_before, not_after, scanned_at)
+               VALUES (?, ?, 443, 'C', ?, ?, ?, ?)""",
+            (
+                history_ids[0],
+                hostname,
+                _ACME,
+                issued_at.isoformat(),
+                (issued_at + timedelta(days=90)).isoformat(),
+                (first_seen + timedelta(days=122)).isoformat(),
+            ),
+        )
+        conn.commit()
+
+    assert _cached(db, hostname, 443) is None
+    expected = compute_endpoint_analytics(db, ((hostname, 443),))[0]
+    assert expected.automation_classification == "manual"
+
+
+def test_incremental_cache_matches_from_scratch_after_each_insert_and_prune(tmp_path):
+    db = tmp_path / "incremental-property.sqlite3"
+    init_schema(db)
+    hostname = "property.example.test"
+    randomizer = random.Random(128)
+    base = datetime.now(UTC) - timedelta(days=220)
+    fingerprints = ["fp-0"]
+
+    for index in range(80):
+        if randomizer.random() < 0.3:
+            fingerprints.append(f"fp-{len(fingerprints)}")
+        fingerprint = randomizer.choice(fingerprints[-2:])
+        scanned_at = base + timedelta(
+            days=index * 3 + randomizer.choice([-4, -1, 0, 0, 1])
+        )
+        lifetime = randomizer.choice([60, 90, 365])
+        record_cert_history(
+            db,
+            hostname,
+            443,
+            Certificate(
+                subject=f"CN={hostname}",
+                issuer=_ACME if lifetime <= 90 else _PRIVATE,
+                not_before=scanned_at - timedelta(days=1),
+                not_after=scanned_at - timedelta(days=1) + timedelta(days=lifetime),
+                fingerprint_sha256=fingerprint,
+            ),
+            scanned_at=scanned_at.isoformat(),
+        )
+        _assert_cache_matches_from_scratch(db, hostname, 443)
+
+    assert purge_old_history(db, retention_days=120) > 0
+    _assert_cache_matches_from_scratch(db, hostname, 443)
+
+
+def test_stale_classifier_version_is_hidden_then_refreshed(tmp_path):
+    db = tmp_path / "version.sqlite3"
+    init_schema(db)
+    hostname = "version.example.test"
+    SqliteHostRepository(db).add(hostname, 443)
+    replace_scanned(db, hostname, 443, _live_cert(hostname, "live"), [], True)
+    with _connect(db) as conn:
+        _seed_acme(conn, hostname, 443)
+        refresh_endpoint_analytics(conn, hostname, 443)
+        conn.execute(
+            """UPDATE endpoint_renewal_analytics
+               SET classifier_version = 0, classification = 'manual'
+               WHERE hostname = ? AND port = 443""",
+            (hostname,),
+        )
+        conn.commit()
+
+    rows, total = list_dashboard_page(db, per_page=0, now=NOW)
+    assert total == 1
+    assert rows[0]["renewal"] == "unknown"
+    assert refresh_stale_classifier_rows(db) == 1
+    rows, _ = list_dashboard_page(db, per_page=0, now=NOW)
+    assert rows[0]["renewal"] == "automation_configured"
+    _assert_cache_matches_from_scratch(db, hostname, 443)
+
+
+def test_init_schema_refreshes_stale_versions_once(tmp_path, monkeypatch):
+    import cert_watch.database.schema as schema
+    import cert_watch.renewal_analytics as analytics
+
+    db = tmp_path / "startup-version.sqlite3"
+    init_schema(db)
+    hostname = "startup-version.example.test"
+    with _connect(db) as conn:
+        _seed_acme(conn, hostname, 443)
+        refresh_endpoint_analytics(conn, hostname, 443)
+        conn.execute(
+            "UPDATE endpoint_renewal_analytics SET classifier_version = 0"
+        )
+        conn.commit()
+
+    original = analytics.refresh_stale_classifier_rows
+    calls = 0
+
+    def counted(db_path):
+        nonlocal calls
+        calls += 1
+        return original(db_path)
+
+    monkeypatch.setattr(analytics, "refresh_stale_classifier_rows", counted)
+    schema._initialized.clear()
+    init_schema(db)
+    init_schema(db)
+
+    assert calls == 1
+    _assert_cache_matches_from_scratch(db, hostname, 443)
+
+
+def test_repeat_write_refreshes_a_stale_classifier_version(tmp_path):
+    db = tmp_path / "write-version.sqlite3"
+    init_schema(db)
+    hostname = "write-version.example.test"
+    with _connect(db) as conn:
+        _seed_acme(conn, hostname, 443)
+        refresh_endpoint_analytics(conn, hostname, 443)
+        latest = conn.execute(
+            """SELECT fingerprint_sha256, not_before, not_after, scanned_at
+               FROM cert_history WHERE hostname = ? AND port = 443
+               ORDER BY scanned_at DESC, id DESC LIMIT 1""",
+            (hostname,),
+        ).fetchone()
+        conn.execute(
+            """UPDATE endpoint_renewal_analytics
+               SET classifier_version = 0, classification = 'manual'
+               WHERE hostname = ? AND port = 443""",
+            (hostname,),
+        )
+        conn.commit()
+
+    record_cert_history(
+        db,
+        hostname,
+        443,
+        Certificate(
+            subject=f"CN={hostname}",
+            issuer=_ACME,
+            not_before=datetime.fromisoformat(latest["not_before"]),
+            not_after=datetime.fromisoformat(latest["not_after"]),
+            fingerprint_sha256=str(latest["fingerprint_sha256"]),
+        ),
+        scanned_at=(datetime.fromisoformat(latest["scanned_at"]) + timedelta(days=1)).isoformat(),
+    )
+    _assert_cache_matches_from_scratch(db, hostname, 443)
+    assert _cached(db, hostname, 443) == "likely-automated"
+
+
+def test_startup_refresh_logs_one_failure_and_continues(
+    tmp_path, monkeypatch, caplog
+):
+    import cert_watch.database.schema as schema
+    import cert_watch.renewal_analytics as analytics
+
+    db = tmp_path / "startup-failure.sqlite3"
+    init_schema(db)
+    hostnames = ["good-one.example.test", "broken.example.test", "good-two.example.test"]
+    with _connect(db) as conn:
+        for hostname in hostnames:
+            _seed_acme(conn, hostname, 443)
+            refresh_endpoint_analytics(conn, hostname, 443)
+        conn.execute(
+            "UPDATE endpoint_renewal_analytics SET classifier_version = 0"
+        )
+        conn.commit()
+
+    original = analytics.refresh_endpoint_analytics
+    attempted: list[str] = []
+
+    def sometimes_fails(conn, hostname: str, port: int):
+        attempted.append(hostname)
+        if hostname == "broken.example.test":
+            raise ValueError("injected classifier failure")
+        return original(conn, hostname, port)
+
+    monkeypatch.setattr(analytics, "refresh_endpoint_analytics", sometimes_fails)
+    schema._initialized.clear()
+    with caplog.at_level(logging.WARNING, logger="cert_watch.renewal_analytics"):
+        init_schema(db)
+    init_schema(db)
+
+    assert attempted == sorted(hostnames)
+    with _connect(db) as conn:
+        versions = dict(
+            conn.execute(
+                "SELECT hostname, classifier_version FROM endpoint_renewal_analytics"
+            )
+        )
+    assert versions == {
+        "broken.example.test": 0,
+        "good-one.example.test": CLASSIFIER_VERSION,
+        "good-two.example.test": CLASSIFIER_VERSION,
+    }
+    assert any(
+        "broken.example.test:443 (ValueError)" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_migration_backfill_runs_the_python_classifier(tmp_path):
@@ -597,3 +1060,37 @@ def test_purge_refreshes_exactly_the_endpoints_it_purged(tmp_path):
     assert purged is not None
     assert tuple(purged) == ("unknown", 0)
     assert _cached(db, fresh_host, 443) == "likely-automated"
+
+
+def test_startup_refresh_commits_once_per_batch(tmp_path, monkeypatch):
+    import contextlib
+
+    import cert_watch.renewal_analytics as analytics
+
+    db = tmp_path / "batches.sqlite3"
+    init_schema(db)
+    hostnames = [f"batch-{i}.example.test" for i in range(5)]
+    with _connect(db) as conn:
+        for hostname in hostnames:
+            _seed_acme(conn, hostname, 443)
+            refresh_endpoint_analytics(conn, hostname, 443)
+        conn.execute("UPDATE endpoint_renewal_analytics SET classifier_version = 0")
+        conn.commit()
+
+    statements: list[str] = []
+    original_connect = analytics._connect
+
+    @contextlib.contextmanager
+    def traced(path):
+        with original_connect(path) as conn:
+            conn.set_trace_callback(statements.append)
+            yield conn
+
+    monkeypatch.setattr(analytics, "_connect", traced)
+    monkeypatch.setattr(analytics, "_STALE_REFRESH_BATCH_SIZE", 2)
+    assert refresh_stale_classifier_rows(db) == 5
+
+    # Three batches (2 + 2 + 1): each opens one transaction, so the per-endpoint
+    # savepoints nest inside it instead of each committing on its own.
+    assert sum(s.strip().upper() == "BEGIN" for s in statements) == 3
+    assert sum(s.strip().upper() == "COMMIT" for s in statements) == 3
