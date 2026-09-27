@@ -15,6 +15,10 @@ All notable changes to cert-watch are documented in this file.
 
 ### Changed
 
+- Browse rows and issuer, owner, and renewal-method groups now lead with the
+  expiry condition in days and show monitoring, chain, renewal, and delivery
+  only when they need attention. Repeated one-host, current-scan, private-root,
+  and unknown-renewal labels are removed (#126 S6).
 - Posture now leads with a scoped, linked grade distribution and the
   lowest-grade certificates with their failing reason instead of a fleet grade
   determined by the worst certificate. Grade and TLS trends remain hidden

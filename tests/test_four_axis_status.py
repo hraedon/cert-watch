@@ -341,12 +341,12 @@ def test_group_rollup_uses_worst_condition_and_monitoring(tmp_path):
         {
             "id": "a", "host_id": "ha", "kind": "scanned", "condition": "ok",
             "monitoring": "never_scanned", "renewal": "unknown", "delivery": "ok",
-            "urgency": "healthy", "chain_status": "public",
+            "urgency": "healthy", "chain_status": "public", "effective_days": 80,
         },
         {
             "id": "b", "host_id": "hb", "kind": "scanned", "condition": "expired",
             "monitoring": "failing", "renewal": "manual", "delivery": "unrouted",
-            "urgency": "expired", "chain_status": "public",
+            "urgency": "expired", "chain_status": "public", "effective_days": -14,
         },
     ]
     context = StatusModelContext(
@@ -363,6 +363,7 @@ def test_group_rollup_uses_worst_condition_and_monitoring(tmp_path):
     group = {"hosts": children, "urgency": "expired", "host_id": "group"}
     attach_status_models(db, [group], context)
     assert group["condition"] == "expired"
+    assert group["status"]["condition"]["effective_days"] == -14
     assert group["monitoring"] == "failing"
 
 
@@ -1093,7 +1094,7 @@ def test_no_surface_calls_failing_or_never_scanned_endpoints_healthy(
         r"<tr[^>]*>.*?failing\.example\.test.*?</tr>", html, flags=re.DOTALL
     )
     assert failing_row is not None
-    assert "Monitoring failing" in failing_row.group(0)
+    assert "Failing since" in failing_row.group(0)
     assert ">Healthy<" not in failing_row.group(0)
 
 

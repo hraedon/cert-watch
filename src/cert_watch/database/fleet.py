@@ -77,7 +77,12 @@ def list_fleet_pivot(
     axes = axes or prepare_status_model_context(
         db_path, certificate_status=status, settings=axis_settings
     )
-    candidates = inventory_candidates_sql(scope_tags=scope_tags, status=status, axes=axes)
+    candidates = inventory_candidates_sql(
+        scope_tags=scope_tags,
+        status=status,
+        axes=axes,
+        sql_delivery=True,
+    )
     if candidates is None:
         return []
     sql, params = candidates
@@ -86,13 +91,17 @@ def list_fleet_pivot(
     with _connect(db_path) as conn:
         register_status_model_functions(conn, axes)
         rows = conn.execute(
-            f"SELECT {column} AS grp, overall_state, COUNT(*) AS n,"
+            f"SELECT {column} AS grp, overall_state, condition, monitoring, renewal,"
+            " delivery, chain_status, COUNT(*) AS n,"
             f" MIN(eff_days) AS min_days, MIN(sort_expiry) AS first_expiry"
-            f" FROM ({sql}) GROUP BY grp, overall_state",
+            " FROM (" + sql + ")"
+            " GROUP BY grp, overall_state, condition, monitoring, renewal, delivery,"
+            " chain_status",
             params,
         ).fetchall()
-    # One row per (raw group value, status): bounded by the number of groups,
-    # not the estate. Raw values sharing a label (issuer DNs) merge here.
+    # One row per raw group value and compact axis-state combination: bounded
+    # by the number of groups and the small public vocabularies, not the estate.
+    # Raw values sharing a label (issuer DNs) merge here.
     for row in rows:
         key = _friendly_key(row["grp"], pivot)
         group = groups.setdefault(
@@ -101,6 +110,11 @@ def list_fleet_pivot(
                 "key": key,
                 "count": 0,
                 "_urgencies": set(),
+                "_conditions": set(),
+                "_monitoring": set(),
+                "_renewal": set(),
+                "_delivery": set(),
+                "_chain_statuses": set(),
                 "earliest_expiry": None,
                 "entries": None,
                 "_first": row["first_expiry"],
@@ -109,6 +123,13 @@ def list_fleet_pivot(
         group["_first"] = min(group["_first"], row["first_expiry"])
         group["count"] += row["n"]
         group["_urgencies"].add(row["overall_state"] or "gray")
+        if row["condition"]:
+            group["_conditions"].add(row["condition"])
+        group["_monitoring"].add(row["monitoring"] or "not_monitored")
+        group["_renewal"].add(row["renewal"] or "unknown")
+        group["_delivery"].add(row["delivery"] or "unrouted")
+        if row["chain_status"]:
+            group["_chain_statuses"].add(row["chain_status"])
         days = row["min_days"]
         if days is not None and (
             group["earliest_expiry"] is None or days < group["earliest_expiry"]
@@ -123,6 +144,45 @@ def list_fleet_pivot(
         urgencies = group.pop("_urgencies")
         worst = next((u for u in _URGENCY_ORDER if u in urgencies), "gray")
         group["worst_urgency"] = worst
+        conditions = group.pop("_conditions")
+        group["condition"] = next(
+            (state for state in ("expired", "le7", "8to30", "ok") if state in conditions),
+            None,
+        )
+        monitoring_states = group.pop("_monitoring")
+        group["monitoring"] = next(
+            (
+                state
+                for state in ("failing", "never_scanned", "current", "not_monitored")
+                if state in monitoring_states
+            ),
+            "not_monitored",
+        )
+        renewal_states = group.pop("_renewal")
+        group["renewal"] = next(
+            (
+                state
+                for state in (
+                    "stalled",
+                    "in_progress",
+                    "manual",
+                    "automation_configured",
+                    "unknown",
+                )
+                if state in renewal_states
+            ),
+            "unknown",
+        )
+        delivery_states = group.pop("_delivery")
+        group["delivery"] = next(
+            (state for state in ("failing", "unrouted", "ok") if state in delivery_states),
+            "unrouted",
+        )
+        chain_statuses = group.pop("_chain_statuses")
+        group["chain_trust_problem"] = bool(
+            chain_statuses
+            & {"incomplete", "invalid", "unknown", "self-signed", "unverified"}
+        )
         result.append(group)
     return result
 

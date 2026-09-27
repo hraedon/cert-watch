@@ -243,14 +243,13 @@ Calendar · all</a>
 
 </th>
           <th>Tags</th>
-          <th>Source</th>
           <th>
 
 
-  <a href="/browse?sort_by=expiry&amp;sort_order=desc&amp;grouped=1" class="sort">Expires</a>
+  <a href="/browse?sort_by=expiry&amp;sort_order=desc&amp;grouped=1" class="sort">Condition</a>
   <span class="arrow">▲</span>
 </th>
-          <th>Status</th>
+          <th>Exceptions</th>
           <th>Grade</th>
           <th><span class="cw-sr">Actions</span></th>
         </tr>
@@ -258,26 +257,18 @@ Calendar · all</a>
       <tbody>
 
 
-
-          <tr data-expand="group-hosts-1" tabindex="0" role="button" aria-expanded="false" aria-controls="group-hosts-1">
+          <tr data-testid="cert-row">
             <td data-label="Certificate">
               <div class="cw-chiprow">
-                <span class="chev">
+                <button type="button" class="cw-expand-toggle icon-only" data-expand="group-hosts-1" aria-expanded="false" aria-controls="group-hosts-1" aria-label="Show endpoints for O=Demo Estate,CN=mail.demo.test"><span class="chev">
 
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
 
-</span>
-                <span class="cw-id">O=Demo Estate,CN=mail.demo.test</span>
-                <span class="cw-chip t-ink">1 host</span>
+</span></button>
+                <a class="cw-id cw-link" href="/certificates/{{CERT_4_ID}}">O=Demo Estate,CN=mail.demo.test</a>
               </div>
               <div class="cw-chiprow cw-metarow">
 
-
-    <span class="cw-chip t-warn">
-
-    <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-
-manual</span>
 
 
     <span class="cw-chip">
@@ -304,95 +295,99 @@ note</span>
     </div>
 
 </td>
-            <td data-label="Source">
-  <div class="cw-chiprow">
+            <td data-label="Condition">
+  <div class="cw-condition">
+    <span class="cw-status t-ok" data-condition="ok"><span class="dot" aria-hidden="true"></span>60 days left</span>
 
-      <span class="cw-chip">
+      <div class="cw-condition-date ">
+        Expires 2026-11-21
+      </div>
 
-    <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2V6z"/><path d="M3 15a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2v-3z"/></svg>
-
-Scanned</span>
-
-
+  </div>
+</td>
+            <td data-label="Exceptions">
+  <div class="cw-fact-flags">
 
     <span class="cw-chip t-warn">
 
-    <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+    <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg>
 
-chain not verified</span>
+Chain not verified</span>
+    <span class="cw-chip t-ink">
 
+    <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
 
-  </div>
-</td>
-            <td data-label="Expires">
-  <div class="cw-expiry"><div class="tnum">2026-11-21</div>
+Renewal in progress</span>
+    <span class="cw-chip t-crit">
 
-    <div class="cw-sub ">in 2 months</div>
+    <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>
 
-    <div class="cw-expiry-track" title="60 days of a 90-day horizon"><svg class="cw-bar t-warn" role="img" aria-label="66%" preserveAspectRatio="none">
-  <rect class="track" width="100%" height="100%"/>
-  <rect class="fill" width="66%" height="100%"/>
-</svg></div>
+Can&#39;t be delivered</span>
 
   </div>
-</td>
-            <td data-label="Status">
-  <span class="cw-status t-warn">
-  <span class="dot" aria-hidden="true"></span>Warning
-</span>
-
-
-
-
-
-
-
-    <div class="cw-sub cw-muted">1/1 current scans</div>
-
 </td>
             <td data-label="Grade">
 
   <span class="cw-muted">—</span>
 </td>
             <td data-label="Action">
-              <div class="cw-rowact">
-                <a href="/certificates/{{CERT_4_ID}}" title="Details" class="cw-iconbtn sm">
-
-    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
-
-</a>
-              </div>
+              <span class="cw-sr">Use the certificate link for details</span>
             </td>
           </tr>
           <tr class="cw-subrow cw-hidden" id="group-hosts-1">
-            <td colspan="7">
+            <td colspan="6">
 
-              <div class="row">
-                <a href="/certificates/{{CERT_4_ID}}" class="cw-id">mail.demo.test:443</a>
-
-
-  <span class="cw-status t-warn">
-  <span class="dot" aria-hidden="true"></span>Warning
-</span>
+              <div class="row cw-browse-subrow">
+                <div class="cw-browse-subject"><a href="/certificates/{{CERT_4_ID}}" class="cw-id cw-link">mail.demo.test:443</a><div class="cw-chiprow cw-metarow">
 
 
 
+    <span class="cw-chip">
 
-    <div class="cw-sub cw-muted">Current scan</div>
+    <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-3-3.9"/><path d="M13 3.1a4 4 0 010 7.8"/><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+
+Messaging Team</span>
 
 
 
-                  <span class="cw-sub">scanned 2026-09-22 12:00</span>
-
-                <span class="cw-chip">Messaging Team</span>
-
-                  <span class="cw-chip t-muted cw-note-chip" title="Renew through the messaging runbook." data-host-id="{{HOST_1_ID}}">
+    <span class="cw-chip t-muted cw-note-chip" title="Renew through the messaging runbook." data-host-id="{{HOST_1_ID}}">
 
     <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z"/></svg>
 
 note</span>
 
-                <span class="cw-spacer"></span>
+</div></div>
+
+  <div class="cw-condition">
+    <span class="cw-status t-ok" data-condition="ok"><span class="dot" aria-hidden="true"></span>60 days left</span>
+
+      <div class="cw-condition-date ">
+        Expires 2026-11-21
+      </div>
+
+  </div>
+
+
+  <div class="cw-fact-flags">
+
+    <span class="cw-chip t-warn">
+
+    <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg>
+
+Chain not verified</span>
+    <span class="cw-chip t-ink">
+
+    <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+
+Renewal in progress</span>
+    <span class="cw-chip t-crit">
+
+    <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>
+
+Can&#39;t be delivered</span>
+
+  </div>
+
 
               </div>
 

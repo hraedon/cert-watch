@@ -21,53 +21,12 @@
   {% else %}<span class="cw-muted">—</span>{% endif %}
 {% endmacro %}
 
-{% macro chain_chip(e) %}
-  {% if e.chain_status == 'public' %}
-    <span class="cw-chip t-muted">{{ icons.svg_icon('link', 11, 1.7) }}public chain</span>
-  {% elif e.chain_status == 'private' %}
-    <span class="cw-chip t-ink">{{ icons.svg_icon('shield', 11, 1.7) }}private root</span>
-  {% elif e.chain_status == 'incomplete' %}
-    <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.7) }}chain incomplete</span>
-  {% elif e.chain_status == 'invalid' %}
-    <span class="cw-chip t-crit">{{ icons.svg_icon('alert', 11, 1.7) }}chain invalid</span>
-  {% elif e.chain_status in ('unknown', 'unverified') %}
-    <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.7) }}chain not verified</span>
-  {% elif e.chain_status == 'self-signed' %}
-    <span class="cw-chip t-muted">{{ icons.svg_icon('key', 11, 1.7) }}self-signed</span>
-  {% elif e.chain_valid == true %}
-    <span class="cw-chip t-muted">{{ icons.svg_icon('link', 11, 1.6) }}full chain</span>
-  {% elif e.chain_valid == false %}
-    <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.7) }}chain incomplete</span>
-  {% endif %}
-{% endmacro %}
-
-{% macro source_cell(e, grouped=false) %}
-  <div class="cw-chiprow">
-    {% if grouped or e.source == 'scanned' %}
-      <span class="cw-chip">{{ icons.svg_icon('server', 12, 1.6) }}{{ 'Monitored' if e.kind == 'pending' else 'Scanned' }}</span>
-    {% elif e.source == 'uploaded' %}
-      <span class="cw-chip">{{ icons.svg_icon('file', 12, 1.6) }}Uploaded</span>
-    {% else %}
-      <span class="cw-chip">{{ icons.svg_icon('globe', 12, 1.6) }}Public CT</span>
-    {% endif %}
-    {% if e.kind != 'pending' %}{{ chain_chip(e) }}{% endif %}
-  </div>
-{% endmacro %}
-
-{% macro expires_cell(e, urg) %}
-  <div class="cw-expiry"><div class="tnum">{{ e.not_after[:10] if e.not_after else '—' }}</div>
-  {% if e.days_remaining is not none %}
-    <div class="cw-sub {{ ui.tone_for(urg) if urg in ('expired', 'critical') else '' }}">{{ e.days_remaining | relative_short }}</div>
-    {# Expiry-horizon arithmetic lives in the Browse presenter. #}
-    <div class="cw-expiry-track" title="{{ e.expiry_horizon_title }}">{{ ui.bar(e.expiry_bar_percent, ui.tone_for(urg)) }}</div>
-  {% endif %}
-  </div>
-{% endmacro %}
-
 {% macro meta_chips(e, show_owner=true) %}
-  {% if e.renewal_method and (e.kind == 'grouped' or e.source == 'scanned') %}
-    {# Renewal classification and fallback label live in the presenter. #}
-    <span class="cw-chip {% if e.renewal_is_manual %}t-warn{% endif %}">{% if e.renewal_is_manual %}{{ icons.svg_icon('user', 11, 1.6) }}{% else %}{{ icons.svg_icon('refresh', 11, 1.6) }}{% endif %}{{ e.renewal_label }}</span>
+  {% if e.source == 'uploaded' %}
+    <span class="cw-chip">{{ icons.svg_icon('file', 11, 1.6) }}Uploaded</span>
+  {% endif %}
+  {% if e.kind == 'grouped' and e.host_count > 1 %}
+    <span class="cw-chip t-ink">{{ e.host_count }} hosts</span>
   {% endif %}
   {% if show_owner and e.owner_name %}
     <span class="cw-chip">{{ icons.svg_icon('users', 11, 1.6) }}{{ e.owner_name }}</span>
@@ -79,27 +38,30 @@
   {% endif %}
 {% endmacro %}
 
+{% macro condition_cell(e) %}
+  <div class="cw-condition">
+    <span class="cw-status {{ e.condition_tone }}" data-condition="{{ e.condition or 'none' }}"><span class="dot" aria-hidden="true"></span>{{ e.condition_label }}</span>
+    {% if e.not_after %}
+      <div class="cw-condition-date {{ e.condition_tone if e.condition in ('expired', 'le7') else '' }}">
+        {% if e.condition_is_chain_limited %}Chain expires first · leaf {% else %}Expires {% endif %}{{ e.not_after[:10] }}
+      </div>
+    {% endif %}
+  </div>
+{% endmacro %}
+
+{% macro fact_flags(e) %}
+  <div class="cw-fact-flags">
+    {% if e.monitoring_label %}<span class="cw-chip t-warn"{% if e.monitoring_cause %} title="{{ e.monitoring_cause }}"{% endif %}>{{ icons.svg_icon('alert', 11, 1.7) }}{{ e.monitoring_label }}</span>{% endif %}
+    {% if e.chain_problem_label %}<span class="cw-chip t-warn">{{ icons.svg_icon('link', 11, 1.7) }}{{ e.chain_problem_label }}</span>{% endif %}
+    {% if e.renewal_flag_label %}<span class="cw-chip {{ 't-warn' if e.renewal == 'stalled' else 't-ink' }}">{{ icons.svg_icon('refresh', 11, 1.7) }}{{ e.renewal_flag_label }}</span>{% endif %}
+    {% if e.delivery_flag_label %}<span class="cw-chip {{ 't-crit' if e.delivery == 'failing' else 't-muted' }}">{{ icons.svg_icon('bell', 11, 1.7) }}{{ e.delivery_flag_label }}</span>{% endif %}
+    {% if not e.monitoring_label and not e.chain_problem_label and not e.renewal_flag_label and not e.delivery_flag_label %}<span class="cw-sr">No exceptions</span>{% endif %}
+  </div>
+{% endmacro %}
+
 {% macro grade_cell(e) %}
   {% set pg = e.posture_grade %}
   {% if pg %}{{ ui.grade(pg) }}{% else %}<span class="cw-muted">—</span>{% endif %}
-{% endmacro %}
-
-{% macro freshness_cell(e) %}
-  {% if e.kind == 'grouped' %}
-    {# Coverage counts are assembled by the Browse presenter. #}
-
-
-
-
-    <div class="cw-sub {{ e.freshness_tone }}">{{ e.freshness_label }}</div>
-  {% elif e.host_id and e.freshness_total %}
-    {% set scan = e %}
-    <div class="cw-sub {{ scan.freshness_tone }}">{{ scan.freshness_label }}</div>
-  {% endif %}
-{% endmacro %}
-
-{% macro overall_status(e) %}
-  {{ ui.status(label=e.overall_label, tone=e.overall_tone) }}
 {% endmacro %}
 
 {% block content %}
@@ -218,22 +180,26 @@
   <div class="cw-panel">
     <div class="cw-table-clip" tabindex="0" role="region" aria-label="Certificate inventory">
     {% if pivot_groups is not none %}
-    <table class="cw-table">
+    <table class="cw-table cw-pivot-table">
       <thead>
         <tr>
           <th>{{ pivot_view | capitalize }}{{ ' / Method' if pivot_view == 'renewal_method' else '' }}</th>
           <th class="num">Tracked</th>
-          <th>Worst status</th>
-          <th class="num">Earliest expiry</th>
+          <th>Condition</th>
+          <th>Exceptions</th>
         </tr>
       </thead>
       <tbody>
         {% for g in pivot_groups %}
-        <tr data-expand="pivot-detail-{{ loop.index }}" tabindex="0" role="button" aria-expanded="false" aria-controls="pivot-detail-{{ loop.index }}">
-          <td><span class="chev">{{ icons.svg_icon('chevron-down', 14) }}</span> <span class="cw-strong">{{ g.key }}</span></td>
-          <td class="num">{{ g.count }}</td>
-          <td>{{ ui.status(g.worst_urgency) }}</td>
-          <td class="num">{{ g.earliest_expiry_label }}</td>
+        <tr>
+          <td data-label="Group">
+            <button type="button" class="cw-expand-toggle" data-expand="pivot-detail-{{ loop.index }}" aria-expanded="false" aria-controls="pivot-detail-{{ loop.index }}">
+              <span class="chev">{{ icons.svg_icon('chevron-down', 14) }}</span><span class="cw-strong">{{ g.key }}</span>
+            </button>
+          </td>
+          <td class="num" data-label="Tracked">{{ g.count }}</td>
+          <td data-label="Condition"><span class="cw-status {{ g.condition_tone }}"><span class="dot" aria-hidden="true"></span>{{ g.condition_label }}</span></td>
+          <td data-label="Exceptions">{{ fact_flags(g) }}</td>
         </tr>
         <tr class="cw-subrow cw-hidden" id="pivot-detail-{{ loop.index }}" data-pivot="{{ pivot_view }}" data-group-key="{{ g.key }}">
           <td colspan="4">Click to load {{ g.count }} tracked {{ 'entries' if g.count != 1 else 'entry' }}…</td>
@@ -247,9 +213,8 @@
         <tr>
           <th>{{ sort_link('name', 'Certificate (CN)') }}</th>
           <th>Tags</th>
-          <th>Source</th>
-          <th>{{ sort_link('expiry', 'Expires') }}</th>
-          <th>Status</th>
+          <th>{{ sort_link('expiry', 'Condition') }}</th>
+          <th>Exceptions</th>
           <th>Grade</th>
           <th><span class="cw-sr">Actions</span></th>
         </tr>
@@ -257,45 +222,29 @@
       <tbody>
         {% for e in entries %}
           {% if e.kind == 'grouped' %}
-          {% set urg = e.urgency %}
-          <tr data-expand="group-hosts-{{ e.group_id }}" tabindex="0" role="button" aria-expanded="false" aria-controls="group-hosts-{{ e.group_id }}">
+          <tr data-testid="cert-row">
             <td data-label="Certificate">
               <div class="cw-chiprow">
-                <span class="chev">{{ icons.svg_icon('chevron-down', 14) }}</span>
-                <span class="cw-id">{{ e.name or '—' }}</span>
-                <span class="cw-chip t-ink">{{ e.host_count }} host{{ 's' if e.host_count != 1 else '' }}</span>
+                <button type="button" class="cw-expand-toggle icon-only" data-expand="group-hosts-{{ e.group_id }}" aria-expanded="false" aria-controls="group-hosts-{{ e.group_id }}" aria-label="Show endpoints for {{ e.name or 'certificate' }}"><span class="chev">{{ icons.svg_icon('chevron-down', 14) }}</span></button>
+                <a class="cw-id cw-link" href="/certificates/{{ e.id }}">{{ e.name or '—' }}</a>
               </div>
               <div class="cw-chiprow cw-metarow">{{ meta_chips(e) }}</div>
             </td>
             <td data-label="Tags">{{ tags_cell(e) }}</td>
-            <td data-label="Source">{{ source_cell(e, grouped=true) }}</td>
-            <td data-label="Expires">{{ expires_cell(e, urg) }}</td>
-            <td data-label="Status">{{ overall_status(e) }}{{ freshness_cell(e) }}</td>
+            <td data-label="Condition">{{ condition_cell(e) }}</td>
+            <td data-label="Exceptions">{{ fact_flags(e) }}</td>
             <td data-label="Grade">{{ grade_cell(e) }}</td>
             <td data-label="Action">
-              <div class="cw-rowact">
-                <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn sm">{{ icons.svg_icon('chevron-right', 14) }}</a>
-              </div>
+              <span class="cw-sr">Use the certificate link for details</span>
             </td>
           </tr>
           <tr class="cw-subrow cw-hidden" id="group-hosts-{{ e.group_id }}">
-            <td colspan="7">
+            <td colspan="6">
               {% for h in e.hosts %}
-              <div class="row">
-                <a href="/certificates/{{ h.id }}" class="cw-id">{{ h.host }}</a>
-                {% set h_urg = h.urgency %}
-                {{ overall_status(h) }}
-                {{ freshness_cell(h) }}
-                {% if h.scan_status == 'failure' %}
-                  <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.7) }}{{ h.scan_error or 'scan failed' }}</span>
-                {% elif h.last_scanned_at %}
-                  <span class="cw-sub">scanned {{ h.last_scanned_at[:16] | replace('T', ' ') }}</span>
-                {% endif %}
-                {% if h.owner_name %}<span class="cw-chip">{{ h.owner_name }}</span>{% endif %}
-                {% if h.host_id and h.notes %}
-                  <span class="cw-chip t-muted cw-note-chip" title="{{ h.notes }}" data-host-id="{{ h.host_id }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
-                {% endif %}
-                <span class="cw-spacer"></span>
+              <div class="row cw-browse-subrow">
+                <div class="cw-browse-subject"><a href="/certificates/{{ h.id }}" class="cw-id cw-link">{{ h.host }}</a><div class="cw-chiprow cw-metarow">{{ meta_chips(h) }}</div></div>
+                {{ condition_cell(h) }}
+                {{ fact_flags(h) }}
                 {% if may_write and h.host_id %}
                   <form method="post" action="/hosts/{{ h.host_id }}/scan" class="cw-inline">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
@@ -307,10 +256,9 @@
             </td>
           </tr>
           {% else %}
-          {% set urg = e.urgency %}
-          <tr class="cw-row-link" data-href="/certificates/{{ e.id }}" data-testid="cert-row" tabindex="0" role="link">
+          <tr class="cw-row-link" data-href="/certificates/{{ e.id }}" data-testid="cert-row">
             <td data-label="Certificate">
-              <div class="cw-chiprow"><span class="cw-id">{{ e.name or (e.host if e.host else '—') }}</span></div>
+              <div class="cw-chiprow"><a class="cw-id cw-link" href="/certificates/{{ e.id }}">{{ e.name or (e.host if e.host else '—') }}</a></div>
               <div class="cw-chiprow cw-metarow">{{ meta_chips(e) }}</div>
               {% if e.visible_sans %}
                 {# SAN validation and CN de-duplication live in the presenter. #}
@@ -325,9 +273,8 @@
               {% endif %}
             </td>
             <td data-label="Tags">{{ tags_cell(e) }}</td>
-            <td data-label="Source">{{ source_cell(e) }}</td>
-            <td data-label="Expires">{{ expires_cell(e, urg) }}</td>
-            <td data-label="Status">{{ overall_status(e) }}{{ freshness_cell(e) }}</td>
+            <td data-label="Condition">{{ condition_cell(e) }}</td>
+            <td data-label="Exceptions">{{ fact_flags(e) }}</td>
             <td data-label="Grade">{{ grade_cell(e) }}</td>
             <td data-label="Action">
               <div class="cw-rowact">
@@ -337,7 +284,6 @@
                     <button type="submit" title="Scan now" class="cw-iconbtn sm" data-testid="scan-now-btn">{{ icons.svg_icon('refresh', 14) }}</button>
                   </form>
                 {% endif %}
-                <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn sm">{{ icons.svg_icon('chevron-right', 14) }}</a>
               </div>
             </td>
           </tr>

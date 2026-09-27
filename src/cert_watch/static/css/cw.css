@@ -56,6 +56,12 @@
   --cw-pad-panel: 15px 18px;
   --cw-pad-page: 22px 26px;
   --cw-topbar-h: 58px;
+  --cw-critical-date: var(--crit);
+}
+:root[data-theme="dark"] {
+  /* Browse places critical dates on panel/inset surfaces. The vendored
+     terracotta clears body and panel, but not every nested row surface. */
+  --cw-critical-date: #d46f60; /* patina-allow: critical dates need 4.5:1 on nested dark rows */
 }
 :root[data-theme="light"] {
   --cw-backdrop: rgba(40, 32, 16, .35);
@@ -470,6 +476,26 @@ tr[data-expand] { cursor: pointer; }
 .cw-subrow .row:hover { background: var(--row-hover); }
 .cw-subrow .row > a.cw-id { text-decoration: none; }
 .cw-subrow .row .cw-spacer { flex: 1; }
+.cw-expand-toggle {
+  appearance: none; display: inline-flex; align-items: center; gap: 8px;
+  padding: 3px 0; border: 0; background: transparent; color: var(--text);
+  font: inherit; cursor: pointer; text-align: left;
+}
+.cw-expand-toggle.icon-only { padding: 3px; color: var(--text-2); }
+.cw-condition { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.cw-condition-date {
+  color: var(--text-2); font-size: var(--cw-fs-xs); font-variant-numeric: tabular-nums;
+}
+.cw-condition-date.t-crit, .cw-condition-date.t-expired { color: var(--cw-critical-date); }
+.cw-fact-flags { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; min-width: 0; }
+.cw-browse-subrow {
+  display: grid !important;
+  grid-template-columns: minmax(190px, 1.1fr) minmax(150px, .7fr) minmax(240px, 1.4fr) auto;
+  align-items: center;
+}
+.cw-browse-subject {
+  min-width: 0; display: flex; flex-direction: column; align-items: flex-start;
+}
 /* read-only note indicator chip (V2: editing lives on the detail page) */
 .cw-note-chip { cursor: help; }
 
@@ -495,6 +521,7 @@ details.cw-editor { display: block; }
 details.cw-editor > summary { list-style: none; cursor: pointer; display: inline-flex; }
 details.cw-editor > summary::-webkit-details-marker { display: none; }
 details.cw-editor > .cw-editor-body { margin-top: var(--space-3); display: flex; flex-direction: column; gap: var(--space-3); }
+details.cw-editor:not([open]) > .cw-editor-body { display: none; }
 details.cw-editor .when-open { display: none; }
 details.cw-editor[open] .when-closed { display: none; }
 details.cw-editor[open] .when-open { display: inline; }
@@ -754,12 +781,30 @@ details.cw-editor[open] .when-open { display: inline; }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td:not(:first-child):not(:last-child) { grid-column: 1 / -1; }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td::before { content: attr(data-label); margin-right: auto; font-size: var(--cw-fs-xs); font-weight: 600; color: var(--text-2); }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td:first-child::before { display: none; }
-  .cw-inventory-table tbody > tr:not(.cw-subrow) > td[data-label="Expires"] { grid-column: 1 / -1; }
+  .cw-inventory-table tbody > tr:not(.cw-subrow) > td[data-label="Condition"] { grid-column: 1 / -1; }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td:last-child { position: absolute; right: 14px; top: 12px; }
   .cw-inventory-table .cw-expiry { display: grid; grid-template-columns: auto auto; align-items: center; justify-items: end; gap: 3px 8px; }
   .cw-inventory-table .cw-expiry-track { grid-column: 1 / -1; width: 100%; min-width: 88px; }
   .cw-inventory-table .cw-rowact { opacity: 1; }
   .cw-inventory-table .cw-subrow > td { display: block; }
+  .cw-browse-subrow { grid-template-columns: minmax(0, 1fr); align-items: start; }
+  .cw-browse-subrow > form { justify-self: end; }
+  .cw-pivot-table, .cw-pivot-table tbody,
+  .cw-pivot-table tr, .cw-pivot-table td { display: block; width: 100%; }
+  .cw-pivot-table { min-width: 0; }
+  .cw-pivot-table thead { display: none; }
+  .cw-pivot-table tbody > tr:not(.cw-subrow) {
+    padding: 12px 14px; border-bottom: 1px solid var(--border);
+  }
+  .cw-pivot-table tbody > tr:not(.cw-subrow) > td {
+    display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 10px;
+    padding: 5px 0; border: 0; text-align: left;
+  }
+  .cw-pivot-table tbody > tr:not(.cw-subrow) > td::before {
+    content: attr(data-label); color: var(--text-2);
+    font-size: var(--cw-fs-xs); font-weight: 600;
+  }
+  .cw-pivot-table .cw-subrow > td { padding: 8px; }
 
   .cw-att-row { align-items: flex-start; flex-wrap: wrap; }
   .cw-att-sev { min-width: 0; }

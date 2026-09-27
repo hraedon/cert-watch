@@ -82,7 +82,8 @@
     // data-expand="<id>" — toggle a table expansion row (.cw-subrow).
     // The one row-expansion mechanism (tables can't host <details>).
     el = e.target.closest('[data-expand]');
-    if (el && !e.target.closest('a, button, form, input')) {
+    var interactive = e.target.closest('a, button, form, input');
+    if (el && (!interactive || interactive === el)) {
       var row = document.getElementById(el.getAttribute('data-expand'));
       if (row) {
         var hidden = row.classList.toggle('cw-hidden');

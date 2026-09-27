@@ -74,30 +74,31 @@ def _upload_cert(page: Page, base_url: str, pem: Path, cn: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Enter / Space activation on data-action rows
+# Native keyboard activation without an interactive table row
 # ---------------------------------------------------------------------------
 
 def test_enter_activates_cert_row(page: Page, cert_watch_server: str, pem_path: Path) -> None:
-    """Enter on a tabindex'd cert row (role=link) navigates to detail page."""
+    """Enter on the row's explicit certificate link navigates to detail."""
     _upload_cert(page, cert_watch_server, pem_path, "kb-test.example.com")
     page.goto(f"{cert_watch_server}/browse")
-    row = page.locator('[data-testid="cert-row"]').first
-    expect(row).to_be_visible()
-    row.focus()
-    row.press("Enter")
-    # data-action="open-link" navigates to /certificates/<id>
+    link = page.locator('[data-testid="cert-row"]').first.locator("a[href^='/certificates/']")
+    expect(link).to_be_visible()
+    link.focus()
+    link.press("Enter")
     page.wait_for_url("**/certificates/*", timeout=5000)
 
 
-def test_space_activates_cert_row(page: Page, cert_watch_server: str, pem_path_space: Path) -> None:
-    """Space on a tabindex'd cert row (role=link) navigates to detail page."""
+def test_cert_row_is_not_an_interactive_container(
+    page: Page, cert_watch_server: str, pem_path_space: Path,
+) -> None:
+    """The native link stays keyboard-accessible without nesting it in a link row."""
     _upload_cert(page, cert_watch_server, pem_path_space, "kb-space.example.com")
     page.goto(f"{cert_watch_server}/browse")
     row = page.locator('[data-testid="cert-row"]', has_text="kb-space.example.com")
     expect(row).to_be_visible()
-    row.focus()
-    row.press("Space")
-    page.wait_for_url("**/certificates/*", timeout=5000)
+    expect(row).not_to_have_attribute("role", "link")
+    expect(row).not_to_have_attribute("tabindex", "0")
+    expect(row.locator("a[href^='/certificates/']")).to_have_count(1)
 
 
 # ---------------------------------------------------------------------------

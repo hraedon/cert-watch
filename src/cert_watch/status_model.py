@@ -619,6 +619,11 @@ def attach_status_models(
         if not children:
             continue
         conditions = [child["condition"] for child in children if child.get("condition")]
+        condition_days = [
+            child["status"]["condition"]["effective_days"]
+            for child in children
+            if child["status"]["condition"].get("effective_days") is not None
+        ]
         condition_order = {"expired": 0, "le7": 1, "8to30": 2, "ok": 3}
         monitoring = "current"
         if any(child["monitoring"] == "failing" for child in children):
@@ -638,6 +643,10 @@ def attach_status_models(
             if conditions
             else None
         )
+        # A grouped row is a summary of canonical child facts. Preserve the
+        # worst effective certificate/chain lifetime so the presentation can
+        # state the condition in days without deriving a second status.
+        row["effective_days"] = min(condition_days) if condition_days else None
         row["monitoring"] = monitoring
         row["renewal"] = min(
             (child["renewal"] for child in children),
@@ -648,7 +657,10 @@ def attach_status_models(
             key=lambda value: delivery_order[value],
         )
         row["status"] = {
-            "condition": {"state": row["condition"], "effective_days": row.get("effective_days")},
+            "condition": {
+                "state": row["condition"],
+                "effective_days": row["effective_days"],
+            },
             "chain_trust_problem": any(
                 child["status"]["chain_trust_problem"] for child in children
             ),

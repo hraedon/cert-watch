@@ -279,3 +279,8 @@ def test_fleet_pivot_never_scanned_is_not_healthy(tmp_path, monkeypatch):
     groups = list_fleet_pivot(db, "issuer")
     assert groups[0]["worst_urgency"] == "gray"
     assert groups[0]["earliest_expiry"] >= 0
+    assert groups[0]["condition"] == "ok"
+    assert groups[0]["monitoring"] == "never_scanned"
+    assert groups[0]["renewal"] == "unknown"
+    assert groups[0]["delivery"] == "unrouted"
+    assert groups[0]["chain_trust_problem"] is False
