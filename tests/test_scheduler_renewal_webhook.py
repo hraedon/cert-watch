@@ -216,22 +216,24 @@ def test_check_renewal_overdue_retries_event_after_event_log_write_failure(
             "cert_watch.events._write_event_log",
             side_effect=sqlite3.OperationalError("database is locked"),
         ):
-            runtime._check_renewal_overdue(db, hosts)
-        assert runtime.wait_for_webhooks()
+            for _ in range(3):
+                runtime._check_renewal_overdue(db, hosts)
+                assert runtime.wait_for_webhooks()
 
         from cert_watch.database.connection import _connect
 
         with _connect(db) as conn:
             assert conn.execute("SELECT COUNT(*) FROM event_log").fetchone()[0] == 0
-            assert conn.execute("SELECT COUNT(*) FROM rule_firings").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM rule_firings").fetchone()[0] == 1
 
         runtime._check_renewal_overdue(db, hosts)
         assert runtime.wait_for_webhooks()
 
-    assert send.call_count == 2
+    assert send.call_count == 1
+    assert len({call.args[0]["event_id"] for call in send.call_args_list}) == 1
     with _connect(db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM event_log").fetchone()[0] == 1
-        assert conn.execute("SELECT COUNT(*) FROM rule_firings").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM rule_firings").fetchone()[0] == 2
 
 
 def test_check_renewal_overdue_no_signal_no_send(runtime, seeded_db):

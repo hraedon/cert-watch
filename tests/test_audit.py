@@ -96,7 +96,7 @@ def test_list_audit_filters(db: Path) -> None:
 def test_api_key_actor_filter_accepts_name_short_id_and_full_actor(db: Path) -> None:
     record_audit(
         db,
-        actor="api_key:1234abcd5678ef00",
+        actor="api_key:1234abcd5678ef001234abcd5678ef00",
         action="host.add",
         target_type="host",
         target_id="matching",
@@ -114,7 +114,8 @@ def test_api_key_actor_filter_accepts_name_short_id_and_full_actor(db: Path) -> 
     for actor_filter in (
         "deploy-key",
         "1234abcd",
-        "api_key:1234abcd5678ef00",
+        "1234abcd5678ef001234abcd5678ef00",
+        "api_key:1234abcd5678ef001234abcd5678ef00",
     ):
         rows = list_audit(db, actor=actor_filter)
         assert [row["target_id"] for row in rows] == ["matching"]

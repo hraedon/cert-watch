@@ -7,10 +7,11 @@ All notable changes to cert-watch are documented in this file.
 ### Security
 
 - Generic JSON webhook templates now JSON-escape certificate-derived values
-  and reject invalid or nested-JSON templates when they are saved. JSON mode
-  is detected from a neutral template rendering, preserving bracketed and
-  placeholder-only plain text; a leading BOM is ignored, substitutions are
-  single-pass, and form-style text values are percent-encoded. Slack, Discord
+  for one string level. JSON mode requires a `{`-leading template whose neutral
+  rendering is an object; bracketed, placeholder-only and form-looking
+  templates remain plain text. Leading BOMs and whitespace are ignored,
+  substitutions are single-pass, and invalid object-looking templates are
+  refused with a startup warning for existing configuration. Slack, Discord
   and Teams payloads neutralize untrusted mention and link markup.
 - API keys with an unknown or corrupt scope are now rejected as
   unauthenticated instead of silently receiving viewer access.
@@ -28,8 +29,9 @@ All notable changes to cert-watch are documented in this file.
   are refreshed at startup when the classifier changes (#128).
 - Renewal webhooks are sent even when `renewal_overdue` Event stream storage
   is disabled. Each emission now carries a unique `event_id` that remains
-  stable across its delivery retries. A failed Event stream database write no
-  longer takes the 24-hour claim, so the event is retried on the next sweep.
+  stable across its delivery retries. Webhook delivery and Event stream
+  storage use independent 24-hour claims, so a failed event write is retried
+  on later sweeps without sending the webhook again.
 - Non-cert-watch Bearer tokens on HTML pages now fall through to the normal
   session or login flow; only rejected `cwk_` credentials force a JSON 401.
 

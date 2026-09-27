@@ -860,22 +860,28 @@ def _check_renewal_overdue(
             try:
                 signal = detect_renewal_overdue(db_path, hostname, port=port)
                 if signal is not None:
-                    key = f"overdue:{signal.hostname}:{port}:{signal.cert_fingerprint}"
-                    legacy_key = f"overdue:{signal.hostname}:*:{signal.cert_fingerprint}"
+                    firing = (
+                        f"overdue:{signal.hostname}:{port}:"
+                        f"{signal.cert_fingerprint}"
+                    )
+                    legacy_firing = (
+                        f"overdue:{signal.hostname}:*:"
+                        f"{signal.cert_fingerprint}"
+                    )
+                    event_key = f"{firing}:event"
+                    webhook_key = f"{firing}:webhook"
                     current = now()
-                    if not store.rule_firing_due(
-                        key,
-                        now=current,
-                        interval_seconds=24 * 60 * 60,
-                        suppression_keys=(legacy_key,),
-                    ):
-                        continue
                     event_config = load_event_config(db_path)
                     event_enabled = (
                         "renewal_overdue" in event_config.enabled_event_types
                     )
-                    event_row_id = None
-                    if event_enabled:
+                    event_due = event_enabled and store.rule_firing_due(
+                        event_key,
+                        now=current,
+                        interval_seconds=24 * 60 * 60,
+                        suppression_keys=(firing, legacy_firing),
+                    )
+                    if event_due:
                         event_row_id = emit_event(
                             Event(
                                 event_type="renewal_overdue",
@@ -896,26 +902,31 @@ def _check_renewal_overdue(
                             db_path,
                             config=event_config,
                         )
-                    event_write_failed = event_enabled and event_row_id is None
-                    if not event_write_failed:
+                        if event_row_id is not None:
+                            store.claim_rule_firing(
+                                event_key,
+                                now=current,
+                                interval_seconds=24 * 60 * 60,
+                                suppression_keys=(firing, legacy_firing),
+                            )
+                    if send_webhook is not None:
                         claimed = store.claim_rule_firing(
-                            key,
+                            webhook_key,
                             now=current,
                             interval_seconds=24 * 60 * 60,
-                            suppression_keys=(legacy_key,),
+                            suppression_keys=(firing, legacy_firing),
                         )
                         if not claimed:
                             continue
-                    try:
-                        if send_webhook is not None:
+                        try:
                             send_webhook(
                                 signal, hostname, port, db_path, settings=settings,
                             )
-                    except Exception:
-                        logger.exception(
-                            "renewal webhook failed for %s:%s — continuing sweep",
-                            hostname, port,
-                        )
+                        except Exception:
+                            logger.exception(
+                                "renewal webhook failed for %s:%s — continuing sweep",
+                                hostname, port,
+                            )
             except Exception:
                 logger.exception(
                     "renewal overdue check failed for %s:%s — continuing sweep",

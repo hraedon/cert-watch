@@ -29,15 +29,23 @@ API-key audit actors now use the stable `api_key:<id>` format instead of the
 key's display name. The display name is retained as `api_key_name` in the
 audit event's `detail` object. Update SIEM rules or other audit consumers that
 match API-key events by actor name; human-user actor values are unchanged.
-The Activity actor filter accepts the stored value, the displayed eight-digit
-short id, or the API-key display name.
+The Activity actor filter accepts the stored value, a bare full id, the
+displayed eight-digit short id, or the API-key display name. Key rows are
+labelled as API keys even when a human and a key share the same name.
 
-Generic webhook templates that look like JSON are now validated when saved.
-String placeholders must be inside JSON strings; only
-`{{threshold_days}}` may be unquoted. Placeholders inside JSON encoded as a
-string are rejected because escaping applies to one JSON level only. Existing
-plain-text templates remain plain text, while form-style template values are
-now percent-encoded.
+Generic webhook templates use JSON mode only when, after leading BOMs and
+whitespace are removed, they start with `{` and parse as a JSON object after
+neutral placeholder substitution. JSON string values are escaped for one JSON
+level; JSON embedded inside a string is not escaped a second time. Text
+templates remain `text/plain`, have control characters removed from values,
+and are not escaped for structured formats such as form encoding.
+
+After this version, a generic webhook template that starts with `{` after
+leading BOMs and whitespace but is not valid JSON after neutral substitution
+is refused when saved and at send time. This is the only delivery behaviour
+change for existing templates; startup logs a warning naming the generic
+channel when an environment-provided or previously saved template would be
+refused.
 
 ### Migration 0044
 

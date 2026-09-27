@@ -324,6 +324,30 @@ def test_lifespan_respects_sched_env(tmp_path, monkeypatch, reload_app):
         assert app_mod.app.state.scheduler.context.schedule_time() == (3, 15)
 
 
+def test_lifespan_warns_about_invalid_generic_webhook_template(
+    tmp_path, caplog, monkeypatch, reload_app,
+):
+    template = '{"text":"{{message}}"'
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
+    monkeypatch.setenv("ALERT_WEBHOOK_KIND", "generic")
+    monkeypatch.setenv("ALERT_WEBHOOK_TEMPLATE", template)
+    webhook_url = "https://hooks.example.test/secret-marker"
+    monkeypatch.setenv("ALERT_WEBHOOK_URL", webhook_url)
+    app_mod = reload_app()
+
+    with (
+        caplog.at_level("WARNING", logger="cert_watch.app"),
+        TestClient(app_mod.app) as client,
+    ):
+        assert client.get("/healthz").status_code == 200
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("Generic webhook channel" in message for message in messages)
+    assert all(template not in message for message in messages)
+    assert all(webhook_url not in message for message in messages)
+
+
 def test_common_ports_checkbox_scans_multiple(tmp_path, monkeypatch, reload_app, self_signed_leaf):
     """FEAT-008: common_ports flag should scan multiple TLS ports."""
     app_mod = reload_app()

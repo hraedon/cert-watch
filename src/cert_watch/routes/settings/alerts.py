@@ -23,8 +23,9 @@ async def save_alert_config(
 ) -> RedirectResponse:
     form = await request.form()
     template = str(form.get("webhook_template") or "")
+    kind = str(form.get("webhook_kind") or "generic")
     try:
-        if template:
+        if kind == "generic" and template:
             validate_generic_webhook_template(template)
     except InvalidWebhookTemplateError as exc:
         return RedirectResponse(

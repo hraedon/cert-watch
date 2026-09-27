@@ -13,8 +13,8 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from math import isfinite
 from typing import TYPE_CHECKING, Any, Protocol
-from urllib.parse import quote_plus
 
 if TYPE_CHECKING:
     from cert_watch.alerting.model import OutboundMessage, WebhookConfig
@@ -110,7 +110,7 @@ def _escape_slack_text(value: str) -> str:
 
 
 _DISCORD_MARKDOWN = re.compile(r"([\\[\]()*_~`>|])")
-_TEAMS_MARKDOWN = re.compile(r"([\\[\]()*_])")
+_TEAMS_MARKDOWN = re.compile(r"([\\[\]*])")
 
 
 def _escape_discord_text(value: str) -> str:
@@ -120,10 +120,14 @@ def _escape_discord_text(value: str) -> str:
 def _escape_teams_text(value: str) -> str:
     # Teams documents only bold, italic, lists, and links for Adaptive Card
     # TextBlock Markdown. Mentions additionally require an msteams.entities
-    # entry, which this adapter never supplies. Break an angle-bracket token
-    # invisibly and escape only the supported inline Markdown delimiters so
-    # ordinary hostnames (including '-' and '.') render verbatim.
-    escaped = value.replace("<", "<\u200b")
+    # entry, which this adapter never supplies. Break angle-bracket and entity
+    # tokens invisibly, and escape only link/emphasis delimiters. Punctuation
+    # used in hostnames and subjects remains visible verbatim.
+    escaped = (
+        value.replace("&", "&\u200b")
+        .replace("<", "<\u200b")
+        .replace(">", "\u200b>")
+    )
     return _TEAMS_MARKDOWN.sub(r"\\\1", escaped)
 
 
@@ -133,13 +137,19 @@ _TEMPLATE_VALUES = frozenset(
 _TEMPLATE_PLACEHOLDER = re.compile(
     r"{{(" + "|".join(sorted(_TEMPLATE_VALUES)) + r")}}"
 )
-_FORM_PLACEHOLDER = re.compile(
-    r"(?:^|&)[^&=\s]+={{(?:"
-    + "|".join(sorted(_TEMPLATE_VALUES))
-    + r")}}(?:&|$)"
-)
 _JSON_SAMPLE_MARKER = "cert_watch_template_sample"
 _INVALID_JSON = object()
+
+
+def _strip_template_prefix(template: str) -> str:
+    """Remove every leading BOM and whitespace character."""
+    position = 0
+    while position < len(template):
+        character = template[position]
+        if character != "\ufeff" and not character.isspace():
+            break
+        position += 1
+    return template[position:]
 
 
 def _placeholder_is_in_string(template: str, position: int) -> bool:
@@ -157,17 +167,13 @@ def _placeholder_is_in_string(template: str, position: int) -> bool:
 
 
 def _template_probe(template: str) -> tuple[str, Any]:
-    """Strip a BOM and parse a neutral, non-secret rendering when possible."""
-    template = template.removeprefix("\ufeff")
+    """Strip the prefix and parse a neutral, non-secret rendering."""
+    template = _strip_template_prefix(template)
 
     def neutral(match: re.Match[str]) -> str:
         if _placeholder_is_in_string(template, match.start()):
             return f"{_JSON_SAMPLE_MARKER}_{match.group(1)}"
-        if match.group(1) == "threshold_days":
-            return "0"
-        # String-valued placeholders must be quoted in JSON. Keeping this an
-        # invalid JSON token makes a placeholder-only template remain text.
-        return "cert_watch_unquoted_string"
+        return "0"
 
     rendered = _TEMPLATE_PLACEHOLDER.sub(neutral, template)
     try:
@@ -176,55 +182,21 @@ def _template_probe(template: str) -> tuple[str, Any]:
         return template, _INVALID_JSON
 
 
-def _looks_like_json(template: str) -> bool:
-    candidate = template.lstrip()
-    if candidate.startswith("{"):
-        rest = candidate[1:].lstrip()
-        return rest.startswith(('"', "}"))
-    if candidate.startswith("["):
-        rest = candidate[1:].lstrip()
-        return not rest or rest[0] in '\"{[-0123456789tfn]'
-    return False
-
-
-def _contains_nested_json_placeholder(value: Any) -> bool:
-    if isinstance(value, dict):
-        return any(
-            _contains_nested_json_placeholder(key)
-            or _contains_nested_json_placeholder(item)
-            for key, item in value.items()
-        )
-    if isinstance(value, list):
-        return any(_contains_nested_json_placeholder(item) for item in value)
-    if not isinstance(value, str) or _JSON_SAMPLE_MARKER not in value:
-        return False
-    try:
-        json.loads(value)
-    except (json.JSONDecodeError, TypeError):
-        return False
-    return True
-
-
 def validate_generic_webhook_template(template: str) -> bool:
     """Validate *template* and return whether it is a JSON template.
 
-    Text templates are deliberately accepted. A template is JSON when a
-    neutral rendering parses as JSON; JSON-looking malformed templates are
-    rejected so an operator sees the error while saving Settings.
+    Text templates are deliberately accepted. A template is JSON only when it
+    starts with ``{`` and a neutral rendering parses as a JSON object.
+    Malformed object-looking templates are rejected so an operator sees the
+    error while saving Settings.
     """
     template, parsed = _template_probe(template)
-    if parsed is _INVALID_JSON:
-        if _looks_like_json(template):
-            raise InvalidWebhookTemplateError(
-                "Webhook template looks like JSON but is invalid. Put text "
-                "placeholders inside JSON strings; only {{threshold_days}} "
-                "may be unquoted."
-            )
+    if not template.startswith("{") or template.startswith("{{"):
         return False
-    if _contains_nested_json_placeholder(parsed):
+    if parsed is _INVALID_JSON or not isinstance(parsed, dict):
         raise InvalidWebhookTemplateError(
-            "Webhook placeholders cannot be inside a JSON document encoded "
-            "as a JSON string."
+            "Webhook template starts with '{' but is not a valid JSON object "
+            "after placeholder substitution."
         )
     return True
 
@@ -233,9 +205,8 @@ class GenericAdapter:
 
     def build(self, msg: OutboundMessage, config: WebhookConfig) -> AlertRequest:
         if config.template:
-            template = config.template.removeprefix("\ufeff")
+            template = _strip_template_prefix(config.template)
             is_json = validate_generic_webhook_template(template)
-            is_form = not is_json and bool(_FORM_PLACEHOLDER.search(template))
             values = {
                 "alert_type": msg.severity,
                 "cert_id": msg.cert_id,
@@ -250,9 +221,20 @@ class GenericAdapter:
                 if is_json:
                     if _placeholder_is_in_string(template, match.start()):
                         return json.dumps(str(raw_value))[1:-1]
-                    return json.dumps(raw_value)
+                    if raw_value is None:
+                        return "null"
+                    if (
+                        isinstance(raw_value, (int, float))
+                        and not isinstance(raw_value, bool)
+                        and isfinite(raw_value)
+                    ):
+                        return json.dumps(raw_value)
+                    raise InvalidWebhookTemplateError(
+                        f"generic webhook JSON placeholder {{{{{key}}}}} is bare, "
+                        "but its value is not a JSON number or null"
+                    )
                 value = _strip_control_characters(str(raw_value))
-                return quote_plus(value) if is_form else value
+                return value
 
             # One pass over the original template: placeholder-looking text in
             # a substituted certificate value remains literal.

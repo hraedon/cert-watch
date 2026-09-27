@@ -44,20 +44,25 @@ rather than the application:
 ## Generic alert webhook templates
 
 Generic webhook templates support `{{alert_type}}`, `{{cert_id}}`,
-`{{message}}`, `{{threshold_days}}`, and `{{status}}`. A leading Unicode BOM is
-ignored. cert-watch treats a template as JSON only when a neutral substitution
-parses as JSON, so plain text such as `[cert-watch] {{message}}` and
-`{{message}}` remains `text/plain`. In JSON templates, put string-valued
-placeholders inside JSON string literals. `{{threshold_days}}` may also be
-unquoted, where it renders as a JSON number or `null`.
+`{{message}}`, `{{threshold_days}}`, and `{{status}}`. Leading Unicode BOMs and
+whitespace are ignored. A template uses JSON mode only when the remaining text
+starts with `{` and a neutral substitution parses as a JSON object. Everything
+else, including bracketed, placeholder-only, and form-looking templates, uses
+`text/plain`. In JSON templates, put string-valued placeholders inside JSON
+string literals. A bare placeholder is delivered only when its value is a JSON
+number or `null`; otherwise that delivery is refused.
 
 Placeholder values are escaped for exactly one JSON string level. A
-placeholder inside a string that itself contains an encoded JSON document is
-rejected in Settings; build nested payloads as real JSON objects instead.
-Malformed JSON-looking templates are also rejected when saved. Plain-text
-templates strip control characters but otherwise preserve values. If a text
-template contains form fields such as `message={{message}}&status={{status}}`,
-placeholder values are percent-encoded before delivery.
+placeholder inside a string that itself contains an encoded JSON document gets
+no second level of escaping, so templates must not embed JSON inside a string;
+build nested payloads as real JSON objects instead. A generic template that
+starts with `{` but fails the neutral parse is rejected when saved and refused
+at delivery. Plain-text template values have control characters removed but
+are not escaped for form encoding or any other structured format. Use a JSON
+template when the receiver needs structure.
+
+Generic webhooks do not apply Slack, Discord, or Teams markup escaping. Use the
+dedicated channel kind when sending to one of those chat systems.
 
 ## Reference
 

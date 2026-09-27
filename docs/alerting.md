@@ -98,6 +98,9 @@ templated), `slack`, `teams`, `discord`, `pagerduty` and `alertmanager`. All
 webhook traffic goes through the same address allowlist as scanning, checked
 at every redirect.
 
+Generic webhooks do not apply Slack, Discord, or Teams markup escaping. Use the
+dedicated channel kind for chat destinations.
+
 Each alert moves through a small set of states, shown in **Activity → Alerts**:
 
 | State | Meaning |

@@ -215,14 +215,17 @@ def count_audit(
 def _actor_filter_condition(actor: str) -> tuple[str, list[str]]:
     """Match a stored actor, API-key display name, or displayed short id."""
     short_id = actor.removeprefix("api_key:")
-    short_match = len(short_id) == 8 and all(
+    hex_id = len(short_id) in (8, 32) and all(
         character in "0123456789abcdefABCDEF" for character in short_id
     )
     conditions = ["actor = ?"]
     params = [actor]
-    if short_match:
+    if hex_id and len(short_id) == 8:
         conditions.append("actor LIKE ?")
         params.append(f"api_key:{short_id}%")
+    elif hex_id:
+        conditions.append("actor = ?")
+        params.append(f"api_key:{short_id}")
     conditions.append(
         "(actor LIKE 'api_key:%' AND json_valid(detail) "
         "AND json_extract(detail, '$.api_key_name') = ?)"
