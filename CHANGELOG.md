@@ -107,6 +107,15 @@ are hidden from read-only callers; read [UPGRADING.md](UPGRADING.md) first.
   not critical; monospace is limited to hostnames, serials and fingerprints
   (#126 S2).
 
+### Security
+
+- Every route that writes host ownership, alert-recipient, or renewal fields
+  now authorizes against the host's own tags, including routes addressed by a
+  certificate ID. This prevents a certificate-only scoped operator from
+  redirecting another team's alerts. Complete host edits also use the shared
+  server-side ownership normalizer and size limits used by legacy editing,
+  Add, JSON, and CSV import.
+
 ### Fixed
 
 - An endpoint with a failed, overdue or never-successful scan is no longer

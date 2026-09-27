@@ -242,6 +242,7 @@ def _answers(client, cert_id: str) -> list[tuple[int, str]]:
     out = []
     for r in (
         client.put(f"/api/certificates/{cert_id}/tags", json={"tags": "x"}),
+        client.patch(f"/api/hosts/{cert_id}/owner", json={"owner_name": "x"}),
         client.delete(f"/api/certificates/{cert_id}"),
         client.post(f"/certificates/{cert_id}/tags", data={"tags": "x"}, follow_redirects=False),
         client.post(f"/certificates/{cert_id}/delete", follow_redirects=False),
@@ -543,6 +544,7 @@ def test_two_renewals_ago_is_refused_with_the_current_certificate(
         )
         _assert_sent_to_current(client.post(f"/certificates/{a}/delete", follow_redirects=False), c)
         _assert_conflict(client.put(f"/api/certificates/{a}/tags", json={"tags": "x"}), a, c)
+        _assert_conflict(client.patch(f"/api/hosts/{a}/owner", json={"owner_name": "x"}), a, c)
         _assert_conflict(client.delete(f"/api/certificates/{a}"), a, c)
         _assert_conflict(client.post(f"/api/alert-groups/{group_id}/certs/{a}"), a, c)
         _assert_conflict(client.delete(f"/api/alert-groups/{group_id}/certs/{a}"), a, c)

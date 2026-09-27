@@ -76,11 +76,8 @@ class HostOwnershipTarget:
     resource_id: str = ""
 
     def scope_target(self) -> dict[str, str]:
-        """What tag scope is judged against: the host, or -- when the route
-        named a certificate -- that certificate's effective (cert ∪ host) tags."""
-        if self.source == "host" or not self.resource_id:
-            return {"host_id": self.host_id}
-        return {"cert_id": self.resource_id}
+        """Judge host-owned fields only against the resolved host's tags."""
+        return {"host_id": self.host_id}
 
 
 class HostOwnershipValidationError(ValueError):
@@ -174,6 +171,7 @@ def validate_host_ownership(update: HostOwnershipUpdate) -> HostOwnershipUpdate:
     """Normalize and validate ownership fields with one strict contract."""
     return _validate(update)
 
+
 def _unknown_answer(auth: Any, db_path: str | Path) -> Callable[[], Exception]:
     """What an id that names no host or certificate gets from this caller:
     the scope refusal for a scoped caller (authorization comes before the
@@ -234,16 +232,17 @@ def update_host_ownership(
 ) -> HostOwnership:
     """Authorize, validate, persist, and audit one host ownership update atomically.
 
-    *target* is a host id, or a resolved :class:`HostOwnershipTarget` (whose
-    scope may be judged through the certificate the route named). *update*
-    may be a callable -- e.g. a JSON body parser raising
+    *target* is a host or certificate id, or a resolved
+    :class:`HostOwnershipTarget`. Every addressing form is resolved here and
+    authorized against the host because every field this service writes is
+    stored on that host. *update* may be a callable -- e.g. a JSON body parser raising
     :class:`HostOwnershipValidationError` -- run after the scope check.
     *auth* is the required acting AuthContext; internal callers use the
     explicit system principal when unrestricted access is intended.
     """
     require_auth_context(auth)
     if isinstance(target, str):
-        target = HostOwnershipTarget(host_id=target, source="host", resource_id=target)
+        target = resolve_host_ownership_target(db_path, target, auth=auth)
     host_id = target.host_id
     named_cert = target.resource_id if target.source == "certificate" else ""
     with get_write_lock():

@@ -207,6 +207,9 @@ def test_combined_certificate_edit_rechecks_host_scope_after_two_process_race(
 @pytest.mark.parametrize("addressed_by", ["certificate", "host"])
 def test_ownership(tmp_path, monkeypatch, addressed_by):
     db, host_id, cert_id = _estate(tmp_path)
+    # The certificate remains visible to team-a after the host moves.  That
+    # must not let its own tag authorize a write to the now-team-b host.
+    SqliteCertificateRepository(db).set_tags(cert_id, "team-a")
     moved: list = []
     _move_after_check(monkeypatch, "cert_watch.services.host_ownership", db, host_id, moved)
     route = (

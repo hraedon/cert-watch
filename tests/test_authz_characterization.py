@@ -206,12 +206,21 @@ _PARAM_TARGETS = {
     "user_id": ("user",),
 }
 
+_CERTIFICATE_ADDRESSED_OWNER_PATHS = {
+    "/certificates/{cert_id}/owner",
+    "/hosts/{host_id}/owner",
+    "/api/hosts/{host_id}/owner",
+}
+
 
 def _expansions(path: str) -> list[dict[str, str]]:
     names = re.findall(r"{(\w+)}", path)
     combos: list[dict[str, str]] = [{}]
     for name in names:
-        combos = [{**c, name: t} for c in combos for t in _PARAM_TARGETS[name]]
+        targets = _PARAM_TARGETS[name]
+        if path in _CERTIFICATE_ADDRESSED_OWNER_PATHS:
+            targets = (*targets, "cert_split")
+        combos = [{**c, name: t} for c in combos for t in targets]
     return combos
 
 
