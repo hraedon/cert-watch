@@ -67,4 +67,9 @@ def init_schema(db_path: str | Path) -> None:
         from cert_watch.migrations.runner import run_pending_migrations
 
         run_pending_migrations(path, backup=True)
+        # A code-only classifier version bump must not serve rows derived by the
+        # prior logic.  This is startup work, never request-wide lazy work.
+        from cert_watch.renewal_analytics import refresh_stale_classifier_rows
+
+        refresh_stale_classifier_rows(path)
         _initialized[path_str] = _stat_tuple(path)

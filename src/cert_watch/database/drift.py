@@ -329,9 +329,9 @@ def record_cert_history(
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 params,
             )
-            from cert_watch.renewal_analytics import refresh_endpoint_analytics
+            from cert_watch.renewal_analytics import refresh_endpoint_analytics_if_needed
 
-            refresh_endpoint_analytics(conn, hostname, port)
+            refresh_endpoint_analytics_if_needed(conn, hostname, port)
             conn.commit()
     else:
         conn.execute(
@@ -342,9 +342,9 @@ def record_cert_history(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             params,
         )
-        from cert_watch.renewal_analytics import refresh_endpoint_analytics
+        from cert_watch.renewal_analytics import refresh_endpoint_analytics_if_needed
 
-        refresh_endpoint_analytics(conn, hostname, port)
+        refresh_endpoint_analytics_if_needed(conn, hostname, port)
     return row_id
 
 

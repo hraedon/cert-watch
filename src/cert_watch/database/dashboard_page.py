@@ -178,8 +178,13 @@ def inventory_candidates_sql(
         if need_monitoring
         else ""
     )
+    if need_renewal:
+        from cert_watch.renewal_analytics import CLASSIFIER_VERSION
+
     renewal_join = (
-        " LEFT JOIN endpoint_renewal_analytics ra ON ra.hostname = h.hostname AND ra.port = h.port"
+        " LEFT JOIN endpoint_renewal_analytics ra ON ra.hostname = h.hostname"
+        " AND ra.port = h.port"
+        f" AND ra.classifier_version = {CLASSIFIER_VERSION}"
         if need_renewal
         else ""
     )

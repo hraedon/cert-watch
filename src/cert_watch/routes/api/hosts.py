@@ -35,6 +35,7 @@ from cert_watch.routes.api._shared import (
     status_for_api,
     tags_from_json_body,
 )
+from cert_watch.scan_resolver import resolve_and_validate_host
 from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit, rate_limit
 from cert_watch.services.certificate_identity import (
     CertificateNotFoundError,
@@ -181,6 +182,7 @@ async def api_create_host(request: Request, _auth: str = Depends(json_write_guar
             auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
+            _resolve_fn=resolve_and_validate_host,
         )
     except (HostValidationError, ScopeDeniedError) as exc:
         return _service_error(exc)
@@ -219,6 +221,7 @@ async def api_import_hosts(
             auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
+            _resolve_fn=resolve_and_validate_host,
         )
     except HostValidationError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})

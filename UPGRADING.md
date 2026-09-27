@@ -23,6 +23,22 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
+## Upgrading from 1.1.0
+
+### Migration 0044
+
+Migration **0044** adds a classifier version to each persisted endpoint
+renewal result and backfills the rows using the current classifier. On later
+upgrades, startup refreshes only rows written by an older classifier version;
+reads ignore a mismatched row, so they never serve an old classification.
+
+The migration also replaces the certificate-history insert trigger. A
+chronologically appended observation of the current fingerprint preserves the
+cached classification when it cannot add classifier evidence. New fingerprint
+periods, out-of-order observations, a later observation that supplies missing
+certificate validity, retention pruning, and every history update or delete
+still invalidate or recompute the affected endpoint.
+
 ## Upgrading from 1.0.4 to 1.1.0
 
 1.1.0 describes every endpoint with four separate facts -- certificate
