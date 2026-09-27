@@ -23,17 +23,200 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
-## Upgrading from 1.0.4
+## Upgrading from 1.0.4 to 1.1.0
+
+1.1.0 describes every endpoint with four separate facts -- certificate
+condition (expiry only), monitoring (is the scan current), renewal, and alert
+delivery -- and rebuilds Home, Browse, certificate detail and Posture around
+them. One schema migration is applied on startup; nothing needs
+reconfiguring. Several API responses and exports change shape, and recipient
+details are now hidden from read-only callers, so check any scripts against
+the list below before upgrading.
+
+### Migration 0043
 
 Migration **0043** adds a small per-endpoint renewal-analytics table and
 backfills it from retained certificate history using the same Python
 classifier used by the renewal API, readiness report, digest and webhook.
 Startup time grows with retained history while this one-time backfill runs.
-Afterward, successful scans and history retention update the result in the
-same transaction as the history change. If history is changed outside
-cert-watch, a database trigger invalidates the affected result and Browse
-shows its renewal evidence as *Unknown* until cert-watch refreshes that
-endpoint; it never uses stale evidence.
+Afterward, successful scans, history retention and certificate deletion
+update the result in the same transaction as the history change. If history
+is changed outside cert-watch, a database trigger invalidates the affected
+result and Browse shows its renewal evidence as *Unknown* until that
+endpoint's next successful scan refreshes it; it never uses stale evidence.
+
+### Recipient details are visible only to writers
+
+Recipient identities -- alert-group names and recipient addresses (group
+members, the host owner, global and role-member recipients) -- and a host's
+`owner_email` and `owner_slack` are now shown only to administrators and to
+callers with write access to that certificate: a global write tier, a per-tag
+write tier on one of its effective tags, or a `write` or `admin` API key.
+Everyone else who can see the certificate still gets the delivery state,
+channel types and anonymous counts, and `owner_name` stays visible. With
+authentication disabled nothing is hidden.
+
+For a caller without write access to the certificate:
+
+- The detail page shows *Configured · hidden for read-only access* in place
+  of the owner's email address, and the recipient table shows counts
+  (*2 recipients*, *1 matched alert group*) instead of addresses and group
+  names.
+- `GET /api/certificates`, `GET /api/hosts`,
+  `GET /api/export/certificates.json`, `GET /api/export/hosts.csv` and pivot
+  group rows (`GET /api/pivot/...`) return `owner_email` and `owner_slack` as
+  empty strings. The fields are still present.
+- Every `status.delivery` block (see below) holds only `state`,
+  `recipient_count`, `matching_group_count` and, per channel, `channel` and
+  `route_count`.
+- `GET /api/certificates/{id}/alert-routing` **omits** `matched_groups` and
+  `recipients` altogether, returning only `cert_id`, `effective_tags` and the
+  reduced `delivery` block.
+
+**A script that uses a `read` API key and reads owner contacts or alert
+recipients will get empty or missing values after the upgrade.** Give it a
+`write` key if it needs them.
+
+### API and export changes
+
+- **`urgency` now reports the endpoint, not only its certificate.** In
+  `GET /api/certificates`, `GET /api/export/certificates.json` and pivot
+  group rows, an endpoint whose scans are failing or overdue now has
+  `urgency: "failing"` (a new value; the pivot `urgency_label` is *Scan
+  failing*) instead of its certificate's expiry state, and one that has never
+  been scanned has `"gray"`. The same value is repeated in a new
+  `overall_state` field; `leaf_urgency` is unchanged. The `urgency` of each
+  entry in `GET /api/reports/compliance.json` follows the same rule.
+- **CSV column renamed.** The `urgency` column of
+  `/api/export/certificates.csv`, `/api/reports/inventory.csv` and
+  `/api/reports/expiring.csv` is now `overall_status`, with the same values
+  as `overall_state`. `certificates.csv` and `inventory.csv` also gain
+  `condition`, `monitoring`, `renewal` and `delivery` columns at the end of
+  each row, and the `port` column of `inventory.csv` and `expiring.csv`,
+  which was always empty, is now filled in. The compliance CSV
+  (`/api/reports/compliance.csv`) replaces its *Urgency* column with
+  *Condition*, *Monitoring*, *Renewal* and *Delivery*. Compliance reports
+  signed by 1.0.4 or earlier still verify.
+- **New fields.** Certificate list and export rows gain the four facts
+  (`condition`, `monitoring`, `renewal`, `delivery`), their evidence
+  (`monitoring_*`, `renewal_source`, `renewal_analytics`, `has_successor`),
+  `hostname`, `port`, `scan_interval_hours`, and a nested `status` object
+  with `condition`, `monitoring` (including a plain-language `cause` and the
+  `raw_error`), `renewal`, `delivery`, `chain_status` and
+  `chain_trust_problem`. `GET /api/certificates/{id}` gains the same `status`
+  object (`null` when the certificate is not an inventory row, for example a
+  chain certificate). Each `GET /api/hosts` entry gains `renewal_method` and
+  `status`. `GET /api/certificates/{id}/alert-routing` gains `delivery`.
+- **New filters.** `GET /api/certificates`, `GET /api/hosts` and Browse
+  accept `condition=expired|le7|8to30|ok`,
+  `monitoring=current|failing|never_scanned`,
+  `renewal=automation_configured|manual|stalled|in_progress|unknown` and
+  `delivery=ok|failing|unrouted`, combinable with each other and with
+  pagination. On the two JSON APIs **an unknown or empty value returns
+  `400`** (`{"error": "invalid condition filter: ..."}`); Browse ignores it
+  and says so. Browse also accepts `routing_gap=1`, `chain_problem=1` (with
+  an optional `issuer`) and `expiry_week=YYYY-MM-DD`, which Home's links use.
+- **`GET /api/hosts` scope.** A tag-scoped caller now also sees a host whose
+  certificate carries one of their tags even when the host itself does not,
+  as Browse and `GET /api/certificates` already did. `/api/export/hosts.csv`
+  still matches on host tags only. Ordering (by date added) and the page-size
+  limit (200) are unchanged.
+- **Daily scan time in the policy API.** `GET /api/policy` and the
+  `PUT /api/policy` response include `sched_hour` and `sched_min`.
+  `PUT /api/policy` now accepts them (both together; hour 0-23, minute 0-59,
+  otherwise `400`) and applies them immediately. 1.0.4 ignored them.
+- **`/metrics`.** `cert_watch_certificates_by_urgency` counts the same
+  endpoint state as `overall_state`, so it has two new label values,
+  `failing` and `gray`, and an endpoint whose scans are failing moves out of
+  its certificate's expiry bucket into `failing`.
+- **Browser 404 page.** A browser request (`Accept: text/html`) for an
+  unknown page outside `/api/` now gets an HTML *Not found* page. API paths
+  and other clients still get `404 {"detail": "Not Found"}`.
+
+### Writes: new endpoints and stricter validation
+
+- **Edit host.** On an endpoint's detail page, the separate owner, renewal,
+  tags, cadence and threshold, and notes editors are replaced by one *Edit
+  host* form, saved in one transaction by `POST /hosts/{id}/edit`. (An
+  uploaded certificate with no host keeps a tags-only *Edit certificate*
+  form.) Its JSON peer is `PUT /api/hosts/{id}`, which requires exactly these
+  fields: `owner_name`, `owner_email`, `owner_slack`, `renewal_method`,
+  `runbook_url`, `scan_interval_hours`, `threshold_days`, `renewal_status`,
+  `notes` and `tags`. `{id}` may be a host id or a current certificate id;
+  addressed by certificate, `tags` sets the certificate's own tags (the
+  response says `"tags_apply_to": "certificate"`), otherwise the host's. The
+  host fields are authorized against the host and the tags against the
+  certificate, so a caller needs write access to both.
+- **The field-specific endpoints are still accepted:**
+  `POST /hosts/{id}/owner`, `/settings`, `/notes` and `/tags`;
+  `POST /certificates/{id}/owner` and `/tags`;
+  `PATCH /api/hosts/{id}/owner`, `/settings` and `/notes`;
+  `PUT /api/hosts/{id}/tags` and `PUT /api/certificates/{id}/tags`. Apart
+  from the tag and ownership rules below, the only difference is that
+  `POST /hosts/{id}/settings` now redirects to `#edit-host` instead of
+  `#endpoint-settings`.
+- **Tag writes need write access to every tag.** For a tag-scoped user,
+  every tag submitted -- when editing host or certificate tags, adding or
+  importing hosts, or uploading a certificate -- must be one their role can
+  write; a tag they can only read is refused (`403` from the JSON APIs:
+  *your access to tag '...' is read-only*). The scope tags merged in
+  automatically when such a user adds or imports hosts or uploads a
+  certificate are now only the ones they can write. A scoped user also
+  cannot remove the last tag through which they can write a host or
+  certificate (*at least one tag in your writable team scope must remain on
+  the resource*); for a certificate, the host's tags count toward this.
+  Administrators, unscoped users and API keys are unaffected.
+- **Ownership on Add, JSON create and CSV import.** `POST /hosts` (the Add
+  drawer offers owner name, owner email and renewal method),
+  `POST /api/hosts` (which rejected these fields in 1.0.4) and CSV import
+  accept `owner_name`, `owner_email`, `owner_slack`, `renewal_method` and
+  `runbook_url`, validated like the ownership editor. They apply only to a
+  newly added endpoint; an endpoint that was already monitored keeps its
+  ownership, and Add and `POST /api/hosts` say so (the JSON response gains a
+  `notice`). Because CSV import now reads these columns, re-importing an
+  exported `hosts.csv` sets ownership on the endpoints it adds, and a row
+  with an invalid owner email or renewal method is reported as an error
+  instead of being imported without them.
+- **Ownership field limits.** Add, `POST /api/hosts`, CSV import and the
+  field-specific ownership endpoints (`POST /hosts/{id}/owner`,
+  `POST /certificates/{id}/owner`, `PATCH /api/hosts/{id}/owner`) trim
+  surrounding whitespace and refuse values longer than 200 characters
+  (`owner_name`), 254 (`owner_email`), 100 (`owner_slack`) or 2048
+  (`runbook_url`); 1.0.4 stored them as sent. Values already stored are not
+  changed by the upgrade.
+- **Daily scan time moved to Policy.** The daily scan time now lives on
+  Settings → Policy and is saved by `POST /settings/policy`, which rejects an
+  hour outside 0-23 or a minute outside 0-59. The Channels form
+  (`POST /settings/alerts`) **no longer saves `sched_hour` or `sched_min`**
+  and ignores them if sent. The configuration keys and the
+  `CERT_WATCH_SCHED_HOUR` / `CERT_WATCH_SCHED_MIN` environment variables are
+  unchanged.
+- **Roles, IdP role mapping and local users** share one page, Settings →
+  Access (`/settings/access`). `/settings/roles`, `/settings/users` and
+  `/settings?tab=roles|users` redirect to its `#roles` and `#local-users`
+  sections, and the role, role-map and user forms return there after saving.
+  Permissions are unchanged.
+
+### What looks different
+
+- **Home** is three blocks -- certificate risk, monitoring gaps, and alert
+  delivery and routing -- in place of the urgency cards and the *Needs
+  attention* queue. Every number opens the matching Browse rows. The
+  *Monitoring pipeline healthy* status strip no longer appears on Home or on
+  certificate detail pages; other pages still show it.
+- **Browse** rows state the certificate's condition in days and show
+  monitoring, chain, renewal and delivery only when they need attention. An
+  endpoint whose scans are failing, overdue or have never succeeded is no
+  longer shown as healthy because its last certificate was fine.
+- **Certificate detail** leads with the four facts and numbered next steps,
+  puts *Scan now* in the header, lists who gets alerted, and collapses
+  certificate facts (including the grade) and history.
+- **Posture** shows the grade distribution and the lowest-grade certificates
+  instead of one fleet grade set by the worst certificate. Grade and TLS
+  trends appear once visible history spans more than 30 days.
+- **Colour means status only.** Links, focus rings and the wordmark are
+  neutral; expired shares the critical colour with the word *Expired*; a
+  failing scan is shown as a warning, not critical.
 
 ## Upgrading from 1.0.3 to 1.0.4
 
