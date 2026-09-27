@@ -25,6 +25,11 @@ with the CSV import; history is not carried over that way.
 
 ## Upgrading from 1.1.0
 
+API-key audit actors now use the stable `api_key:<id>` format instead of the
+key's display name. The display name is retained as `api_key_name` in the
+audit event's `detail` object. Update SIEM rules or other audit consumers that
+match API-key events by actor name; human-user actor values are unchanged.
+
 ### Migration 0044
 
 Migration **0044** adds a classifier version to each persisted endpoint

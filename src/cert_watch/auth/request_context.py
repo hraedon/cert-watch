@@ -149,7 +149,12 @@ def authenticate_api_key(
     if role is None:
         logger.warning("rejecting API key %s with unknown scope", result.id)
         return None
-    ctx = AuthContext.from_tier(result.name, tier=role, roles=[role])
+    ctx = AuthContext.from_tier(
+        result.name,
+        tier=role,
+        roles=[role],
+        principal_id=result.id,
+    )
     request.scope["auth_user"] = result.name
     request.state.auth_context = ctx
     request.state.api_key_auth = True

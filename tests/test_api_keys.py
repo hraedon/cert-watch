@@ -8,6 +8,7 @@ authenticating via an ``Authorization: Bearer cwk_…`` token.
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ import pytest
 from fastapi import Request
 from fastapi.exceptions import HTTPException
 
+from cert_watch.audit import audit_actor_display, list_audit, record_audit, resolve_actor
 from cert_watch.auth.guards import require_admin, require_auth, write_guard
 from cert_watch.auth.request_context import authenticate_api_key
 from cert_watch.database import init_schema
@@ -271,6 +273,46 @@ async def test_authenticate_api_key_uses_request_security_context(seeded):
     request = _make_request(db, bearer=raw, security=security)
 
     assert authenticate_api_key(request, db) is not None
+
+
+def test_api_key_audit_identity_is_stable_and_not_impersonable(seeded):
+    db, repo = seeded
+    first, first_raw = repo.create_key("shared-name", "write")
+    second, second_raw = repo.create_key("shared-name", "write")
+
+    for raw in (first_raw, second_raw):
+        request = _make_request(db, bearer=raw)
+        assert authenticate_api_key(request, db) is not None
+        record_audit(
+            db,
+            actor=resolve_actor(request),
+            action="host.edit",
+            target_type="host",
+            target_id="host-1",
+        )
+    record_audit(
+        db,
+        actor="shared-name",
+        action="host.edit",
+        target_type="host",
+        target_id="host-1",
+    )
+
+    rows = list_audit(db)
+    assert {row["actor"] for row in rows} == {
+        "shared-name",
+        f"api_key:{first.id}",
+        f"api_key:{second.id}",
+    }
+    key_rows = [row for row in rows if row["actor"].startswith("api_key:")]
+    assert all(
+        json.loads(row["detail"])["api_key_name"] == "shared-name"
+        for row in key_rows
+    )
+    assert {audit_actor_display(row) for row in key_rows} == {
+        f"shared-name (API key {first.id[:8]})",
+        f"shared-name (API key {second.id[:8]})",
+    }
 
 
 @pytest.mark.anyio

@@ -12,6 +12,9 @@ All notable changes to cert-watch are documented in this file.
   untrusted mention and link markup.
 - API keys with an unknown or corrupt scope are now rejected as
   unauthenticated instead of silently receiving viewer access.
+- Audit events created by API keys now identify the actor as `api_key:<id>`
+  instead of the non-unique key name. The key name remains in event detail and
+  the Activity page shows it alongside a short id.
 
 ### Fixed
 

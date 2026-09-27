@@ -18,6 +18,17 @@ from cert_watch.database.connection import _connect
 logger = logging.getLogger("cert_watch.audit")
 
 
+class _ApiKeyAuditActor(str):
+    """String-compatible actor carrying the key name to the audit writer."""
+
+    api_key_name: str
+
+    def __new__(cls, key_id: str, key_name: str) -> _ApiKeyAuditActor:
+        value = super().__new__(cls, f"api_key:{key_id}")
+        value.api_key_name = key_name
+        return value
+
+
 def record_audit(
     db_path: str | Path,
     *,
@@ -47,6 +58,9 @@ def record_audit(
     """
     ts = datetime.now(UTC).isoformat()
     try:
+        api_key_name = getattr(actor, "api_key_name", "")
+        if api_key_name:
+            detail = {**(detail or {}), "api_key_name": api_key_name}
         actor = actor[:256] if actor else actor
         target_id = target_id[:256] if target_id else target_id
         row_id = uuid.uuid4().hex
@@ -201,7 +215,28 @@ def resolve_actor(request: Request) -> str:
 
     Falls back to "anonymous" when auth is off or no user is set.
     """
-    return request.scope.get("auth_user", "") or "anonymous"
+    username = request.scope.get("auth_user", "")
+    state = getattr(request, "state", None)
+    context = getattr(state, "auth_context", None)
+    principal_id = getattr(context, "principal_id", "")
+    if principal_id:
+        return _ApiKeyAuditActor(principal_id, username)
+    return username or "anonymous"
+
+
+def audit_actor_display(row: dict[str, Any]) -> str:
+    """Human-readable actor label without changing the stored identity."""
+    actor = row.get("actor") or "anonymous"
+    if not actor.startswith("api_key:"):
+        return actor
+    key_id = actor.removeprefix("api_key:")
+    try:
+        detail = json.loads(row.get("detail") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        detail = {}
+    key_name = detail.get("api_key_name") if isinstance(detail, dict) else None
+    name = str(key_name) if key_name else "API key"
+    return f"{name} (API key {key_id[:8]})"
 
 
 def resolve_source_ip(request: typing.Any) -> str | None:

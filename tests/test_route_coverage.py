@@ -1722,6 +1722,28 @@ def test_audit_page_with_entries(tmp_path, reload_app):
     assert "admin" in r.text
 
 
+def test_audit_page_displays_api_key_name_and_short_id(tmp_path, reload_app):
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.audit import record_audit
+    from cert_watch.database import init_schema
+
+    init_schema(db)
+    record_audit(
+        db,
+        actor="api_key:1234567890abcdef",
+        action="host.add",
+        target_type="host",
+        target_id="h1",
+        detail={"api_key_name": "automation"},
+    )
+    with TestClient(app_mod.app) as client:
+        response = client.get("/audit")
+
+    assert response.status_code == 200
+    assert "automation (API key 12345678)" in response.text
+
+
 def test_audit_page_filter_by_target_type(tmp_path, reload_app):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
