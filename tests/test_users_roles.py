@@ -232,7 +232,7 @@ class TestSettingsRoutes:
         with TestClient(app_mod.app) as client:
             r = client.get("/settings/users")
         assert r.status_code == 200
-        assert "Users" in r.text
+        assert "Local users" in r.text
 
     def test_update_user_changes_role(self, reload_app, monkeypatch, tmp_path):
         import re

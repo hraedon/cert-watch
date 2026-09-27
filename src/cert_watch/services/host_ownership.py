@@ -36,6 +36,13 @@ from cert_watch.services.certificate_identity import (
 
 VALID_RENEWAL_METHODS = frozenset({"", "acme", "cert-manager", "manual"})
 VALID_RENEWAL_STATUSES = frozenset({"pending", "in_progress"})
+OWNERSHIP_FIELD_LIMITS = {
+    "owner_name": 200,
+    "owner_email": 254,
+    "owner_slack": 100,
+    "renewal_method": 100,
+    "runbook_url": 2048,
+}
 
 
 @dataclass(frozen=True)
@@ -105,11 +112,27 @@ def runbook_url_error(url: str) -> str | None:
     return None
 
 
-def _validate(update: HostOwnershipUpdate) -> None:
-    for field_name in ("owner_name", "owner_email", "owner_slack"):
+def _validate(update: HostOwnershipUpdate) -> HostOwnershipUpdate:
+    normalized: dict[str, str | None] = {}
+    for field_name, limit in OWNERSHIP_FIELD_LIMITS.items():
         value = getattr(update, field_name)
         if value is not None and not isinstance(value, str):
             raise HostOwnershipValidationError(field_name, f"{field_name} must be a string")
+        normalized_value = value.strip() if value is not None else None
+        if normalized_value is not None and len(normalized_value) > limit:
+            raise HostOwnershipValidationError(
+                field_name, f"{field_name} must be at most {limit} characters"
+            )
+        normalized[field_name] = normalized_value
+
+    update = HostOwnershipUpdate(
+        owner_name=normalized["owner_name"],
+        owner_email=normalized["owner_email"],
+        owner_slack=normalized["owner_slack"],
+        renewal_status=update.renewal_status,
+        renewal_method=normalized["renewal_method"],
+        runbook_url=normalized["runbook_url"],
+    )
 
     if update.owner_email and not is_safe_email_address(update.owner_email):
         raise HostOwnershipValidationError(
@@ -144,7 +167,12 @@ def _validate(update: HostOwnershipUpdate) -> None:
         error = runbook_url_error(update.runbook_url)
         if error:
             raise HostOwnershipValidationError("runbook_url", error)
+    return update
 
+
+def validate_host_ownership(update: HostOwnershipUpdate) -> HostOwnershipUpdate:
+    """Normalize and validate ownership fields with one strict contract."""
+    return _validate(update)
 
 def _unknown_answer(auth: Any, db_path: str | Path) -> Callable[[], Exception]:
     """What an id that names no host or certificate gets from this caller:
@@ -226,7 +254,7 @@ def update_host_ownership(
         ensure_write_scope(auth, db_path, **target.scope_target())
         if callable(update):
             update = update()
-        _validate(update)
+        update = _validate(update)
         detail = asdict(update)
         conn = _connect(db_path)
         try:

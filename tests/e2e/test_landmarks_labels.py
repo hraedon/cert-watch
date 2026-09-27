@@ -38,8 +38,7 @@ _PAGES = [
     "/settings/channels",
     "/settings/alert-groups",
     "/settings/tags",
-    "/settings/roles",
-    "/settings/users",
+    "/settings/access",
     "/settings/api-keys",
     "/settings/trust-anchors",
     "/settings/events",
@@ -107,6 +106,48 @@ _FONT_SIZES = """() => {
   return out;
 }"""
 
+_MOBILE_OVERFLOW = """() => {
+  const root = document.scrollingElement;
+  const viewport = window.innerWidth;
+  const failures = [];
+  if (root.scrollWidth > viewport + 1) {
+    failures.push(`document width ${root.scrollWidth}px exceeds viewport ${viewport}px`);
+  }
+  const isAccessibleScroller = el => {
+    const style = getComputedStyle(el);
+    const scrollable = ['auto', 'scroll'].includes(style.overflowX)
+      && el.scrollWidth > el.clientWidth + 1;
+    const landmark = el.getAttribute('role') === 'region' || el.tagName === 'NAV';
+    return scrollable && landmark
+      && el.hasAttribute('aria-label') && el.tabIndex >= 0;
+  };
+  for (const el of document.body.querySelectorAll('*')) {
+    if (el.closest('.cw-drawer:not(.on)')) continue;
+    if (!el.checkVisibility({visibilityProperty: true, opacityProperty: true})) continue;
+    const hasContent = [...el.childNodes].some(
+      node => node.nodeType === Node.TEXT_NODE && node.textContent.trim()
+    ) || ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'IMG', 'SVG'].includes(el.tagName);
+    if (!hasContent) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    if (rect.left >= -1 && rect.right <= viewport + 1) continue;
+    let parent = el.parentElement;
+    let safelyScrollable = false;
+    while (parent) {
+      if (isAccessibleScroller(parent)) {
+        safelyScrollable = true;
+        break;
+      }
+      parent = parent.parentElement;
+    }
+    if (!safelyScrollable) {
+      const bounds = `[${Math.round(rect.left)}, ${Math.round(rect.right)}]`;
+      failures.push(`${el.tagName}.${el.className || ''} ${bounds}`);
+    }
+  }
+  return failures;
+}"""
+
 
 @pytest.mark.parametrize("width", [1440, 390])
 def test_visible_text_uses_the_type_scale(
@@ -127,6 +168,20 @@ def test_visible_text_uses_the_type_scale(
             if size not in _TYPE_SCALE
         ]
     assert not offenders, "font sizes off the 12/14/16/20/28 scale:\n" + "\n".join(offenders)
+
+
+def test_every_page_contains_or_accessibly_scrolls_mobile_content(
+    page: Page,
+    cert_watch_server: str,
+) -> None:
+    page.set_viewport_size({"width": 390, "height": 900})
+    failures: list[str] = []
+    for path in _PAGES:
+        page.goto(f"{cert_watch_server}{path}")
+        failures += [f"{path}: {item}" for item in page.evaluate(_MOBILE_OVERFLOW)]
+    assert not failures, "mobile content is clipped or causes page overflow:\n" + "\n".join(
+        failures
+    )
 
 
 def test_unknown_path_renders_an_html_page_for_browsers(

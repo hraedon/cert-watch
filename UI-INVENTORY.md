@@ -36,7 +36,7 @@ population, with the scope stated on the selected view.
 
 | Concept | Column(s) | Editing control(s) today | Write endpoint(s) | Single owner (proposed) |
 |---|---|---|---|---|
-| Ownership & renewal contact | `owner_name`, `owner_email`, `owner_slack`, `renewal_method`, `runbook_url` (schema.py:72-77) | One form ("Operational summary → Edit"), cert detail — `certificate_detail.html:138-166` | `POST /hosts/{id}/owner` and `PATCH /api/hosts/{id}/owner` are adapters over the single `services.host_ownership.update_host_ownership` transaction; legacy `POST /certificates/{id}/owner` remains callable for compatibility | Shared ownership service; host-namespaced UI path (V4 resolved) |
+| Ownership & renewal contact | `owner_name`, `owner_email`, `owner_slack`, `renewal_method`, `runbook_url` (schema.py:72-77) | One post-creation form ("Operational summary → Edit"), cert detail — `certificate_detail.html`; creation-time seeds for owner name/email and renewal method in the Add drawer; all five fields are optional JSON/CSV columns | `POST /hosts/{id}/owner` and `PATCH /api/hosts/{id}/owner` are adapters over the single `services.host_ownership.update_host_ownership` transaction; creation uses `POST /hosts` + `POST /api/hosts`; import uses `POST /hosts/import` + `POST /api/hosts/import`; legacy `POST /certificates/{id}/owner` remains callable for compatibility | Detail owns edits; editor/Add/CSV share one normalizing, length-bounded ownership validator (S5) |
 | Host notes | `hosts.notes` (schema.py:78) | **ONE editing control:** textarea ("Notes" panel), endpoint detail page — `certificate_detail.html` (V2 resolved 2026-08-30: the 3 dashboard inline editors in `static/js/dashboard.js` were removed; the dashboard now shows a read-only note indicator chip). Creation-time seeds: `notes` param on `POST /hosts` and CSV `notes` column | `POST /hosts/{id}/notes` and `PATCH /api/hosts/{id}/notes` are adapters over `services.resource_metadata.update_host_notes`; host creation is `POST /hosts` + `POST /api/hosts`; CSV import is `POST /hosts/import` + `POST /api/hosts/import` | Detail-page Notes panel — **resolved (V1/V2)** |
 | Host tags | `hosts.tags` (schema.py:70) | Text input (datalist), cert/host detail (host branch of shared form) — `certificate_detail.html:370-374`; also creation-time seeds | `POST /hosts/{id}/tags` and `PUT /api/hosts/{id}/tags` are adapters over `services.resource_metadata.update_host_tags`; creation uses `POST /hosts` + `POST /api/hosts`; import uses `POST /hosts/import` + `POST /api/hosts/import` | Detail-page tags editor; drawer/CSV are creation-time seeds |
 | Scan target (hostname, port, TLS mode, common-ports) | `hostname`, `port` + scan params | Add drawer, scan tab — `dashboard.html:339-372` | `POST /hosts` + `POST /api/hosts`, through `services.host_management.create_hosts` | Create-only by design — OK |
@@ -54,7 +54,7 @@ population, with the scope stated on the selected view.
 | Concept | Store | Control | Write endpoint | Owner |
 |---|---|---|---|---|
 | SMTP transport + global recipients | kv | Form, Settings → Channels — `settings/channels.html:10-56` | `POST /settings/smtp` (routes/settings/smtp.py:45) | As-is |
-| Alert webhook (preset/URL/template/headers) + schedule/retention | kv | Form, Settings → Channels — `settings/channels.html:64-153` | `POST /settings/alerts` (routes/settings/alerts.py:14) | As-is; see V3 (label collision) |
+| Alert webhook (preset/URL/template/headers) + alert retention | kv | Form, Settings → Channels — `settings/channels.html` | `POST /settings/alerts` (routes/settings/alerts.py) | Channels owns delivery behavior; see V3 |
 | Event forwarding (webhook sink, adapter kind, rate limit, PagerDuty key) | kv | Form, Settings → Events — `settings/events.html:18-62` | `POST /settings/events` (routes/settings/events.py:58) | As-is; see V3 |
 | Alert groups (name, match tags, recipients, threshold, digest cadence) | `alert_groups` (schema.py:139) | Create + per-group edit forms — `settings/alert_groups.html`; legacy webhook presence is read-only | `POST /settings/alert-groups[/{id}[/delete]]` (routes/settings/alert_groups.py) | Group webhook has no delivery consumer: no editing control; ordinary edits preserve stored values. Channels owns the active alert webhook. |
 
@@ -63,10 +63,11 @@ population, with the scope stated on the selected view.
 | Concept | Store | Control | Write endpoint | Owner |
 |---|---|---|---|---|
 | Auth providers (LDAP/OAuth), own password | kv / users | Settings → Auth — `settings/auth.html:10,205` | `POST /settings/auth` (routes/settings/auth.py:24); `POST /settings/change-password` (routes/settings/password.py:28) | As-is |
-| Roles (name, scope tag, per-tag tiers, email), LDAP role map | roles tables | Settings → Roles — `settings/roles.html:74,115,126,145` | `POST /settings/roles[/{id}[/delete]]` (routes/settings/roles.py:87,125,166); `POST /settings/ldap-role-map` (routes/settings/auth.py:43) | As-is |
-| Local users | users | Settings → Users — `settings/users.html:24,73,103` | `POST /settings/users[/{id}[/delete]]` (routes/settings/roles.py:199,238,287) | As-is |
+| Roles (name, scope tag, per-tag tiers, email), IdP role map | roles tables | Settings → Access → Roles & IdP mapping — `settings/access.html` + `settings/roles.html`; old `/settings/roles` links redirect to `#roles` | `POST /settings/roles[/{id}[/delete]]` (routes/settings/roles.py); `POST /settings/ldap-role-map` (routes/settings/auth.py) | One Access workflow (S5) |
+| Local users | users | Settings → Access → Local users — `settings/access.html` + `settings/users.html`; old `/settings/users` links redirect to `#local-users` | `POST /settings/users[/{id}[/delete]]` (routes/settings/roles.py) | One Access workflow (S5) |
 | API keys | `api_keys` (schema.py:129) | Settings → API keys — `settings/api_keys.html:48,89` | `POST /settings/api-keys[/{id}/revoke]` (routes/settings/api_keys.py:33,68) | As-is |
-| Policy rules | kv | Settings → Policy — `settings/policy.html:19,108` | `POST /settings/policy` (routes/settings/policy.py:20) | As-is |
+| Daily scan time | `sched_hour`, `sched_min` kv keys (unchanged) | Settings → Policy → Scan schedule — `settings/policy.html`; Channels retains a moved-control anchor/link | `POST /settings/policy` with the schedule form marker; `PUT /api/policy` with `sched_hour` + `sched_min` | Policy owns monitoring cadence; both adapters share strict range validation (S5) |
+| Policy rules | kv | Settings → Policy — `settings/policy.html` | `POST /settings/policy` (routes/settings/policy.py) | As-is |
 | Trust anchors | `trust_anchors` (schema.py:84) | Settings → Trust anchors — `settings/trust_anchors.html:21,45` | `POST /trust-anchors` + `POST /api/trust-anchors`; `POST /trust-anchors/{id}/delete` + `DELETE /api/trust-anchors/{id}`, through `services.certificate_management` | HTML and JSON are equal adapters |
 
 ## Resolved inventory decisions
@@ -142,7 +143,7 @@ group chips were removed because they did not establish historical delivery.
 |---|---|---|
 | `hosts.expected_issuers` | Existing admin form/API write paths retained for compatibility | Read-only legacy value on details for admins, explicitly not monitored after CT removal. No new policy editor. |
 | `hosts.renewal_status` | `POST /hosts/{id}/settings`; existing `PATCH /api/hosts/{id}/owner` | Endpoint settings; `pending` or operator-reported `in_progress`, which suppresses only renewal-stalled notices. |
-| `hosts.scan_interval_hours` | `POST /hosts`, CSV, and `POST /hosts/{id}/settings` | Endpoint settings editor; no creation drawer field. |
+| `hosts.scan_interval_hours` | `POST /hosts`, CSV, and `POST /hosts/{id}/settings` | Add drawer creation seed and endpoint settings editor. |
 | `hosts.threshold_days` | `POST /hosts`, CSV, and `POST /hosts/{id}/settings` | Creation drawer and endpoint settings editor. |
 
 ## Executable write contracts

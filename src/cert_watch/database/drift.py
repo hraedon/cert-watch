@@ -550,3 +550,43 @@ def list_grade_trends(
             params,
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def posture_trend_ready(
+    db_path: str | Path,
+    *,
+    scope_tags: list[str] | tuple[str, ...] | None = None,
+) -> bool:
+    """Whether visible scan history spans more than thirty days."""
+    init_schema(db_path)
+    sql = (
+        "SELECT MIN(ch.scanned_at) AS oldest, MAX(ch.scanned_at) AS newest "
+        "FROM cert_history ch WHERE ch.posture_grade IS NOT NULL "
+        "AND ch.posture_grade != ''"
+    )
+    params: list[Any] = []
+    if scope_tags:
+        from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
+
+        host_sub = (
+            "SELECT 1 FROM hosts h WHERE h.hostname = ch.hostname "
+            "AND h.port = ch.port"
+        )
+        host_sub, params = _add_effective_tag_filter(
+            host_sub, [], scope_tags, col_cert=None, col_host="h.tags"
+        )
+        sql += f" AND EXISTS ({host_sub})"
+    with _connect(db_path) as conn:
+        row = conn.execute(sql, params).fetchone()
+    if not row or not row["oldest"] or not row["newest"]:
+        return False
+    try:
+        oldest = datetime.fromisoformat(str(row["oldest"]).replace("Z", "+00:00"))
+        newest = datetime.fromisoformat(str(row["newest"]).replace("Z", "+00:00"))
+        if oldest.tzinfo is None:
+            oldest = oldest.replace(tzinfo=UTC)
+        if newest.tzinfo is None:
+            newest = newest.replace(tzinfo=UTC)
+    except (TypeError, ValueError):
+        return False
+    return newest - oldest > timedelta(days=30)

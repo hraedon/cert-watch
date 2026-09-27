@@ -112,7 +112,7 @@ def test_non_admin_settings_post_bounce_does_not_loop(tmp_path, monkeypatch):
 def test_listed_admin_reaches_settings_and_mints_a_key(tmp_path, monkeypatch):
     with TestClient(_app(tmp_path, monkeypatch, writers="will", admins="alan")) as client:
         _login(client, "alan")
-        assert client.get("/settings/roles", follow_redirects=False).status_code == 200
+        assert client.get("/settings/access", follow_redirects=False).status_code == 200
         r = client.post("/api/api-keys", json={"name": "k", "scope": "read"})
     assert r.status_code == 201
     assert len(_api_keys(tmp_path)) == 1
@@ -134,7 +134,7 @@ def test_write_users_half_holds_reader_cannot_write(tmp_path, monkeypatch):
 def test_no_lists_and_no_role_map_is_still_full_access(tmp_path, monkeypatch):
     with TestClient(_app(tmp_path, monkeypatch, writers="", admins="")) as client:
         _login(client, "anyone")
-        assert client.get("/settings/roles", follow_redirects=False).status_code == 200
+        assert client.get("/settings/access", follow_redirects=False).status_code == 200
         r = client.post("/api/api-keys", json={"name": "k", "scope": "write"})
     assert r.status_code == 201
 
@@ -162,6 +162,6 @@ def test_non_writer_cannot_administer_when_only_write_users_is_set(tmp_path, mon
 def test_writer_administers_when_only_write_users_is_set(tmp_path, monkeypatch):
     with TestClient(_app(tmp_path, monkeypatch, writers="will", admins="")) as client:
         _login(client, "will")
-        assert client.get("/settings/roles", follow_redirects=False).status_code == 200
+        assert client.get("/settings/access", follow_redirects=False).status_code == 200
         r = client.post("/api/api-keys", json={"name": "k", "scope": "read"})
     assert r.status_code == 201

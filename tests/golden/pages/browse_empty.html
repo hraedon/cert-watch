@@ -207,7 +207,7 @@ OK</span>
     <button type="submit" class="cw-btn">Search</button>
     </form>
 
-    <nav class="cw-seg" aria-label="Inventory views">
+    <nav class="cw-seg" tabindex="0" aria-label="Inventory views">
       <a href="/browse?sort_by=days&amp;sort_order=asc&amp;grouped=1" class="on" aria-current="page">Inventory</a>
       <a href="/browse?view=issuer" class="" >By issuer · all</a>
       <a href="/browse?view=owner" class="" >By owner · all</a>
@@ -224,7 +224,7 @@ Calendar · all</a>
 
 
   <div class="cw-panel">
-    <div class="cw-table-clip">
+    <div class="cw-table-clip" tabindex="0" role="region" aria-label="Certificate inventory">
 
     <table class="cw-table cw-inventory-table">
       <thead>
@@ -365,6 +365,27 @@ Bulk import</button>
           <label class="cw-label" for="scan-notes">Notes <span class="cw-muted">(optional)</span></label>
           <textarea class="cw-input" id="scan-notes" name="notes" rows="3" placeholder="Runbook context or operational notes"></textarea>
         </div>
+        <div class="cw-divider"></div>
+        <div class="cw-kv-label">Ownership &amp; renewal <span class="cw-muted">(optional)</span></div>
+        <div class="cw-form-grid">
+          <div class="cw-field">
+            <label class="cw-label" for="scan-owner-name">Owner</label>
+            <input class="cw-input" type="text" id="scan-owner-name" name="owner_name" maxlength="200" placeholder="Platform team" data-testid="scan-owner-name-input">
+          </div>
+          <div class="cw-field">
+            <label class="cw-label" for="scan-owner-email">Owner email</label>
+            <input class="cw-input" type="email" id="scan-owner-email" name="owner_email" maxlength="254" placeholder="platform@example.test" data-testid="scan-owner-email-input">
+          </div>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="scan-renewal-method">Renewal method</label>
+          <select class="cw-select" id="scan-renewal-method" name="renewal_method" data-testid="scan-renewal-method-select">
+            <option value="">Not set</option>
+            <option value="acme">ACME</option>
+            <option value="cert-manager">cert-manager</option>
+            <option value="manual">Manual</option>
+          </select>
+        </div>
         <label class="cw-check">
           <input type="checkbox" name="common_ports" value="true"> Scan common TLS ports (443, 8443, 993, 995…)
         </label>
@@ -415,11 +436,11 @@ Upload</button>
 
 </div>
           <div><b>Drop a CSV, or <span class="cw-link">browse</span></b></div>
-          <div class="cw-sub">Needs <span class="mono">hostname</span> · optional <span class="mono">port</span>, <span class="mono">threshold_days</span>, <span class="mono">tags</span>, <span class="mono">notes</span>, <span class="mono">scan_interval_hours</span>, <span class="mono">starttls_mode</span></div>
+          <div class="cw-sub">Needs <span class="mono">hostname</span> · optional <span class="mono">port</span>, <span class="mono">threshold_days</span>, <span class="mono">tags</span>, <span class="mono">notes</span>, <span class="mono">scan_interval_hours</span>, <span class="mono">starttls_mode</span>, <span class="mono">owner_name</span>, <span class="mono">owner_email</span>, <span class="mono">renewal_method</span></div>
           <input type="file" id="csv-input" name="file" required accept=".csv" class="cw-hidden">
         </label>
         <div class="cw-note">
-          <code class="mono">hostname,port,threshold_days,tags<br>api.example.com,443,30,production<br>vpn.example.com,4443,14,edge</code>
+          <code class="mono">hostname,port,threshold_days,tags,owner_name,owner_email,renewal_method<br>api.example.test,443,30,production,Platform,platform@example.test,cert-manager<br>vpn.example.test,4443,14,edge,Network,network@example.test,manual</code>
         </div>
         <div class="cw-form-foot">
           <button type="button" class="cw-btn" data-drawer-close="add-drawer">Cancel</button>

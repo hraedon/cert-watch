@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -20,14 +21,23 @@ from cert_watch.database import (
 )
 from cert_watch.routes._deps import IdParam, _db_path, get_templates
 from cert_watch.routes.settings.core import _rebuild_settings, settings_tab_form
-from cert_watch.routes.settings.render import _render_settings
 
 templates = get_templates()
 
 router = APIRouter()
 
-_ROLES_FORM = settings_tab_form("roles")
-_USERS_FORM = settings_tab_form("users")
+_ROLES_FORM = settings_tab_form("access")
+_USERS_FORM = settings_tab_form("access")
+
+
+def _access_url(anchor: str, *, saved: bool = False, error: str = "") -> str:
+    params = []
+    if saved:
+        params.append("saved=1")
+    if error:
+        params.append(f"error={quote_plus(error)}")
+    query = f"?{'&'.join(params)}" if params else ""
+    return f"/settings/access{query}#{anchor}"
 
 
 def _normalize_permission_tier(tier: str) -> str:
@@ -85,7 +95,9 @@ def roles_page(
     request: Request, saved: str | None = None, error: str | None = None,
     _auth: str = Depends(admin_page_guard),
 ) -> HTMLResponse | RedirectResponse:
-    return _render_settings(request, "roles", saved=saved, error=error)
+    return RedirectResponse(
+        url=_access_url("roles", saved=bool(saved), error=error or ""), status_code=303
+    )
 
 
 @router.post("/settings/roles")
@@ -100,12 +112,13 @@ async def create_role(
     scope_tag = _normalize_scope_tag(str(form.get("scope_tag") or ""))
     alert_group_id = _normalize_alert_group_id(str(form.get("alert_group_id") or ""))
     if not name:
-        return RedirectResponse(url="/settings?tab=roles&error=role+name+required", status_code=303)
+        return RedirectResponse(
+            url=_access_url("roles", error="role name required"), status_code=303
+        )
     tag_tiers, tt_err = _parse_tag_tiers(str(form.get("tag_tiers") or ""), scope_tag)
     if tt_err:
-        from urllib.parse import quote as _q
 
-        return RedirectResponse(url=f"/settings?tab=roles&error={_q(tt_err)}", status_code=303)
+        return RedirectResponse(url=_access_url("roles", error=tt_err), status_code=303)
 
     role = Role(
         name=name, email=email, description=description,
@@ -117,7 +130,7 @@ async def create_role(
         role_id = repo.add(role)
         if tag_tiers:
             repo.set_tag_tiers(role_id, tag_tiers)
-    return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
+    return RedirectResponse(url=_access_url("roles", saved=True), status_code=303)
 
 
 @router.post("/settings/roles/{role_id}")
@@ -127,12 +140,14 @@ async def update_role(
     repo = SqliteRoleRepository(_db_path(request))
     role = repo.get(role_id)
     if role is None:
-        return RedirectResponse(url="/settings?tab=roles&error=role+not+found", status_code=303)
+        return RedirectResponse(url=_access_url("roles", error="role not found"), status_code=303)
 
     form = await request.form()
     name = str(form.get("name") or "").strip()
     if not name:
-        return RedirectResponse(url="/settings?tab=roles&error=role+name+required", status_code=303)
+        return RedirectResponse(
+            url=_access_url("roles", error="role name required"), status_code=303
+        )
     role.name = name
     role.email = str(form.get("email") or "").strip()
     role.description = str(form.get("description") or "").strip()
@@ -141,9 +156,8 @@ async def update_role(
     role.alert_group_id = _normalize_alert_group_id(str(form.get("alert_group_id") or ""))
     tag_tiers, tt_err = _parse_tag_tiers(str(form.get("tag_tiers") or ""), role.scope_tag)
     if tt_err:
-        from urllib.parse import quote as _q
 
-        return RedirectResponse(url=f"/settings?tab=roles&error={_q(tt_err)}", status_code=303)
+        return RedirectResponse(url=_access_url("roles", error=tt_err), status_code=303)
     with get_write_lock():
         repo.update(role)
         repo.set_tag_tiers(role_id, tag_tiers)
@@ -155,7 +169,7 @@ async def update_role(
     db = _db_path(request)
     for username in SqliteUserRepository(db).list_usernames_by_role_id(role_id):
         bump_session_version(db, username)
-    return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
+    return RedirectResponse(url=_access_url("roles", saved=True), status_code=303)
 
 
 @router.post("/settings/roles/{role_id}/delete")
@@ -171,7 +185,7 @@ async def delete_role(
         SqliteRoleRepository(db).delete(role_id)
         _drop_ui_mapping(db, role_id)
     _rebuild_settings(request, db)
-    return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
+    return RedirectResponse(url=_access_url("roles", saved=True), status_code=303)
 
 
 def _drop_ui_mapping(db: Any, role_id: str) -> None:
@@ -198,7 +212,10 @@ def users_page(
     request: Request, saved: str | None = None, error: str | None = None,
     _auth: str = Depends(admin_page_guard),
 ) -> HTMLResponse | RedirectResponse:
-    return _render_settings(request, "users", saved=saved, error=error)
+    return RedirectResponse(
+        url=_access_url("local-users", saved=bool(saved), error=error or ""),
+        status_code=303,
+    )
 
 
 # Both travel in the session cookie; bounded so a session always fits it
@@ -244,18 +261,25 @@ async def create_user(
     role_id = str(form.get("role_id") or "").strip()
     if not username or not password:
         return RedirectResponse(
-            url="/settings?tab=users&error=username+and+password+required", status_code=303
+            url=_access_url("local-users", error="username and password required"), status_code=303
         )
     if ":" in username:
         return RedirectResponse(
-            url="/settings?tab=users&error=username+must+not+contain+colons", status_code=303
+            url=_access_url("local-users", error="username must not contain colons"),
+            status_code=303,
         )
     ident_err = _account_identity_error(request, username, email)
     if ident_err:
-        return RedirectResponse(url=f"/settings?tab=users&error={ident_err}", status_code=303)
+        return RedirectResponse(
+            url=_access_url("local-users", error=ident_err.replace("+", " ")),
+            status_code=303,
+        )
     if len(password) < 8:
         return RedirectResponse(
-            url="/settings?tab=users&error=password+must+be+at+least+8+characters", status_code=303
+            url=_access_url(
+                "local-users", error="password must be at least 8 characters"
+            ),
+            status_code=303,
         )
 
     user = User(
@@ -273,7 +297,7 @@ async def create_user(
         bump_session_version(db, username)
         SqliteUserRepository(db).add(user)
         bump_session_version(db, username)
-    return RedirectResponse(url="/settings?tab=users&saved=1", status_code=303)
+    return RedirectResponse(url=_access_url("local-users", saved=True), status_code=303)
 
 
 @router.post("/settings/users/{user_id}")
@@ -283,7 +307,9 @@ async def update_user(
     repo = SqliteUserRepository(_db_path(request))
     user = repo.get(user_id)
     if user is None:
-        return RedirectResponse(url="/settings?tab=users&error=user+not+found", status_code=303)
+        return RedirectResponse(
+            url=_access_url("local-users", error="user not found"), status_code=303
+        )
 
     form = await request.form()
     username = str(form.get("username") or "").strip()
@@ -292,15 +318,19 @@ async def update_user(
     role_id = str(form.get("role_id") or "").strip()
     if not username:
         return RedirectResponse(
-            url="/settings?tab=users&error=username+required", status_code=303
+            url=_access_url("local-users", error="username required"), status_code=303
         )
     if ":" in username:
         return RedirectResponse(
-            url="/settings?tab=users&error=username+must+not+contain+colons", status_code=303
+            url=_access_url("local-users", error="username must not contain colons"),
+            status_code=303,
         )
     ident_err = _account_identity_error(request, username, email)
     if ident_err:
-        return RedirectResponse(url=f"/settings?tab=users&error={ident_err}", status_code=303)
+        return RedirectResponse(
+            url=_access_url("local-users", error=ident_err.replace("+", " ")),
+            status_code=303,
+        )
     old_username = user.username
     user.username = username
     user.email = email
@@ -311,7 +341,7 @@ async def update_user(
     if password:
         if len(password) < 8:
             return RedirectResponse(
-                url="/settings?tab=users&error=password+must+be+at+least+8+characters",
+                url=_access_url("local-users", error="password must be at least 8 characters"),
                 status_code=303,
             )
         user.password_hash = _scrypt_hash(password)
@@ -328,7 +358,7 @@ async def update_user(
         repo.update(user)
         for name in affected:
             bump_session_version(db, name)
-    return RedirectResponse(url="/settings?tab=users&saved=1", status_code=303)
+    return RedirectResponse(url=_access_url("local-users", saved=True), status_code=303)
 
 
 @router.post("/settings/users/{user_id}/delete")
@@ -349,4 +379,4 @@ async def delete_user(
             # Again after: a login that read its version between the first
             # bump and the delete must not keep a cookie for a vanished row.
             bump_session_version(db, user.username)
-    return RedirectResponse(url="/settings?tab=users&saved=1", status_code=303)
+    return RedirectResponse(url=_access_url("local-users", saved=True), status_code=303)

@@ -39,6 +39,26 @@ def test_put_api_policy_saves_and_reloads(reload_app):
     assert rsa_rule["severity"] == "critical"
 
 
+def test_api_policy_schedule_validates_and_saves(reload_app, tmp_path):
+    from cert_watch.database import kv_get
+
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    with TestClient(app_mod.app) as client:
+        invalid_hour = client.put("/api/policy", json={"sched_hour": 99, "sched_min": 0})
+        invalid_minute = client.put("/api/policy", json={"sched_hour": 6, "sched_min": 60})
+        valid = client.put("/api/policy", json={"sched_hour": 7, "sched_min": 30})
+    assert invalid_hour.status_code == 400
+    assert "sched_hour" in invalid_hour.json()["error"]
+    assert invalid_minute.status_code == 400
+    assert "sched_min" in invalid_minute.json()["error"]
+    assert valid.status_code == 200
+    assert valid.json()["sched_hour"] == 7
+    assert valid.json()["sched_min"] == 30
+    assert kv_get(db, "sched_hour") == "7"
+    assert kv_get(db, "sched_min") == "30"
+
+
 def test_put_api_policy_merges_against_kv_not_stale_snapshot(reload_app, tmp_path):
     import json
 

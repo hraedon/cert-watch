@@ -42,7 +42,12 @@ def settings_page(
         )
         if v
     )
-    url = f"/settings/{section}" + (f"?{query}" if query else "")
+    anchor = ""
+    if tab == "roles":
+        anchor = "#roles"
+    elif tab == "users":
+        anchor = "#local-users"
+    url = f"/settings/{section}" + (f"?{query}" if query else "") + anchor
     return RedirectResponse(url=url, status_code=303)
 
 
@@ -67,7 +72,7 @@ def _section_route(section: str) -> Any:
 
 # Sections without their own dedicated router (roles/users/alert-groups/
 # events/api-keys GETs live in their feature routers).
-for _section in ("auth", "channels", "policy", "tags", "trust-anchors"):
+for _section in ("auth", "access", "channels", "policy", "tags", "trust-anchors"):
     router.add_api_route(
         f"/settings/{_section}",
         _section_route(_section),

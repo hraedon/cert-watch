@@ -110,3 +110,229 @@ def test_add_host_validation_error_still_bounces_home(tmp_path, reload_app):
         r = client.post("/hosts", data={"hostname": "bad host!"}, follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"].startswith("/?error=")
+
+
+def test_add_host_stores_creation_owner_and_renewal_fields(
+    tmp_path, reload_app, monkeypatch,
+):
+    _no_dns(monkeypatch)
+    _scan_fails(monkeypatch)
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    with TestClient(app_mod.app) as client:
+        response = client.post(
+            "/hosts",
+            data={
+                "hostname": "owned.example.test",
+                "owner_name": "Platform Team",
+                "owner_email": "platform@example.test",
+                "renewal_method": "cert-manager",
+            },
+            follow_redirects=False,
+        )
+    assert response.status_code == 303
+    host = SqliteHostRepository(db).list_all()[0]
+    assert (host.owner_name, host.owner_email, host.renewal_method) == (
+        "Platform Team",
+        "platform@example.test",
+        "cert-manager",
+    )
+
+
+def test_add_host_rejects_invalid_creation_ownership_before_insert(
+    tmp_path, reload_app, monkeypatch,
+):
+    _no_dns(monkeypatch)
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    with TestClient(app_mod.app) as client:
+        response = client.post(
+            "/hosts",
+            data={
+                "hostname": "bad-owner.example.test",
+                "owner_email": "not-an-address",
+                "renewal_method": "hand-wavy",
+            },
+            follow_redirects=False,
+        )
+    assert response.status_code == 303
+    assert "error=" in response.headers["location"]
+    assert SqliteHostRepository(db).list_all() == []
+
+
+def test_csv_import_accepts_creation_owner_and_renewal_columns(
+    tmp_path, reload_app, monkeypatch,
+):
+    _no_dns(monkeypatch)
+    _scan_fails(monkeypatch)
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    content = (
+        b"hostname,owner_name,owner_email,renewal_method\n"
+        b"csv-owned.example.test,Network Team,network@example.test,manual\n"
+    )
+    with TestClient(app_mod.app) as client:
+        response = client.post(
+            "/hosts/import",
+            files={"file": ("hosts.csv", content, "text/csv")},
+            follow_redirects=False,
+        )
+    assert response.status_code == 303
+    host = SqliteHostRepository(db).list_all()[0]
+    assert (host.owner_name, host.owner_email, host.renewal_method) == (
+        "Network Team",
+        "network@example.test",
+        "manual",
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("owner_name", "x" * 201),
+        ("owner_email", "x" * 255),
+        ("owner_email", "not-an-address"),
+        ("owner_slack", "x" * 101),
+        ("renewal_method", "x" * 101),
+        ("renewal_method", "ACME"),
+        ("runbook_url", "https://example.test/" + "x" * 2030),
+        ("runbook_url", "javascript:alert(1)"),
+    ],
+)
+def test_ownership_limits_match_editor_html_json_and_csv(
+    tmp_path,
+    reload_app,
+    monkeypatch,
+    field,
+    value,
+):
+    _no_dns(monkeypatch)
+    _scan_fails(monkeypatch)
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    repo = SqliteHostRepository(db)
+    existing_id = repo.add("existing.example.test")
+    with TestClient(app_mod.app) as client:
+        editor = client.post(
+            f"/hosts/{existing_id}/owner",
+            data={field: value},
+            follow_redirects=False,
+        )
+        html = client.post(
+            "/hosts",
+            data={"hostname": "html-limit.example.test", field: value},
+            follow_redirects=False,
+        )
+        api = client.post(
+            "/api/hosts",
+            json={"hostname": "api-limit.example.test", field: value},
+        )
+        csv_body = f"hostname,{field}\ncsv-limit.example.test,{value}\n"
+        csv_response = client.post(
+            "/api/hosts/import",
+            files={"file": ("hosts.csv", csv_body, "text/csv")},
+        )
+    assert "error=" in editor.headers["location"]
+    assert "error=" in html.headers["location"]
+    assert api.status_code == 400
+    assert csv_response.status_code == 400
+    assert {host.hostname for host in repo.list_all()} == {"existing.example.test"}
+
+
+def test_ownership_whitespace_normalizes_on_every_write_path(
+    tmp_path,
+    reload_app,
+    monkeypatch,
+):
+    _no_dns(monkeypatch)
+    _scan_fails(monkeypatch)
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    repo = SqliteHostRepository(db)
+    existing_id = repo.add("edited.example.test")
+    padded = {
+        "owner_name": "  Platform  ",
+        "owner_email": "  ops@example.test  ",
+        "owner_slack": "  #certs  ",
+        "renewal_method": "  acme  ",
+        "runbook_url": "  https://runbooks.example.test/certs  ",
+    }
+    with TestClient(app_mod.app) as client:
+        assert (
+            client.post(
+                f"/hosts/{existing_id}/owner",
+                data=padded,
+                follow_redirects=False,
+            ).status_code
+            == 303
+        )
+        assert (
+            client.post(
+                "/hosts",
+                data={"hostname": "html-normalized.example.test", **padded},
+                follow_redirects=False,
+            ).status_code
+            == 303
+        )
+        assert (
+            client.post(
+                "/api/hosts",
+                json={"hostname": "api-normalized.example.test", **padded},
+            ).status_code
+            == 201
+        )
+        csv_body = (
+            "hostname,owner_name,owner_email,owner_slack,renewal_method,runbook_url\n"
+            "csv-normalized.example.test,  Platform  ,  ops@example.test  ,"
+            "  #certs  ,  acme  ,  https://runbooks.example.test/certs  \n"
+        )
+        assert (
+            client.post(
+                "/api/hosts/import",
+                files={"file": ("hosts.csv", csv_body, "text/csv")},
+            ).status_code
+            == 201
+        )
+    for host in repo.list_all():
+        assert (
+            host.owner_name,
+            host.owner_email,
+            host.owner_slack,
+            host.renewal_method,
+            host.runbook_url,
+        ) == (
+            "Platform",
+            "ops@example.test",
+            "#certs",
+            "acme",
+            "https://runbooks.example.test/certs",
+        )
+
+
+def test_idempotent_add_reports_unapplied_owner_fields(
+    tmp_path,
+    reload_app,
+    monkeypatch,
+):
+    _no_dns(monkeypatch)
+    _scan_fails(monkeypatch)
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    repo = SqliteHostRepository(db)
+    host_id = repo.add("existing-add.example.test", owner_name="Original owner")
+    with TestClient(app_mod.app) as client:
+        html = client.post(
+            "/hosts",
+            data={"hostname": "existing-add.example.test", "owner_name": "Replacement"},
+            follow_redirects=False,
+        )
+        api = client.post(
+            "/api/hosts",
+            json={"hostname": "existing-add.example.test", "owner_name": "Replacement"},
+        )
+    assert html.status_code == 303
+    assert "warning=" in html.headers["location"]
+    assert "not%20applied" in html.headers["location"]
+    assert api.status_code == 201
+    assert "not applied" in api.json()["notice"]
+    assert repo.get(host_id).owner_name == "Original owner"

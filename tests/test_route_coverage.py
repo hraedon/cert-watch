@@ -613,7 +613,7 @@ def test_dashboard_pivot_renewal_method(reload_app, tmp_path):
 # ---------- dashboard fleet grade ----------
 
 
-def test_dashboard_fleet_grade_with_data(reload_app, tmp_path):
+def test_posture_grade_distribution_with_data(reload_app, tmp_path):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import init_schema, store_scan_posture
@@ -628,7 +628,10 @@ def test_dashboard_fleet_grade_with_data(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.get("/posture")
     assert r.status_code == 200
-    assert "Fleet grade" in r.text
+    assert "Fleet grade" not in r.text
+    assert 'data-testid="grade-count-A"' in r.text
+    assert 'data-testid="grade-count-B"' in r.text
+    assert "Worst certificates" in r.text
 
 
 # ---------- dashboard ungrouped view with data ----------
@@ -807,7 +810,7 @@ def test_insights_view_tls_tab(tmp_path, reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/insights?tab=trends")
     assert r.status_code == 200
-    assert "TLS versions across the fleet" in r.text  # 301 -> /posture
+    assert "Trends appear after more than a month of scan history." in r.text
 
 
 # ---------- caa-check ----------

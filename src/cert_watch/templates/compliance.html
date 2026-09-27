@@ -106,7 +106,7 @@
       {% if bucket.entries %}<span class="cw-chip">{{ bucket.entries | length }}</span>{% endif %}
     </div>
     {% if bucket.entries %}
-    <div class="cw-table-clip">
+    <div class="cw-table-clip" tabindex="0" role="region" aria-label="{{ bucket.label }} remediation entries">
       <table class="cw-table">
         <thead>
           <tr>
@@ -151,7 +151,7 @@
     <div class="cw-panel-body">
       <div class="cw-note">
         {{ icons.svg_icon('key', 14) }}
-        <div>
+        <div class="cw-report-signature">
           Content SHA-256: <span class="mono">{{ report.content_sha256 }}</span><br>
           HMAC-SHA256 signature: <span class="mono">{{ report.signature }}</span><br>
           Generated at: {{ report.generated_at[:16] | replace('T', ' ') }} UTC<br>
