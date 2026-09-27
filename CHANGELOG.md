@@ -24,6 +24,9 @@ All notable changes to cert-watch are documented in this file.
   retention pruning, and history updates or deletes still recompute or
   invalidate the result. Persisted rows now carry a classifier version and
   are refreshed at startup when the classifier changes (#128).
+- Renewal webhooks are sent even when `renewal_overdue` Event stream storage
+  is disabled. Each emission now carries a unique `event_id` that remains
+  stable across its delivery retries.
 
 ### Upgrade notes
 

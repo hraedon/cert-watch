@@ -93,6 +93,31 @@ def test_retries_then_succeeds(runtime, seeded_db, monkeypatch):
         )
     assert runtime.wait_for_webhooks()
     assert send.call_count == 2  # stops as soon as one attempt succeeds
+    first_payload = send.call_args_list[0].args[0]
+    second_payload = send.call_args_list[1].args[0]
+    assert first_payload["event_id"] == second_payload["event_id"]
+    assert len(first_payload["event_id"]) == 32
+
+
+def test_separate_emissions_have_distinct_event_ids(
+    runtime, seeded_db, monkeypatch,
+):
+    db, parsed = seeded_db
+    monkeypatch.setenv("CERT_WATCH_RENEWAL_WEBHOOK_URL", "https://hook.example.com/r")
+    signal = _signal(fingerprint=parsed.fingerprint_sha256)
+    with patch(
+        "cert_watch.renewal_webhook.send_renewal_webhook", return_value=True
+    ) as send:
+        runtime._send_renewal_webhook_if_configured(
+            signal, "host.example.com", 443, db
+        )
+        runtime._send_renewal_webhook_if_configured(
+            signal, "host.example.com", 443, db
+        )
+
+    assert runtime.wait_for_webhooks()
+    event_ids = {call.args[0]["event_id"] for call in send.call_args_list}
+    assert len(event_ids) == 2
 
 
 def test_retry_exhausted_is_logged(runtime, seeded_db, monkeypatch, caplog):
@@ -146,23 +171,31 @@ def test_check_renewal_overdue_fires_webhook_once_and_dedupes(
     send.assert_called_once()
 
 
-def test_check_renewal_overdue_records_cooldown_only_after_event_is_persisted(
+def test_check_renewal_overdue_sends_when_event_type_is_disabled(
     runtime, seeded_db, monkeypatch,
 ):
+    from cert_watch.events import EventStreamConfig, save_event_config
+
     db, parsed = seeded_db
     signal = _signal(fingerprint=parsed.fingerprint_sha256)
     hosts = [("host.example.com", 443)]
+    save_event_config(db, EventStreamConfig(enabled_event_types=[]))
+    monkeypatch.setenv("CERT_WATCH_RENEWAL_WEBHOOK_URL", "https://hook.example.com/r")
     monkeypatch.setattr(
         "cert_watch.renewal_analytics.detect_renewal_overdue", lambda *a, **k: signal,
     )
-    monkeypatch.setattr("cert_watch.events.emit_event", lambda *a, **k: None)
-
-    runtime._check_renewal_overdue(db, hosts)
+    with patch(
+        "cert_watch.renewal_webhook.send_renewal_webhook", return_value=True
+    ) as send:
+        runtime._check_renewal_overdue(db, hosts)
 
     from cert_watch.database.connection import _connect
 
+    assert runtime.wait_for_webhooks()
+    send.assert_called_once()
     with _connect(db) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM rule_firings").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM event_log").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM rule_firings").fetchone()[0] == 1
 
 
 def test_check_renewal_overdue_no_signal_no_send(runtime, seeded_db):

@@ -870,7 +870,7 @@ def _check_renewal_overdue(
                         suppression_keys=(legacy_key,),
                     ):
                         continue
-                    event_id = emit_event(
+                    emit_event(
                         Event(
                             event_type="renewal_overdue",
                             timestamp=current,
@@ -887,8 +887,6 @@ def _check_renewal_overdue(
                         ),
                         db_path,
                     )
-                    if event_id is None:
-                        continue
                     store.claim_rule_firing(
                         key,
                         now=current,
