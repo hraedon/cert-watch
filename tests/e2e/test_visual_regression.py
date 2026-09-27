@@ -114,9 +114,36 @@ def test_add_drawer_visual(
 ) -> None:
     page.goto(f"{visual_server}/browse")
     page.get_by_test_id("add-host-btn").click()
-    expect(page.locator("#add-drawer")).to_be_visible()
-    page.evaluate("document.fonts.ready")
-    page.wait_for_timeout(400)
+    drawer = page.locator("#add-drawer")
+    expect(drawer).to_be_visible()
+    # The drawer slides over the pointer's click position, which can leave the
+    # Bulk import tab hovered depending on when Chromium updates hit testing.
+    # Park the pointer on the inert backdrop, then wait through compositing and
+    # two paint frames so the snapshot always sees the final drawer state.
+    page.mouse.move(0, 0)
+    drawer.evaluate(
+        """async element => {
+            await document.fonts.ready;
+            const backdrop = document.getElementById(`${element.id}-bg`);
+            const animations = [
+                ...element.getAnimations({subtree: true}),
+                ...backdrop.getAnimations({subtree: true}),
+            ].filter(animation =>
+                animation.effect?.getTiming().iterations !== Infinity
+            );
+            await Promise.all(
+                animations.map(
+                    animation => animation.finished.catch(() => {})
+                )
+            );
+            await new Promise(resolve =>
+                requestAnimationFrame(() => requestAnimationFrame(resolve))
+            );
+        }"""
+    )
+    assert not page.get_by_test_id("tab-bulk-btn").evaluate(
+        "element => element.matches(':hover')"
+    )
     assert_snapshot(page, name="add-drawer.png", mask_elements=_MASKS)
 
 
