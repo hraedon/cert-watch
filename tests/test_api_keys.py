@@ -24,7 +24,7 @@ from cert_watch.auth.guards import (
     require_auth,
     write_guard,
 )
-from cert_watch.auth.request_context import authenticate_api_key
+from cert_watch.auth.request_context import authenticate_api_key, resolve_session_user
 from cert_watch.database import init_schema
 from cert_watch.database.api_keys import SqliteApiKeyRepository, hash_token
 from cert_watch.security import SecurityContext
@@ -451,6 +451,26 @@ async def test_renewal_report_principal_and_guard(seeded):
     )
     assert await renewal_report_guard(all_request) == "all-renewals"
     assert renewal_report_binding(all_request.state.auth_context) == "all"
+
+
+def test_resolve_session_user_preserves_report_key_state(seeded):
+    db, repo = seeded
+    _, raw = repo.create_key(
+        "renewal-hook", "renewal-report", binding="all"
+    )
+
+    allowed = _make_request(db, bearer=raw, path="/api/renewal-reports")
+    assert authenticate_api_key(allowed, db) is not None
+    assert resolve_session_user(allowed) == ("renewal-hook", None, True)
+
+    forbidden = _make_request(db, bearer=raw, path="/api/health")
+    assert resolve_session_user(forbidden) == (
+        None, "forbidden for this key", True
+    )
+    # A second guard resolution takes the already-classified fast path.
+    assert resolve_session_user(forbidden) == (
+        None, "forbidden for this key", True
+    )
 
 
 @pytest.mark.anyio
