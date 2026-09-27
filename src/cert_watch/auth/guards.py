@@ -442,6 +442,36 @@ class MutationGuard:
         return user
 
 
+class RenewalReportGuard(MutationGuard):
+    """Mutation guard admitting only renewal-report API-key principals."""
+
+    def __init__(self) -> None:
+        super().__init__("write", form=False)
+
+    async def __call__(self, request: Request) -> str:
+        result = _check_auth(request)
+        if result.error:
+            _raise_json(result.error)
+        context: AuthContext | None = getattr(request.state, "auth_context", None)
+        if context is None or context.principal_kind != "renewal-report":
+            raise HTTPException(status_code=403, detail="renewal-report key required")
+        csrf_err = await self._csrf_error(request)
+        if csrf_err:
+            raise HTTPException(status_code=403, detail=csrf_err)
+        return result.user or ""
+
+
+def renewal_report_binding(auth: AuthContext) -> Literal["all"] | tuple[str, ...]:
+    """Return the authenticated report key's explicit endpoint binding."""
+    if auth.principal_kind != "renewal-report":
+        raise ValueError("renewal-report principal required")
+    if auth.api_key_binding == "all":
+        return "all"
+    if auth.api_key_binding == "tags" and auth.api_key_bound_tags:
+        return auth.api_key_bound_tags
+    raise ValueError("invalid renewal-report binding")
+
+
 def admin_settings_form(
     csrf_failure: CsrfFailure, *, session_only: bool = False
 ) -> MutationGuard:
@@ -469,6 +499,7 @@ admin_session_write_guard = MutationGuard("admin", form=False, session_only=True
 admin_session_json_write_guard = MutationGuard(
     "admin", form=False, json_only=True, session_only=True
 )
+renewal_report_guard = RenewalReportGuard()
 
 
 class MetricsGuard:

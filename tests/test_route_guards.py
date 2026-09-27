@@ -94,3 +94,28 @@ def test_inventory_sees_routes_inside_a_mounted_sub_application() -> None:
     outer.mount("/sub", sub)
 
     assert any(method == "POST" for method, _path, _route in mutating_routes(outer))
+
+
+def test_renewal_report_guard_is_a_mutation_guard_on_test_route() -> None:
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+
+    from cert_watch.auth.guards import renewal_report_guard
+
+    test_app = FastAPI()
+
+    @test_app.post("/api/renewal-reports")
+    def report(_auth: str = Depends(renewal_report_guard)) -> dict[str, str]:
+        return {"status": "accepted"}
+
+    route = next(route for _, _, route in mutating_routes(test_app))
+    mutation, read = _guards(route)
+    assert mutation == [renewal_report_guard]
+    assert read == []
+
+    # A plain auth-disabled session resolves to the system principal, not the
+    # dedicated report principal, and is still refused.
+    with TestClient(test_app) as client:
+        response = client.post("/api/renewal-reports")
+    assert response.status_code == 403
+    assert response.json() == {"detail": "renewal-report key required"}

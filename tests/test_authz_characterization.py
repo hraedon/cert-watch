@@ -56,6 +56,8 @@ class Principal:
     username: str = ""
     roles: tuple[str, ...] = ()
     key_scope: str = ""
+    key_binding: str = ""
+    key_tags: str = ""
 
 
 PRINCIPALS = [
@@ -69,6 +71,14 @@ PRINCIPALS = [
     Principal("api-key-read", "rbac", "api_key", key_scope="read"),
     Principal("api-key-write", "rbac", "api_key", key_scope="write"),
     Principal("api-key-admin", "rbac", "api_key", key_scope="admin"),
+    Principal(
+        "api-key-renewal-report-all", "rbac", "api_key",
+        key_scope="renewal-report", key_binding="all",
+    ),
+    Principal(
+        "api-key-renewal-report-bound", "rbac", "api_key",
+        key_scope="renewal-report", key_binding="tags", key_tags="A",
+    ),
     # No role map: the legacy CERT_WATCH_WRITE_USERS / CERT_WATCH_ADMINS lists.
     Principal("legacy-reader", "legacy", "session", "rita"),
     Principal("legacy-writer", "legacy", "session", "will"),
@@ -163,6 +173,14 @@ def _seed(db: Path, principal: Principal) -> Seeded:
     for scope in ("read", "write", "admin"):
         _, raw = keys.create_key(f"key-{scope}", scope)
         seeded.api_keys[scope] = raw
+    for label, binding, tags in (
+        ("api-key-renewal-report-all", "all", ""),
+        ("api-key-renewal-report-bound", "tags", "A"),
+    ):
+        _, raw = keys.create_key(
+            label, "renewal-report", binding=binding, bound_tags=tags
+        )
+        seeded.api_keys[label] = raw
     return seeded
 
 
@@ -407,7 +425,12 @@ def _authenticate(client: TestClient, principal: Principal, seeded: Seeded) -> d
         token = create_session(principal.username, security, version=0, roles=[LOCAL_USER_CLAIM])
         client.cookies.set(SESSION_COOKIE, token)
     elif principal.kind == "api_key":
-        return {"Authorization": f"Bearer {seeded.api_keys[principal.key_scope]}"}
+        key = (
+            principal.name
+            if principal.key_scope == "renewal-report"
+            else principal.key_scope
+        )
+        return {"Authorization": f"Bearer {seeded.api_keys[key]}"}
     return {}
 
 
@@ -461,6 +484,15 @@ def run_matrix_for(
                     **_body_for(route, path),
                 )
                 outcomes[key] = _classify(resp, seeded)
+        if principal.key_scope == "renewal-report":
+            for method in ("GET", "POST"):
+                resp = client.request(
+                    method,
+                    "/api/renewal-reports",
+                    headers=headers,
+                    follow_redirects=False,
+                )
+                outcomes[f"{method} /api/renewal-reports"] = _classify(resp, seeded)
     return outcomes
 
 

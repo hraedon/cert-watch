@@ -768,6 +768,32 @@ def test_every_get_route_is_in_the_matrix() -> None:
     assert not empty, f"routes the matrix never requests: {sorted(empty)}"
 
 
+def test_renewal_report_key_get_allowlist_refuses_every_registered_get_route(
+    estate: _Estate,
+) -> None:
+    """All existing GETs have one byte-identical response before routing."""
+    from cert_watch.database.api_keys import SqliteApiKeyRepository
+
+    db = estate.full_dir / "cert-watch.sqlite3"
+    _, raw = SqliteApiKeyRepository(db).create_key(
+        "renewal-matrix", "renewal-report", binding="tags", bound_tags="payments"
+    )
+    headers = {"Authorization": f"Bearer {raw}"}
+    responses: dict[str, tuple[int, bytes]] = {}
+    with _client(estate.full_dir, None) as client:
+        for path in _get_routes():
+            in_urls, out_urls = _requests_for(path, estate)
+            urls = [*in_urls, *(url for url, _ in out_urls)]
+            for url in urls or [path]:
+                response = client.get(url, headers=headers, follow_redirects=False)
+                responses[url] = (response.status_code, response.content)
+
+    assert responses
+    assert set(responses.values()) == {
+        (403, b'{"error":"forbidden for this key"}')
+    }
+
+
 @pytest.mark.parametrize("user", _USERS)
 def test_no_out_of_scope_identifier_in_any_response(runs: dict[str, _Run], user: str) -> None:
     leaks: dict[str, list[str]] = {}

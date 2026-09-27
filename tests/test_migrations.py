@@ -1001,7 +1001,7 @@ def test_migration_0033_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
         conn.commit()
 
     assert run_pending_migrations(db, backup=False) == [
-        "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044"
+        "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044", "0045"
     ]
     with sqlite3.connect(str(db)) as conn:
         assert "deferred_since" in _table_columns(conn, "alerts")
@@ -1025,7 +1025,7 @@ def test_migration_0033_tolerates_a_column_added_by_hand_without_the_ledger(
         conn.commit()
 
     assert run_pending_migrations(db, backup=False) == [
-        "0033", "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044"
+        "0033", "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044", "0045"
     ]
 
 
@@ -1067,7 +1067,7 @@ def test_migration_0034_backfills_existing_alerts_with_their_trigger_row(
         conn.commit()
 
     assert run_pending_migrations(db, backup=False) == [
-        "0034", "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044"
+        "0034", "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044", "0045"
     ]
     with sqlite3.connect(str(db)) as conn:
         row = conn.execute(
@@ -1099,7 +1099,7 @@ def test_migration_0034_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
         conn.commit()
 
     assert run_pending_migrations(db, backup=False) == [
-        "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044"
+        "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044", "0045"
     ]
     with sqlite3.connect(str(db)) as conn:
         assert "trigger_cert_id" in _table_columns(conn, "alerts")
@@ -1123,7 +1123,7 @@ def test_migration_0034_tolerates_a_column_added_by_hand_without_the_ledger(
         conn.commit()
 
     assert run_pending_migrations(db, backup=False) == [
-        "0034", "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044"
+        "0034", "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044", "0045"
     ]
 
 
@@ -1175,7 +1175,7 @@ def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) ->
         "0041",
         "0042",
         "0043",
-        "0044",
+        "0044", "0045",
     ]
 
     with sqlite3.connect(str(db)) as conn:
@@ -1213,7 +1213,7 @@ def test_reconciled_migrations_upgrade_old_review_feature_database(
         "0041",
         "0042",
         "0043",
-        "0044",
+        "0044", "0045",
     ]
 
     with sqlite3.connect(str(db)) as conn:
@@ -1796,7 +1796,7 @@ def test_migration_0044_versions_and_refreshes_existing_0043_cache(
         conn.commit()
 
     monkeypatch.setattr(runner, "_MIGRATIONS", migrations)
-    assert runner.run_pending_migrations(db, backup=False) == ["0044"]
+    assert runner.run_pending_migrations(db, backup=False) == ["0044", "0045"]
     with sqlite3.connect(str(db)) as conn:
         row = conn.execute(
             """SELECT classification, classifier_version, deployment_count,
@@ -1811,3 +1811,30 @@ def test_migration_0044_versions_and_refreshes_existing_0043_cache(
         }
     assert row == ("likely-automated", CLASSIFIER_VERSION, 3, 3)
     assert "invalidate_renewal_analytics_replace" in triggers
+
+
+def test_migration_0045_adds_explicit_all_binding_to_existing_keys(tmp_path: Path) -> None:
+    from cert_watch.migrations.m0015_api_keys import upgrade as create_api_keys
+    from cert_watch.migrations.m0045_api_key_bindings import upgrade
+
+    db = tmp_path / "pre-0045.sqlite3"
+    with sqlite3.connect(db) as conn:
+        create_api_keys(conn)
+        conn.execute(
+            "INSERT INTO api_keys "
+            "(id, key_hash, name, scope, created_at, revoked) "
+            "VALUES ('old', 'hash', 'old key', 'read', '2026-09-27', 0)"
+        )
+        upgrade(conn)
+        upgrade(conn)
+        row = conn.execute(
+            "SELECT binding, bound_tags FROM api_keys WHERE id = 'old'"
+        ).fetchone()
+        assert row == ("all", "")
+        binding_info = next(
+            column for column in conn.execute("PRAGMA table_info(api_keys)")
+            if column[1] == "binding"
+        )
+        assert binding_info[4] is None  # no default: creation must be explicit
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("UPDATE api_keys SET binding = 'unknown' WHERE id = 'old'")

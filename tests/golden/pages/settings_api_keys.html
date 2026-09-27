@@ -117,15 +117,15 @@
         each is shown exactly once, at creation.
       </div>
     </div>
-    <div class="cw-note t-warn">
+    <div class="cw-note">
 
 
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
 
 
       <div>
-        API keys are not tag-scoped: any key sees the whole fleet. Scope-limited
-        keys are tracked as follow-up work.
+        Read, write, and admin keys cover the whole fleet. Renewal-report keys
+        are limited to reporting routes and can be bound to host tags.
       </div>
     </div>
   </div>
@@ -149,7 +149,25 @@
             <option value="read">read — GET only</option>
             <option value="write">write — create / update</option>
             <option value="admin">admin — full, incl. settings</option>
+            <option value="renewal-report">renewal-report — report renewals only</option>
           </select>
+        </div>
+        <div class="cw-field" role="radiogroup" aria-labelledby="api_key_binding_label"
+             data-testid="api-key-binding-options">
+          <span class="cw-label" id="api_key_binding_label">Renewal-report binding</span>
+          <label class="cw-check">
+            <input type="radio" name="binding" value="all"> All endpoints
+          </label>
+          <label class="cw-check">
+            <input type="radio" name="binding" value="tags"> Selected host tags
+          </label>
+          <span class="cw-hint">Required only for renewal-report keys; neither choice is preselected.</span>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="api_key_bound_tags">Host tags</label>
+          <input class="cw-input" type="text" id="api_key_bound_tags" name="bound_tags"
+                 placeholder="production, edge" data-testid="api-key-bound-tags-input">
+          <span class="cw-hint">One or more comma-separated tags when “selected host tags” is chosen.</span>
         </div>
       </div>
       <div class="cw-form-foot">

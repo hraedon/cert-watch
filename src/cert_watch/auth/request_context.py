@@ -120,9 +120,19 @@ _API_KEY_SCOPE_ROLE = {
     "admin": ROLE_ADMIN,
 }
 
+_RENEWAL_REPORT_SCOPE = "renewal-report"
+_RENEWAL_REPORT_ROUTES = frozenset({
+    ("GET", "/api/renewal-reports"),
+    ("POST", "/api/renewal-reports"),
+})
+_RENEWAL_REPORT_FORBIDDEN = "forbidden for this key"
+
 
 def authenticate_api_key(
-    request: Request, db_path: str | Path | None
+    request: Request,
+    db_path: str | Path | None,
+    *,
+    renewal_report_only: bool = False,
 ) -> AuthContext | None:
     """Authenticate an ``Authorization: Bearer cwk_…`` API key.
 
@@ -142,9 +152,23 @@ def authenticate_api_key(
 
     result = SqliteApiKeyRepository(
         db_path, security=_request_security(request)
-    ).verify_key(token)
+    ).verify_key(token, renewal_report_only=renewal_report_only)
     if result is None:
         return None
+    if result.scope == _RENEWAL_REPORT_SCOPE:
+        ctx = AuthContext.renewal_report_key(
+            result.name,
+            principal_id=result.id,
+            binding=result.binding,
+            bound_tags=result.bound_tags,
+        )
+        request.scope["auth_user"] = result.name
+        request.state.auth_context = ctx
+        request.state.api_key_auth = True
+        if (request.method, request.url.path) not in _RENEWAL_REPORT_ROUTES:
+            request.state.api_key_forbidden = True
+            return None
+        return ctx
     role = _API_KEY_SCOPE_ROLE.get(result.scope)
     if role is None:
         logger.warning("rejecting API key %s with unknown scope", result.id)
@@ -154,6 +178,7 @@ def authenticate_api_key(
         tier=role,
         roles=[role],
         principal_id=result.id,
+        principal_kind="api-key",
     )
     request.scope["auth_user"] = result.name
     request.state.auth_context = ctx
@@ -213,6 +238,15 @@ def resolve_session_user(request: Request) -> SessionUser:
     Attaches the AuthContext on success. ``error`` is ``"unauthenticated"``
     when neither credential is valid.
     """
+    if getattr(request.state, "api_key_forbidden", False):
+        return SessionUser(error=_RENEWAL_REPORT_FORBIDDEN, api_key_auth=True)
+    existing = getattr(request.state, "auth_context", None)
+    if (
+        existing is not None
+        and getattr(existing, "principal_kind", "") == _RENEWAL_REPORT_SCOPE
+    ):
+        return SessionUser(user=existing.username, api_key_auth=True)
+
     token = request.cookies.get(SESSION_COOKIE, "")
     db_path = _request_db_path(request)
     info = decode_session(token, _request_security(request))
@@ -230,6 +264,8 @@ def resolve_session_user(request: Request) -> SessionUser:
     api_ctx = authenticate_api_key(request, db_path)
     if api_ctx is not None:
         return SessionUser(user=api_ctx.username, api_key_auth=True)
+    if getattr(request.state, "api_key_forbidden", False):
+        return SessionUser(error=_RENEWAL_REPORT_FORBIDDEN, api_key_auth=True)
     return SessionUser(error="unauthenticated")
 
 
@@ -242,10 +278,27 @@ async def auth_middleware(
     The /api/* data routes require auth: unauthenticated API requests get a
     401, unauthenticated UI requests redirect to /login.
     """
+    path = request.url.path
+    # Renewal-report keys are capability credentials with a two-route
+    # allowlist. Inspect them before public-path routing so every other path,
+    # including static files and unknown routes, has one indistinguishable
+    # refusal. Existing key scopes retain their normal route behaviour.
+    authorization = request.headers.get("authorization", "")
+    if authorization.startswith("Bearer cwk_"):
+        api_ctx = authenticate_api_key(
+            request, _request_db_path(request), renewal_report_only=True
+        )
+        if getattr(request.state, "api_key_forbidden", False):
+            return JSONResponse(
+                content={"error": _RENEWAL_REPORT_FORBIDDEN}, status_code=403
+            )
+        if (
+            api_ctx is not None
+            and getattr(api_ctx, "principal_kind", "") == _RENEWAL_REPORT_SCOPE
+        ):
+            return await call_next(request)
     if not _is_auth_enabled(request):
         return await call_next(request)
-
-    path = request.url.path
     if is_public_path(path, request):
         return await call_next(request)
 
@@ -253,7 +306,6 @@ async def auth_middleware(
         return await call_next(request)
 
     # Unauthenticated
-    authorization = request.headers.get("authorization", "")
     cert_watch_key_presented = authorization.startswith("Bearer cwk_")
     if (
         cert_watch_key_presented

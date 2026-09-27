@@ -45,21 +45,34 @@ async def api_keys_create(
     form = await request.form()
     name = str(form.get("name") or "").strip()
     scope = str(form.get("scope") or "read")
+    raw_binding = form.get("binding")
+    binding = (str(raw_binding) or None) if raw_binding is not None else None
+    bound_tags = str(form.get("bound_tags") or "")
     if not name:
         return _render_api_keys(request, error="A name is required.")
     if scope not in VALID_SCOPES:
         return _render_api_keys(request, error="Invalid scope.")
 
     repo = _repository(request)
-    with get_write_lock():
-        entry, raw_token = repo.create_key(name, scope)
+    try:
+        with get_write_lock():
+            entry, raw_token = repo.create_key(
+                name, scope, binding=binding, bound_tags=bound_tags
+            )
+    except ValueError as exc:
+        return _render_api_keys(request, error=str(exc))
     record_audit(
         _db_path(request),
         actor=resolve_actor(request),
         action="api_key.create",
         target_type="api_key",
         target_id=entry.id,
-        detail={"name": name, "scope": scope},
+        detail={
+            "name": name,
+            "scope": scope,
+            "binding": entry.binding,
+            "bound_tags": list(entry.bound_tags),
+        },
         source_ip=resolve_source_ip(request),
     )
     return _render_api_keys(request, new_token=raw_token, new_name=name)

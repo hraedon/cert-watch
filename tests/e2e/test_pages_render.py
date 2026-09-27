@@ -147,6 +147,30 @@ def test_api_keys_reachable_from_settings(page: Page, cert_watch_server: str) ->
     expect(page.get_by_test_id("api-keys-heading")).to_be_visible()
 
 
+def test_renewal_report_key_requires_explicit_binding_in_ui(
+    page: Page, cert_watch_server: str,
+) -> None:
+    page.goto(f"{cert_watch_server}/settings/api-keys")
+    page.get_by_test_id("api-key-name-input").fill("renewal-hook")
+    page.get_by_test_id("api-key-scope-select").select_option("renewal-report")
+    page.get_by_test_id("api-key-create-btn").click()
+    expect(page.get_by_test_id("api-keys-error")).to_contain_text("explicit binding")
+
+    page.get_by_test_id("api-key-name-input").fill("renewal-hook")
+    page.get_by_test_id("api-key-scope-select").select_option("renewal-report")
+    page.get_by_test_id("api-key-binding-options").get_by_label(
+        "Selected host tags"
+    ).check()
+    page.get_by_test_id("api-key-bound-tags-input").fill("Production, edge")
+    page.get_by_test_id("api-key-create-btn").click()
+
+    expect(page.get_by_test_id("api-key-token")).to_be_visible()
+    expect(page.get_by_test_id("api-keys-table")).to_contain_text("renewal-report")
+    expect(page.get_by_test_id("api-keys-table")).to_contain_text(
+        "host tags: Production, edge"
+    )
+
+
 # ── Certificate detail page (C2) ───────────────────────────────────────────
 
 

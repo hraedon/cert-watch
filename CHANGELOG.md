@@ -6,6 +6,12 @@ All notable changes to cert-watch are documented in this file.
 
 ### Security
 
+- Added a least-privilege `renewal-report` API-key scope with an explicit
+  all-endpoints or host-tag binding. These keys have no certificate or
+  settings permissions and are uniformly refused outside the future
+  `GET`/`POST /api/renewal-reports` routes. A separate hash prefix makes older
+  binaries reject them rather than reinterpret them after a downgrade (#118 S1).
+
 - Generic JSON webhook templates now JSON-escape certificate-derived values
   for one string level. JSON mode requires a `{`-leading template whose neutral
   rendering is an object; bracketed, placeholder-only and form-looking
@@ -37,6 +43,8 @@ All notable changes to cert-watch are documented in this file.
 
 ### Upgrade notes
 
+- Migration 0045 adds explicit binding metadata to API keys. Existing keys
+  remain bound to all endpoints. See [UPGRADING.md](UPGRADING.md).
 - Migration 0044 versions and backfills persisted renewal classifications and
   replaces the certificate-history insert trigger. See
   [UPGRADING.md](UPGRADING.md).

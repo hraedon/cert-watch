@@ -17,7 +17,13 @@ from fastapi import Request
 from fastapi.exceptions import HTTPException
 
 from cert_watch.audit import audit_actor_display, list_audit, record_audit, resolve_actor
-from cert_watch.auth.guards import require_admin, require_auth, write_guard
+from cert_watch.auth.guards import (
+    renewal_report_binding,
+    renewal_report_guard,
+    require_admin,
+    require_auth,
+    write_guard,
+)
 from cert_watch.auth.request_context import authenticate_api_key
 from cert_watch.database import init_schema
 from cert_watch.database.api_keys import SqliteApiKeyRepository, hash_token
@@ -43,6 +49,56 @@ def test_create_returns_prefixed_token_and_stores_only_hash(repo):
         row = conn.execute("SELECT key_hash FROM api_keys WHERE id = ?", (entry.id,)).fetchone()
     assert row["key_hash"] == hash_token(raw)
     assert row["key_hash"] != raw
+
+
+def test_renewal_report_key_uses_downgrade_safe_hash_prefix(repo):
+    entry, raw = repo.create_key("renewal-hook", "renewal-report", binding="all")
+    with repo_conn(repo) as conn:
+        stored = conn.execute(
+            "SELECT key_hash FROM api_keys WHERE id = ?", (entry.id,)
+        ).fetchone()["key_hash"]
+
+    assert stored.startswith("rr-hmac:")
+
+    # Simulate the complete 1.1.x verifier candidate set: current/legacy HMAC
+    # plus the pre-HMAC SHA-256 form. It has no rr-hmac candidate.
+    old_candidates = [
+        hash_token(raw),
+        hash_token(raw, pepper=b"cert-watch-default-pepper"),
+        hashlib.sha256(raw.encode()).hexdigest(),
+    ]
+    assert stored not in old_candidates
+    with repo_conn(repo) as conn:
+        placeholders = ",".join("?" for _ in old_candidates)
+        assert conn.execute(
+            f"SELECT id FROM api_keys WHERE key_hash IN ({placeholders})",
+            old_candidates,
+        ).fetchone() is None
+
+
+def test_renewal_report_creation_requires_explicit_nonempty_binding(repo):
+    for binding, tags in ((None, None), ("", ""), ("tags", " , ")):
+        with pytest.raises(ValueError):
+            repo.create_key(
+                "renewal-hook", "renewal-report", binding=binding, bound_tags=tags
+            )
+
+    all_entry, _ = repo.create_key("all", "renewal-report", binding="all")
+    tags_entry, _ = repo.create_key(
+        "tags", "renewal-report", binding="tags", bound_tags=" Prod,edge,prod "
+    )
+    assert (all_entry.binding, all_entry.bound_tags) == ("all", ())
+    assert (tags_entry.binding, tags_entry.bound_tags) == ("tags", ("Prod", "edge"))
+
+
+@pytest.mark.parametrize("scope", ["read", "write", "admin"])
+def test_existing_scopes_are_all_bound_and_refuse_tags(repo, scope):
+    entry, _ = repo.create_key(scope, scope)
+    assert (entry.binding, entry.bound_tags) == ("all", ())
+    with pytest.raises(ValueError):
+        repo.create_key(scope, scope, binding="tags", bound_tags="prod")
+    with pytest.raises(ValueError):
+        repo.create_key(scope, scope, binding="all", bound_tags="prod")
 
 
 def test_verify_valid_token(repo):
@@ -74,8 +130,8 @@ def test_verify_legacy_sha256_upgrades_hash_and_valid_timestamp(repo):
     with repo_conn(repo) as conn:
         conn.execute(
             "INSERT INTO api_keys"
-            " (id, key_hash, name, scope, created_at, revoked)"
-            " VALUES (?, ?, ?, ?, ?, 0)",
+            " (id, key_hash, name, scope, binding, created_at, revoked)"
+            " VALUES (?, ?, ?, ?, 'all', ?, 0)",
             ("legacy-sha", legacy_hash, "legacy", "read", created),
         )
         conn.commit()
@@ -151,8 +207,8 @@ def test_prior_hmac_peppers_authenticate_and_upgrade(
     with repo_conn(SimpleNamespace(db_path=db)) as conn:
         conn.execute(
             "INSERT INTO api_keys"
-            " (id, key_hash, name, scope, created_at, revoked)"
-            " VALUES (?, ?, ?, ?, ?, 0)",
+            " (id, key_hash, name, scope, binding, created_at, revoked)"
+            " VALUES (?, ?, ?, ?, 'all', ?, 0)",
             (
                 "legacy-hmac",
                 hash_token(raw, pepper=legacy_pepper),
@@ -218,10 +274,15 @@ class _Provider:
     """A non-NoAuth provider so the auth path is exercised."""
 
 
-def _make_request(db_path, *, bearer=None, role_map=None, security=None) -> Request:
+def _make_request(
+    db_path, *, bearer=None, role_map=None, security=None,
+    method="POST", path="/api/test", cookie=None,
+) -> Request:
     headers = []
     if bearer is not None:
         headers.append((b"authorization", f"Bearer {bearer}".encode()))
+    if cookie is not None:
+        headers.append((b"cookie", cookie.encode()))
     settings = SimpleNamespace(
         db_path=str(db_path),
         role_map=role_map or {},
@@ -235,8 +296,8 @@ def _make_request(db_path, *, bearer=None, role_map=None, security=None) -> Requ
     )
     scope = {
         "type": "http",
-        "method": "POST",
-        "path": "/api/test",
+        "method": method,
+        "path": path,
         "headers": headers,
         "app": app,
         "client": ("127.0.0.1", 12345),
@@ -365,6 +426,65 @@ async def test_require_admin_requires_admin_scope(seeded):
     assert await require_admin(admin_req) == "root"
 
 
+@pytest.mark.anyio
+async def test_renewal_report_principal_and_guard(seeded):
+    db, repo = seeded
+    entry, raw = repo.create_key(
+        "renewal-hook", "renewal-report", binding="tags", bound_tags="Prod,edge"
+    )
+    request = _make_request(db, bearer=raw, path="/api/renewal-reports")
+
+    assert await renewal_report_guard(request) == "renewal-hook"
+    context = request.state.auth_context
+    assert context.principal_id == entry.id
+    assert context.principal_kind == "renewal-report"
+    assert context.permissions == frozenset()
+    assert context.may_write() is False
+    assert context.is_admin is False
+    assert renewal_report_binding(context) == ("Prod", "edge")
+
+    _, all_raw = repo.create_key(
+        "all-renewals", "renewal-report", binding="all"
+    )
+    all_request = _make_request(
+        db, bearer=all_raw, path="/api/renewal-reports"
+    )
+    assert await renewal_report_guard(all_request) == "all-renewals"
+    assert renewal_report_binding(all_request.state.auth_context) == "all"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("scope", ["read", "write", "admin"])
+async def test_renewal_report_guard_refuses_other_key_scopes(seeded, scope):
+    db, repo = seeded
+    _, raw = repo.create_key(scope, scope)
+    request = _make_request(db, bearer=raw, path="/api/renewal-reports")
+    with pytest.raises(HTTPException) as exc:
+        await renewal_report_guard(request)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_renewal_report_guard_refuses_plain_session(seeded):
+    from cert_watch.auth import SESSION_COOKIE, create_session
+
+    db, _ = seeded
+    security = SecurityContext(
+        signing_key="session-signing-key",
+        csrf_secret="session-csrf-key",
+    )
+    token = create_session("human-admin", security, version=0)
+    request = _make_request(
+        db,
+        security=security,
+        path="/api/renewal-reports",
+        cookie=f"{SESSION_COOKIE}={token}",
+    )
+    with pytest.raises(HTTPException) as exc:
+        await renewal_report_guard(request)
+    assert exc.value.status_code == 403
+
+
 # ── HTTP end-to-end (routing + middleware mounted) ─────────────────────────
 
 
@@ -414,6 +534,175 @@ def test_bearer_auth_http_end_to_end(reload_app):
             json={"owner_name": "x"},
         )
         assert allowed.status_code != 403
+
+
+def test_renewal_report_key_route_allowlist_is_uniform(reload_app):
+    from fastapi.testclient import TestClient
+
+    from cert_watch.auth.local_admin import _scrypt_hash
+    from cert_watch.config import Settings
+
+    app_mod = reload_app(
+        CERT_WATCH_LOCAL_ADMIN_USER="admin",
+        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("pw-for-tests-1"),
+    )
+    db = Settings.from_env().db_path
+    init_schema(db)
+    repo = SqliteApiKeyRepository(db)
+    _, raw = repo.create_key("renewal-hook", "renewal-report", binding="all")
+    headers = {"Authorization": f"Bearer {raw}"}
+
+    with TestClient(app_mod.app) as client:
+        refusals = [
+            client.get(path, headers=headers, follow_redirects=False)
+            for path in (
+                "/", "/metrics", "/api/health", "/healthz",
+                "/static/css/cw.css", "/does-not-exist",
+                "/api/renewal-reports/",
+            )
+        ]
+        head = client.head("/api/renewal-reports", headers=headers)
+        refusals.append(client.put("/api/renewal-reports", headers=headers))
+        for method in (client.get, client.post):
+            response = method("/api/renewal-reports", headers=headers)
+            assert response.status_code == 404
+
+    assert {(r.status_code, r.content) for r in refusals} == {
+        (403, b'{"error":"forbidden for this key"}')
+    }
+    assert head.status_code == 403  # HTTP HEAD omits the JSON body by definition.
+
+
+def test_public_path_does_not_consume_existing_key_scopes(reload_app):
+    """The report-key precheck leaves read/write/admin behavior unchanged."""
+    from fastapi.testclient import TestClient
+
+    from cert_watch.auth.local_admin import _scrypt_hash
+    from cert_watch.config import Settings
+
+    app_mod = reload_app(
+        CERT_WATCH_LOCAL_ADMIN_USER="admin",
+        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("pw-for-tests-1"),
+    )
+    db = Settings.from_env().db_path
+    init_schema(db)
+    repo = SqliteApiKeyRepository(db)
+    entry, raw = repo.create_key("reader", "read")
+
+    with TestClient(app_mod.app) as client:
+        response = client.get(
+            "/healthz", headers={"Authorization": f"Bearer {raw}"}
+        )
+
+    assert response.status_code == 200
+    refreshed = next(key for key in repo.list_keys() if key.id == entry.id)
+    assert refreshed.last_used_at is None
+
+
+def test_renewal_report_allowlist_applies_when_auth_is_disabled(reload_app):
+    from fastapi.testclient import TestClient
+
+    from cert_watch.config import Settings
+
+    app_mod = reload_app()
+    db = Settings.from_env().db_path
+    repo = SqliteApiKeyRepository(db)
+    _, raw = repo.create_key("renewal-hook", "renewal-report", binding="all")
+
+    with TestClient(app_mod.app) as client:
+        response = client.get("/", headers={"Authorization": f"Bearer {raw}"})
+
+    assert response.status_code == 403
+    assert response.content == b'{"error":"forbidden for this key"}'
+
+
+def test_report_hash_family_cannot_authenticate_a_regular_scope(reload_app):
+    from fastapi.testclient import TestClient
+
+    from cert_watch.auth.local_admin import _scrypt_hash
+    from cert_watch.config import Settings
+
+    app_mod = reload_app(
+        CERT_WATCH_LOCAL_ADMIN_USER="admin",
+        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("pw-for-tests-1"),
+    )
+    db = Settings.from_env().db_path
+    repo = SqliteApiKeyRepository(db)
+    entry, raw = repo.create_key(
+        "renewal-hook", "renewal-report", binding="all"
+    )
+    with repo_conn(repo) as conn:
+        conn.execute("UPDATE api_keys SET scope = 'read' WHERE id = ?", (entry.id,))
+        conn.commit()
+
+    with TestClient(app_mod.app) as client:
+        response = client.get(
+            "/api/certificates", headers={"Authorization": f"Bearer {raw}"}
+        )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize("corruption", ["empty-tags", "unknown-binding"])
+def test_corrupt_renewal_report_binding_is_unauthenticated(reload_app, corruption):
+    from fastapi.testclient import TestClient
+
+    from cert_watch.auth.local_admin import _scrypt_hash
+    from cert_watch.config import Settings
+
+    app_mod = reload_app(
+        CERT_WATCH_LOCAL_ADMIN_USER="admin",
+        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("pw-for-tests-1"),
+    )
+    db = Settings.from_env().db_path
+    init_schema(db)
+    repo = SqliteApiKeyRepository(db)
+    entry, raw = repo.create_key(
+        "renewal-hook", "renewal-report", binding="tags", bound_tags="prod"
+    )
+    with repo_conn(repo) as conn:
+        if corruption == "unknown-binding":
+            conn.execute("PRAGMA ignore_check_constraints = ON")
+            conn.execute(
+                "UPDATE api_keys SET binding = 'future' WHERE id = ?", (entry.id,)
+            )
+        else:
+            conn.execute(
+                "UPDATE api_keys SET bound_tags = '' WHERE id = ?", (entry.id,)
+            )
+        conn.commit()
+
+    with TestClient(app_mod.app) as client:
+        response = client.get(
+            "/api/renewal-reports",
+            headers={"Authorization": f"Bearer {raw}"},
+        )
+    assert response.status_code == 401
+    assert response.json() == {"error": "unauthenticated"}
+
+
+def test_revoked_renewal_report_key_is_unauthenticated(reload_app):
+    from fastapi.testclient import TestClient
+
+    from cert_watch.auth.local_admin import _scrypt_hash
+    from cert_watch.config import Settings
+
+    app_mod = reload_app(
+        CERT_WATCH_LOCAL_ADMIN_USER="admin",
+        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("pw-for-tests-1"),
+    )
+    db = Settings.from_env().db_path
+    init_schema(db)
+    repo = SqliteApiKeyRepository(db)
+    entry, raw = repo.create_key("renewal-hook", "renewal-report", binding="all")
+    assert repo.revoke_key(entry.id)
+
+    with TestClient(app_mod.app) as client:
+        response = client.get(
+            "/api/renewal-reports",
+            headers={"Authorization": f"Bearer {raw}"},
+        )
+    assert response.status_code == 401
 
 
 def test_unknown_scope_is_unauthenticated_on_api_and_html_routes(
@@ -530,12 +819,43 @@ def test_api_keys_management_routes(reload_app):
         body = created.json()
         assert body["token"].startswith("cwk_")
         assert body["scope"] == "write"
+        assert body["binding"] == "all"
+        assert body["bound_tags"] == []
         new_id = body["id"]
 
         # Bad scope is rejected.
         assert client.post(
             "/api/api-keys", json={"name": "x", "scope": "root"}
         ).status_code == 400
+
+        # Renewal-report bindings are explicit and use the shared tag parser.
+        assert client.post(
+            "/api/api-keys", json={"name": "rr", "scope": "renewal-report"}
+        ).status_code == 400
+        assert client.post(
+            "/api/api-keys",
+            json={
+                "name": "rr", "scope": "renewal-report",
+                "binding": "tags", "bound_tags": [],
+            },
+        ).status_code == 400
+        assert client.post(
+            "/api/api-keys",
+            json={
+                "name": "bad-read", "scope": "read",
+                "binding": "tags", "bound_tags": ["prod"],
+            },
+        ).status_code == 400
+        report_key = client.post(
+            "/api/api-keys",
+            json={
+                "name": "rr", "scope": "renewal-report",
+                "binding": "tags", "bound_tags": [" Prod ", "edge", "prod"],
+            },
+        )
+        assert report_key.status_code == 201
+        assert report_key.json()["binding"] == "tags"
+        assert report_key.json()["bound_tags"] == ["Prod", "edge"]
 
         # List shows the key, never a token/hash.
         listed = client.get("/api/api-keys").json()["api_keys"]

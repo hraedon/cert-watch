@@ -179,6 +179,15 @@ from cert_watch.migrations.m0044_renewal_classifier_version import (
 from cert_watch.migrations.m0044_renewal_classifier_version import (
     upgrade as renewal_classifier_version_upgrade,
 )
+from cert_watch.migrations.m0045_api_key_bindings import (
+    DESCRIPTION as api_key_bindings_description,
+)
+from cert_watch.migrations.m0045_api_key_bindings import (
+    MIGRATION_ID as api_key_bindings_id,
+)
+from cert_watch.migrations.m0045_api_key_bindings import (
+    upgrade as api_key_bindings_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -332,3 +341,4 @@ runner.register(
     renewal_classifier_version_description,
     renewal_classifier_version_upgrade,
 )
+runner.register(api_key_bindings_id, api_key_bindings_description, api_key_bindings_upgrade)

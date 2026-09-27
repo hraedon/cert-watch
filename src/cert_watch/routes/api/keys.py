@@ -41,6 +41,8 @@ def _entry_json(entry: ApiKeyEntry) -> dict[str, Any]:
         "id": entry.id,
         "name": entry.name,
         "scope": entry.scope,
+        "binding": entry.binding,
+        "bound_tags": list(entry.bound_tags),
         "created_at": entry.created_at.isoformat(),
         "last_used_at": entry.last_used_at.isoformat() if entry.last_used_at else None,
         "revoked": entry.revoked,
@@ -67,6 +69,20 @@ async def api_create_key(
     raw_name = body.get("name")
     name = raw_name.strip() if isinstance(raw_name, str) else ""
     scope = body.get("scope") or "read"
+    binding = body.get("binding")
+    bound_tags_value = body.get("bound_tags")
+    bound_tags: str | None
+    if isinstance(bound_tags_value, list) and all(
+        isinstance(tag, str) for tag in bound_tags_value
+    ):
+        bound_tags = ",".join(bound_tags_value)
+    elif isinstance(bound_tags_value, str) or bound_tags_value is None:
+        bound_tags = bound_tags_value
+    else:
+        return JSONResponse(
+            content={"error": "bound_tags must be a string or list of strings"},
+            status_code=400,
+        )
     if not name:
         return JSONResponse(content={"error": "name is required"}, status_code=400)
     if scope not in VALID_SCOPES:
@@ -76,15 +92,25 @@ async def api_create_key(
         )
 
     repo = _repository(request)
-    with get_write_lock():
-        entry, raw_token = repo.create_key(name, scope)
+    try:
+        with get_write_lock():
+            entry, raw_token = repo.create_key(
+                name, scope, binding=binding, bound_tags=bound_tags
+            )
+    except ValueError as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=400)
     record_audit(
         _db_path(request),
         actor=resolve_actor(request),
         action="api_key.create",
         target_type="api_key",
         target_id=entry.id,
-        detail={"name": name, "scope": scope},
+        detail={
+            "name": name,
+            "scope": scope,
+            "binding": entry.binding,
+            "bound_tags": list(entry.bound_tags),
+        },
         source_ip=resolve_source_ip(request),
     )
     # The raw token is returned exactly once here and never stored.
