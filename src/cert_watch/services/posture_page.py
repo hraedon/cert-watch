@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from cert_watch.database import get_posture_for_certs, init_schema
 from cert_watch.database.connection import _connect
 from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
 from cert_watch.filters import subject_cn
+from cert_watch.posture import grade_contributing_findings
 
 logger = logging.getLogger("cert_watch.services.posture_page")
 
@@ -44,7 +46,10 @@ class PostureHeadline:
 
 
 def _reason(findings: list[Any]) -> str:
-    normalized = [finding for finding in findings if isinstance(finding, dict)]
+    normalized: list[Mapping[str, Any]] = [
+        finding for finding in findings if isinstance(finding, dict)
+    ]
+    normalized = grade_contributing_findings(normalized)
     for status in ("fail", "warn"):
         for finding in normalized:
             if str(finding.get("status") or "").casefold() == status:

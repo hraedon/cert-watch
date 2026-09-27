@@ -204,6 +204,7 @@ from cert_watch.database.kv_store import (
     kv_all,
     kv_get,
     kv_set,
+    kv_set_multi,
     kv_set_secret,
 )
 
@@ -353,6 +354,7 @@ __all__ = [  # noqa: RUF022 — exports are grouped by database subsystem
     "kv_all",
     "kv_get",
     "kv_set",
+    "kv_set_multi",
     "kv_set_secret",
     # session_versions
     "get_session_version",

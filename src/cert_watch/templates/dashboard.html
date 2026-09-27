@@ -156,7 +156,7 @@
     <button type="submit" class="cw-btn">Search</button>
     </form>
     {% endif %}
-    <nav class="cw-seg" aria-label="Inventory views">
+    <nav class="cw-seg" tabindex="0" aria-label="Inventory views">
       <a href="{{ browse_url() }}" class="{% if not pivot_view %}on{% endif %}" {% if not pivot_view %}aria-current="page"{% endif %}>Inventory</a>
       <a href="/browse?view=issuer" class="{% if pivot_view == 'issuer' %}on{% endif %}" {% if pivot_view == 'issuer' %}aria-current="page"{% endif %}>By issuer · all</a>
       <a href="/browse?view=owner" class="{% if pivot_view == 'owner' %}on{% endif %}" {% if pivot_view == 'owner' %}aria-current="page"{% endif %}>By owner · all</a>
@@ -216,7 +216,7 @@
   {% else %}
   {# ---- Table ---- #}
   <div class="cw-panel">
-    <div class="cw-table-clip">
+    <div class="cw-table-clip" tabindex="0" role="region" aria-label="Certificate inventory">
     {% if pivot_groups is not none %}
     <table class="cw-table">
       <thead>
@@ -434,11 +434,11 @@
         <div class="cw-form-grid">
           <div class="cw-field">
             <label class="cw-label" for="scan-owner-name">Owner</label>
-            <input class="cw-input" type="text" id="scan-owner-name" name="owner_name" placeholder="Platform team" data-testid="scan-owner-name-input">
+            <input class="cw-input" type="text" id="scan-owner-name" name="owner_name" maxlength="200" placeholder="Platform team" data-testid="scan-owner-name-input">
           </div>
           <div class="cw-field">
             <label class="cw-label" for="scan-owner-email">Owner email</label>
-            <input class="cw-input" type="email" id="scan-owner-email" name="owner_email" placeholder="platform@example.test" data-testid="scan-owner-email-input">
+            <input class="cw-input" type="email" id="scan-owner-email" name="owner_email" maxlength="254" placeholder="platform@example.test" data-testid="scan-owner-email-input">
           </div>
         </div>
         <div class="cw-field">

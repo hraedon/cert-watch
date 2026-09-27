@@ -176,7 +176,7 @@ SC-081 readiness <span class="cw-hint">47-day regime</span></a>
       <span class="cw-hint">lowest grades first · reason shown</span>
     </div>
 
-    <div class="cw-table-clip">
+    <div class="cw-table-clip" tabindex="0" role="region" aria-label="Certificate grade details">
       <table class="cw-table cw-mobile-wrap-table cw-mobile-card-table" data-testid="posture-offenders">
         <thead><tr><th>Certificate</th><th>Grade</th><th>Reason</th><th><span class="cw-sr">Open</span></th></tr></thead>
         <tbody>
@@ -184,7 +184,7 @@ SC-081 readiness <span class="cw-hint">47-day regime</span></a>
           <tr>
             <td data-label="Certificate"><a class="cw-id" href="/certificates/{{CERT_1_ID}}">intranet.demo.test</a><div class="cw-sub">O=Demo Estate,CN=intranet.demo.test</div></td>
             <td data-label="Grade"><span class="cw-grade t-warn" title="Posture grade B">B</span></td>
-            <td data-label="Reason">Incomplete chain — server missing intermediate(s)</td>
+            <td data-label="Reason">No failing posture checks recorded.</td>
             <td data-label=""><a class="cw-iconbtn sm" href="/certificates/{{CERT_1_ID}}" aria-label="Open intranet.demo.test">
 
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
@@ -195,7 +195,7 @@ SC-081 readiness <span class="cw-hint">47-day regime</span></a>
           <tr>
             <td data-label="Certificate"><a class="cw-id" href="/certificates/{{CERT_2_ID}}">ldaps.demo.test</a><div class="cw-sub">O=Demo Estate,CN=ldaps.demo.test</div></td>
             <td data-label="Grade"><span class="cw-grade t-warn" title="Posture grade B">B</span></td>
-            <td data-label="Reason">Incomplete chain — server missing intermediate(s)</td>
+            <td data-label="Reason">No failing posture checks recorded.</td>
             <td data-label=""><a class="cw-iconbtn sm" href="/certificates/{{CERT_2_ID}}" aria-label="Open ldaps.demo.test">
 
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
@@ -206,7 +206,7 @@ SC-081 readiness <span class="cw-hint">47-day regime</span></a>
           <tr>
             <td data-label="Certificate"><a class="cw-id" href="/certificates/{{CERT_3_ID}}">legacy.demo.test</a><div class="cw-sub">O=Demo Estate,CN=legacy.demo.test</div></td>
             <td data-label="Grade"><span class="cw-grade t-warn" title="Posture grade B">B</span></td>
-            <td data-label="Reason">Incomplete chain — server missing intermediate(s)</td>
+            <td data-label="Reason">No failing posture checks recorded.</td>
             <td data-label=""><a class="cw-iconbtn sm" href="/certificates/{{CERT_3_ID}}" aria-label="Open legacy.demo.test">
 
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
@@ -217,7 +217,7 @@ SC-081 readiness <span class="cw-hint">47-day regime</span></a>
           <tr>
             <td data-label="Certificate"><a class="cw-id" href="/certificates/{{CERT_4_ID}}">mail.demo.test</a><div class="cw-sub">O=Demo Estate,CN=mail.demo.test</div></td>
             <td data-label="Grade"><span class="cw-grade t-warn" title="Posture grade B">B</span></td>
-            <td data-label="Reason">Incomplete chain — server missing intermediate(s)</td>
+            <td data-label="Reason">No failing posture checks recorded.</td>
             <td data-label=""><a class="cw-iconbtn sm" href="/certificates/{{CERT_4_ID}}" aria-label="Open mail.demo.test">
 
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
@@ -228,7 +228,7 @@ SC-081 readiness <span class="cw-hint">47-day regime</span></a>
           <tr>
             <td data-label="Certificate"><a class="cw-id" href="/certificates/{{CERT_5_ID}}">vpn.demo.test</a><div class="cw-sub">O=Demo Estate,CN=vpn.demo.test</div></td>
             <td data-label="Grade"><span class="cw-grade t-warn" title="Posture grade B">B</span></td>
-            <td data-label="Reason">Incomplete chain — server missing intermediate(s)</td>
+            <td data-label="Reason">No failing posture checks recorded.</td>
             <td data-label=""><a class="cw-iconbtn sm" href="/certificates/{{CERT_5_ID}}" aria-label="Open vpn.demo.test">
 
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
@@ -299,7 +299,7 @@ Key families</span>
   <div class="cw-invgrid">
     <div class="cw-panel">
       <div class="cw-panel-head"><h2>Key algorithms</h2></div>
-      <table class="cw-table">
+      <table class="cw-table cw-compact-table">
         <thead><tr><th>Algorithm</th><th class="num">Count</th></tr></thead>
         <tbody>
 
@@ -310,7 +310,7 @@ Key families</span>
     </div>
     <div class="cw-panel">
       <div class="cw-panel-head"><h2>Signature hashes</h2></div>
-      <table class="cw-table">
+      <table class="cw-table cw-compact-table">
         <thead><tr><th>Hash</th><th class="num">Count</th></tr></thead>
         <tbody>
 
@@ -321,7 +321,7 @@ Key families</span>
     </div>
     <div class="cw-panel">
       <div class="cw-panel-head"><h2>Families</h2></div>
-      <table class="cw-table">
+      <table class="cw-table cw-compact-table">
         <thead><tr><th>Family</th><th class="num">Count</th></tr></thead>
         <tbody>
 

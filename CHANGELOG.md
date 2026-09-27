@@ -41,6 +41,15 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- S5 follow-up: mobile content wraps or uses labeled keyboard-scrollable table
+  regions instead of being clipped; Posture explains the checks that actually
+  determine a grade; moved and activity links keep accessible dark-theme
+  contrast; and Access sub-tabs follow their URL fragment.
+- Ownership fields now share whitespace normalization and hard size limits
+  across editing, Add, JSON, and CSV writes. Invalid daily schedule values are
+  rejected by both HTML and JSON policy writes, and an idempotent Add reports
+  when ownership seeds were intentionally not applied to an existing endpoint.
+
 - Accessibility (#126 S2): every page has a `<main>` landmark, every form
   field has an associated label, empty action-column headers are named for
   screen readers, and secondary text no longer uses `--text-3`, which failed

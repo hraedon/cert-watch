@@ -75,6 +75,7 @@ class HostCreateResult:
     host_ids: tuple[str, ...]
     scanned: int
     refused: int
+    owner_fields_skipped: int = 0
 
 
 @dataclass(frozen=True)
@@ -156,7 +157,7 @@ def _add_endpoints_authorized(
     hostname: str,
     ports: tuple[int, ...],
     **host_fields: Any,
-) -> list[tuple[str, int]]:
+) -> list[tuple[str, int, bool]]:
     """Add endpoints only while every existing endpoint remains writable.
 
     ``repo.add`` is idempotent: adding a monitored ``hostname:port`` again
@@ -173,14 +174,16 @@ def _add_endpoints_authorized(
     conn = _connect(repo.db_path)
     try:
         begin_immediate(conn)
+        existing_ports: set[int] = set()
         for port in ports:
             row = conn.execute(
                 "SELECT id FROM hosts WHERE hostname = ? AND port = ?", (hostname, port)
             ).fetchone()
             if row is not None:
                 ensure_write_scope_on(conn, auth, host_id=row["id"])
+                existing_ports.add(port)
         added = [
-            (repo.add(hostname, port, conn=conn, **host_fields), port)
+            (repo.add(hostname, port, conn=conn, **host_fields), port, port in existing_ports)
             for port in ports
         ]
         conn.commit()
@@ -273,7 +276,9 @@ async def create_hosts(
     starttls_mode: str = "",
     owner_name: str = "",
     owner_email: str = "",
+    owner_slack: str = "",
     renewal_method: str = "",
+    runbook_url: str = "",
     auth: Any,
     actor: str,
     source_ip: str | None,
@@ -302,13 +307,16 @@ async def create_hosts(
         raise HostValidationError("threshold_days must be at least 1")
     if scan_interval_out_of_range(scan_interval_hours):
         raise HostValidationError("scan interval must be between 1 and 8760 hours, or blank")
-    ownership = HostOwnershipUpdate(
-        owner_name=owner_name.strip(),
-        owner_email=owner_email.strip(),
-        renewal_method=renewal_method.strip(),
-    )
     try:
-        validate_host_ownership(ownership)
+        ownership = validate_host_ownership(
+            HostOwnershipUpdate(
+                owner_name=owner_name,
+                owner_email=owner_email,
+                owner_slack=owner_slack,
+                renewal_method=renewal_method,
+                runbook_url=runbook_url,
+            )
+        )
     except HostOwnershipValidationError as exc:
         raise HostValidationError(str(exc)) from None
     normalized_tags = _scoped_tags(auth, tags)
@@ -337,9 +345,11 @@ async def create_hosts(
             starttls_mode=starttls_mode,
             owner_name=ownership.owner_name or "",
             owner_email=ownership.owner_email or "",
+            owner_slack=ownership.owner_slack or "",
             renewal_method=ownership.renewal_method or "",
+            runbook_url=ownership.runbook_url or "",
         )
-    for host_id, candidate_port in added:
+    for host_id, candidate_port, _existing in added:
         record_audit(
             db_path,
             actor=actor,
@@ -350,8 +360,8 @@ async def create_hosts(
             source_ip=source_ip,
         )
 
-    async def scan(job: tuple[str, int]) -> ScanResult:
-        host_id, candidate_port = job
+    async def scan(job: tuple[str, int, bool]) -> ScanResult:
+        host_id, candidate_port, _existing = job
 
         def scope_guard(conn: Any) -> None:
             ensure_write_scope_on(conn, auth, host_id=host_id)
@@ -387,9 +397,20 @@ async def create_hosts(
 
     scans = await asyncio.gather(*(scan(job) for job in added))
     return HostCreateResult(
-        tuple(host_id for host_id, _ in added),
+        tuple(host_id for host_id, _, _ in added),
         sum(result.status == "success" for result in scans),
         sum(result.status == "refused" for result in scans),
+        sum(existing for _, _, existing in added)
+        if any(
+            (
+                ownership.owner_name,
+                ownership.owner_email,
+                ownership.owner_slack,
+                ownership.renewal_method,
+                ownership.runbook_url,
+            )
+        )
+        else 0,
     )
 
 
@@ -459,13 +480,16 @@ async def import_hosts_csv(
         if starttls_mode and starttls_mode not in STARTTLS_MODES:
             errors.append(f"row {row_number}: unsupported starttls_mode '{starttls_mode}'")
             continue
-        ownership = HostOwnershipUpdate(
-            owner_name=(row.get("owner_name") or "").strip(),
-            owner_email=(row.get("owner_email") or "").strip(),
-            renewal_method=(row.get("renewal_method") or "").strip(),
-        )
         try:
-            validate_host_ownership(ownership)
+            ownership = validate_host_ownership(
+                HostOwnershipUpdate(
+                    owner_name=row.get("owner_name") or "",
+                    owner_email=row.get("owner_email") or "",
+                    owner_slack=row.get("owner_slack") or "",
+                    renewal_method=row.get("renewal_method") or "",
+                    runbook_url=row.get("runbook_url") or "",
+                )
+            )
         except HostOwnershipValidationError as exc:
             errors.append(f"row {row_number}: {exc}")
             continue
@@ -486,7 +510,7 @@ async def import_hosts_csv(
             continue
         with get_write_lock():
             try:
-                [(host_id, _)] = _add_endpoints_authorized(
+                [(host_id, _, _existing)] = _add_endpoints_authorized(
                     repo,
                     auth,
                     hostname,
@@ -498,7 +522,9 @@ async def import_hosts_csv(
                     starttls_mode=starttls_mode,
                     owner_name=ownership.owner_name or "",
                     owner_email=ownership.owner_email or "",
+                    owner_slack=ownership.owner_slack or "",
                     renewal_method=ownership.renewal_method or "",
+                    runbook_url=ownership.runbook_url or "",
                 )
             except PermissionError as exc:
                 errors.append(f"row {row_number}: {exc}")

@@ -216,11 +216,11 @@ Edit host details</summary>
                 <div class="cw-form-grid">
                   <div class="cw-field">
                     <label class="cw-label" for="host-owner-name">Owner name</label>
-                    <input type="text" id="host-owner-name" name="owner_name" class="cw-input" value="Edge Team" placeholder="Team or individual">
+                    <input type="text" id="host-owner-name" name="owner_name" class="cw-input" maxlength="200" value="Edge Team" placeholder="Team or individual">
                   </div>
                   <div class="cw-field">
                     <label class="cw-label" for="host-owner-email">Owner email</label>
-                    <input type="text" id="host-owner-email" name="owner_email" class="cw-input" value="" placeholder="ops@example.com">
+                    <input type="text" id="host-owner-email" name="owner_email" class="cw-input" maxlength="254" value="" placeholder="ops@example.com">
                   </div>
 
                   <div class="cw-field">
@@ -234,7 +234,7 @@ Edit host details</summary>
                   </div>
                   <div class="cw-field wide">
                     <label class="cw-label" for="host-runbook-url">Runbook URL</label>
-                    <input type="text" id="host-runbook-url" name="runbook_url" class="cw-input" value="" placeholder="https://wiki.example.com/cert-renewal">
+                    <input type="text" id="host-runbook-url" name="runbook_url" class="cw-input" maxlength="2048" value="" placeholder="https://wiki.example.com/cert-renewal">
                   </div>
                 </div>
                 <div class="cw-form-foot">

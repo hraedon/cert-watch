@@ -343,7 +343,9 @@ async def add_host(
     starttls_mode: str = Form(""),
     owner_name: str = Form(""),
     owner_email: str = Form(""),
+    owner_slack: str = Form(""),
     renewal_method: str = Form(""),
+    runbook_url: str = Form(""),
     _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
     # Once framework parsing and guards complete, both adapters charge the
@@ -366,7 +368,9 @@ async def add_host(
             starttls_mode=starttls_mode,
             owner_name=owner_name,
             owner_email=owner_email,
+            owner_slack=owner_slack,
             renewal_method=renewal_method,
+            runbook_url=runbook_url,
             auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
@@ -380,9 +384,15 @@ async def add_host(
     # (common ports): Browse, filtered to the host name.
     if len(created.host_ids) == 1:
         query = "added=1"
+        warnings: list[str] = []
+        if created.owner_fields_skipped:
+            warnings.append(
+                "This endpoint was already monitored; supplied ownership details were not applied."
+            )
         if created.refused:
-            warning = "Host added; its follow-up scan was refused after access changed."
-            query += f"&warning={quote(warning)}"
+            warnings.append("Its follow-up scan was refused after access changed.")
+        if warnings:
+            query += f"&warning={quote(' '.join(warnings))}"
         return RedirectResponse(
             url=f"/certificates/{created.host_ids[0]}?{query}", status_code=303
         )
@@ -391,8 +401,18 @@ async def add_host(
         notice += f"; {created.scanned} scanned successfully"
     if created.refused:
         notice += f"; {created.refused} follow-up scan(s) refused after access changed"
+    warning_query = ""
+    if created.owner_fields_skipped:
+        warning = (
+            f"Supplied ownership details were not applied to "
+            f"{created.owner_fields_skipped} already monitored endpoint(s)."
+        )
+        warning_query = f"&warning={quote(warning)}"
     return RedirectResponse(
-        url=f"/browse?q={quote(hostname.strip())}&grouped=0&notice={quote(notice + '.')}",
+        url=(
+            f"/browse?q={quote(hostname.strip())}&grouped=0&notice={quote(notice + '.')}"
+            f"{warning_query}"
+        ),
         status_code=303,
     )
 

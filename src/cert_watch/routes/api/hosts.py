@@ -85,7 +85,9 @@ class HostCreateBody(BaseModel):
     starttls_mode: StrictStr = ""
     owner_name: StrictStr = ""
     owner_email: StrictStr = ""
+    owner_slack: StrictStr = ""
     renewal_method: StrictStr = ""
+    runbook_url: StrictStr = ""
 
 
 class HostSettingsBody(BaseModel):
@@ -150,21 +152,26 @@ async def api_create_host(
             starttls_mode=body.starttls_mode,
             owner_name=body.owner_name,
             owner_email=body.owner_email,
+            owner_slack=body.owner_slack,
             renewal_method=body.renewal_method,
+            runbook_url=body.runbook_url,
             auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
         )
     except (HostValidationError, ScopeDeniedError) as exc:
         return _service_error(exc)
-    return JSONResponse(
-        status_code=201,
-        content={
-            "ids": list(result.host_ids),
-            "scanned": result.scanned,
-            "refused": result.refused,
-        },
-    )
+    content: dict[str, object] = {
+        "ids": list(result.host_ids),
+        "scanned": result.scanned,
+        "refused": result.refused,
+    }
+    if result.owner_fields_skipped:
+        content["notice"] = (
+            "Supplied ownership details were not applied to "
+            f"{result.owner_fields_skipped} already monitored endpoint(s)."
+        )
+    return JSONResponse(status_code=201, content=content)
 
 
 @router.post("/api/hosts/import")

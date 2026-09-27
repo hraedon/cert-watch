@@ -10,8 +10,8 @@
     <span class="cw-hint">roles, identity-provider mapping, and local accounts</span>
   </div>
   <div class="cw-panel-body">
-    <div class="cw-seg" aria-label="Access sections">
-      <a class="on" href="#roles">Roles &amp; IdP mapping</a>
+    <div class="cw-seg" data-access-tabs aria-label="Access sections">
+      <a class="on" href="#roles" aria-current="location">Roles &amp; IdP mapping</a>
       <a href="#local-users">Local users</a>
     </div>
   </div>
@@ -26,4 +26,8 @@
   <h2 id="local-users-heading" class="cw-sr cw-sub">Local users</h2>
   {{ users_panel() }}
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/settings-access.js" nonce="{{ request.state.csp_nonce }}"></script>
 {% endblock %}

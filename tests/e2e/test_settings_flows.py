@@ -94,6 +94,9 @@ def test_scan_schedule_roundtrip_under_policy(page: Page, cert_watch_server: str
     page.goto(f"{cert_watch_server}/settings/channels#daily-scan-time")
     expect(page.locator("#sched_hour")).to_have_count(0)
     expect(page.locator('a[href="/settings/policy#daily-scan-time"]')).to_be_visible()
+    expect(page.locator('a[href="/settings/policy#daily-scan-time"]')).to_have_class(
+        re.compile(r"\bcw-link\b")
+    )
 
 
 def test_access_page_combines_roles_mapping_and_local_users(
@@ -109,6 +112,25 @@ def test_access_page_combines_roles_mapping_and_local_users(
     expect(page).to_have_url(re.compile(r"/settings/access#roles$"))
     page.goto(f"{cert_watch_server}/settings/users")
     expect(page).to_have_url(re.compile(r"/settings/access#local-users$"))
+
+
+def test_access_tabs_follow_hash_and_expose_current_location(
+    page: Page,
+    cert_watch_server: str,
+) -> None:
+    page.goto(f"{cert_watch_server}/settings/access#local-users")
+    roles = page.locator('[data-access-tabs] a[href="#roles"]')
+    users = page.locator('[data-access-tabs] a[href="#local-users"]')
+    expect(users).to_have_class(re.compile(r"\bon\b"))
+    expect(users).to_have_attribute("aria-current", "location")
+    expect(roles).not_to_have_class(re.compile(r"\bon\b"))
+    expect(roles).not_to_have_attribute("aria-current", "location")
+
+    roles.click()
+    expect(page).to_have_url(re.compile(r"#roles$"))
+    expect(roles).to_have_class(re.compile(r"\bon\b"))
+    expect(roles).to_have_attribute("aria-current", "location")
+    expect(users).not_to_have_attribute("aria-current", "location")
 
 
 @pytest.mark.parametrize("path", ["/settings/policy", "/settings/access"])

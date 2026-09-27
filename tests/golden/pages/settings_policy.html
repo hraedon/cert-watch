@@ -153,7 +153,7 @@
   <form method="post" action="/settings/policy" data-testid="policy-form">
     <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
     <input type="hidden" name="default_severity" value="warning">
-    <div class="cw-table-clip">
+    <div class="cw-table-clip" tabindex="0" role="region" aria-label="Certificate policy rules">
     <table class="cw-table">
       <thead>
         <tr>

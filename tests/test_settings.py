@@ -103,18 +103,54 @@ def test_daily_scan_time_roundtrip_is_not_cleared_by_alert_save(
     assert 'value="45"' in policy.text
 
 
+@pytest.mark.parametrize(
+    ("hour", "minute", "field"),
+    [("24", "0", "sched_hour"), ("0", "60", "sched_min"), ("x", "0", "sched_hour")],
+)
+def test_daily_scan_time_rejects_invalid_html_values(
+    reload_app,
+    tmp_path,
+    hour,
+    minute,
+    field,
+):
+    from cert_watch.database import kv_get
+
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    with TestClient(app_mod.app) as client:
+        response = client.post(
+            "/settings/policy",
+            data={
+                "settings_section": "schedule",
+                "sched_hour": hour,
+                "sched_min": minute,
+            },
+            follow_redirects=False,
+        )
+    assert response.status_code == 303
+    assert "error=" in response.headers["location"]
+    assert field in response.headers["location"]
+    assert kv_get(db, "sched_hour") is None
+    assert kv_get(db, "sched_min") is None
+
+
 def test_access_is_one_workflow_and_old_urls_redirect_to_anchors(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         access = client.get("/settings/access")
         roles = client.get("/settings/roles", follow_redirects=False)
         users = client.get("/settings/users", follow_redirects=False)
+        legacy_roles = client.get("/settings?tab=roles", follow_redirects=False)
+        legacy_users = client.get("/settings?tab=users", follow_redirects=False)
     assert access.status_code == 200
     assert 'id="roles"' in access.text
     assert "IdP mapping" in access.text
     assert 'id="local-users"' in access.text
     assert roles.headers["location"] == "/settings/access#roles"
     assert users.headers["location"] == "/settings/access#local-users"
+    assert legacy_roles.headers["location"] == "/settings/access#roles"
+    assert legacy_users.headers["location"] == "/settings/access#local-users"
 
 
 # ---------- Auth config save ----------

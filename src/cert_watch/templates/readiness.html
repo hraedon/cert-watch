@@ -18,7 +18,7 @@
 {# One host-readiness table; margin columns render only when
    milestones are passed (the public-trust table).              #}
 {% macro host_table(hosts, milestones=[]) %}
-<div class="cw-table-clip">
+<div class="cw-table-clip" tabindex="0" role="region" aria-label="Certificate readiness inventory">
   <table class="cw-table">
     <thead>
       <tr>

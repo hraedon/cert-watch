@@ -42,7 +42,12 @@ def settings_page(
         )
         if v
     )
-    url = f"/settings/{section}" + (f"?{query}" if query else "")
+    anchor = ""
+    if tab == "roles":
+        anchor = "#roles"
+    elif tab == "users":
+        anchor = "#local-users"
+    url = f"/settings/{section}" + (f"?{query}" if query else "") + anchor
     return RedirectResponse(url=url, status_code=303)
 
 

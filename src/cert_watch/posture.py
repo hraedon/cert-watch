@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import cast
+from typing import Any, cast
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.http_client import SSRFBlockedError, ssrf_safe_urlopen
@@ -32,6 +33,64 @@ class PostureResult:
 # Worst-grade ordering: higher value = worse grade.
 # Used for grade-drop detection and worst-grade aggregation.
 GRADE_WORST_ORDER: dict[str, int] = {"A+": 0, "A": 1, "B": 2, "C": 3, "F": 4}
+
+
+# This is the single source of truth for findings that lower a posture grade.
+# Advisory warnings deliberately do not appear here.
+_GRADE_IMPACT: dict[tuple[str, str], int] = {
+    ("chain_completeness", "warn"): 1,
+    ("tls_version", "warn"): 1,
+    ("rsa_key_size", "fail"): 2,
+    ("ecdsa_curve", "fail"): 2,
+    ("sha1_signature", "fail"): 2,
+    ("chain_completeness", "fail"): 2,
+    ("parse", "fail"): 3,
+}
+
+
+def _finding_value(finding: Finding | Mapping[str, Any], field: str) -> str:
+    value = getattr(finding, field, None)
+    if value is None and isinstance(finding, Mapping):
+        value = finding.get(field)
+    return str(value or "").casefold()
+
+
+def grade_contributing_findings[T: (Finding, Mapping[str, Any])](
+    findings: Sequence[T],
+) -> list[T]:
+    """Return findings responsible for the resulting base grade."""
+    impacts = [
+        _GRADE_IMPACT.get(
+            (_finding_value(finding, "check"), _finding_value(finding, "status")),
+            0,
+        )
+        for finding in findings
+    ]
+    worst = max(impacts, default=0)
+    if worst == 0:
+        return []
+    return [
+        finding
+        for finding, impact in zip(findings, impacts, strict=True)
+        if impact == worst
+    ]
+
+
+def _grade_from_findings(findings: Sequence[Finding]) -> str:
+    contributors = grade_contributing_findings(findings)
+    severity = max(
+        (
+            _GRADE_IMPACT[
+                (
+                    _finding_value(finding, "check"),
+                    _finding_value(finding, "status"),
+                )
+            ]
+            for finding in contributors
+        ),
+        default=0,
+    )
+    return {0: "A", 1: "B", 2: "C"}.get(severity, "F")
 
 
 def tls_version_meets_1_2(protocol_version: str | None) -> bool:
@@ -410,7 +469,6 @@ def evaluate_posture(
     from cryptography.x509.oid import ExtensionOID, SignatureAlgorithmOID
 
     findings: list[Finding] = []
-    grade_severity = 0  # 0=A, 1=B, 2=C, else=F (most severe finding wins)
 
     try:
         x509_cert = x509.load_der_x509_certificate(cert.raw_der)
@@ -428,7 +486,6 @@ def evaluate_posture(
                     check="rsa_key_size", status="fail",
                     message=f"RSA key size {key.key_size} < 2048 bits",
                 ))
-                grade_severity = max(grade_severity, 2)
             else:
                 findings.append(Finding(
                     check="rsa_key_size", status="pass",
@@ -441,7 +498,6 @@ def evaluate_posture(
                     check="ecdsa_curve", status="fail",
                     message=f"Weak ECDSA curve {curve_name}",
                 ))
-                grade_severity = max(grade_severity, 2)
             else:
                 findings.append(Finding(
                     check="ecdsa_curve", status="pass",
@@ -468,7 +524,6 @@ def evaluate_posture(
                 check="sha1_signature", status="fail",
                 message="SHA-1 signature algorithm",
             ))
-            grade_severity = max(grade_severity, 2)
         else:
             findings.append(Finding(
                 check="sha1_signature", status="pass",
@@ -538,7 +593,6 @@ def evaluate_posture(
                 " Consider upgrading to Python 3.13 or ensuring openssl is available."
             ),
         ))
-        grade_severity = max(grade_severity, 1)
     elif chain_status in ("incomplete", "unknown") or (
         chain_status is None and not is_self_signed
     ):
@@ -546,19 +600,16 @@ def evaluate_posture(
             check="chain_completeness", status="warn",
             message="Incomplete chain — server missing intermediate(s)",
         ))
-        grade_severity = max(grade_severity, 1)
     elif chain_status == "invalid":
         findings.append(Finding(
             check="chain_completeness", status="fail",
             message="Chain validation failed",
         ))
-        grade_severity = max(grade_severity, 2)
     elif chain_status == "self-signed":
         findings.append(Finding(
             check="chain_completeness", status="warn",
             message="Self-signed certificate not anchored in system trust store",
         ))
-        grade_severity = max(grade_severity, 1)
     else:
         findings.append(Finding(
             check="chain_completeness", status="pass",
@@ -571,7 +622,6 @@ def evaluate_posture(
                 check="tls_version", status="warn",
                 message=f"TLS {protocol_version} offered - consider disabling",
             ))
-            grade_severity = max(grade_severity, 1)
         else:
             findings.append(Finding(
                 check="tls_version", status="pass",
@@ -641,14 +691,7 @@ def evaluate_posture(
                     ),
                 ))
 
-    if grade_severity == 0:
-        grade = "A"
-    elif grade_severity == 1:
-        grade = "B"
-    elif grade_severity == 2:
-        grade = "C"
-    else:
-        grade = "F"
+    grade = _grade_from_findings(findings)
 
     # A+ requires TLS 1.3 + HSTS on port 443.  HSTS is a 443/HTTP concept,
     # so well-configured TLS services on non-443 ports can still earn A+.

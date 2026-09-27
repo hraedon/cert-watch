@@ -192,16 +192,16 @@
                 <div class="cw-form-grid">
                   <div class="cw-field">
                     <label class="cw-label" for="host-owner-name">Owner name</label>
-                    <input type="text" id="host-owner-name" name="owner_name" class="cw-input" value="{{ host_info.owner_name or '' }}" placeholder="Team or individual">
+                    <input type="text" id="host-owner-name" name="owner_name" class="cw-input" maxlength="200" value="{{ host_info.owner_name or '' }}" placeholder="Team or individual">
                   </div>
                   <div class="cw-field">
                     <label class="cw-label" for="host-owner-email">Owner email</label>
-                    <input type="text" id="host-owner-email" name="owner_email" class="cw-input" value="{{ host_info.owner_email or '' }}" placeholder="ops@example.com">
+                    <input type="text" id="host-owner-email" name="owner_email" class="cw-input" maxlength="254" value="{{ host_info.owner_email or '' }}" placeholder="ops@example.com">
                   </div>
                   {% if slack_configured %}
                   <div class="cw-field">
                     <label class="cw-label" for="host-owner-slack">Slack channel</label>
-                    <input type="text" id="host-owner-slack" name="owner_slack" class="cw-input" value="{{ host_info.owner_slack or '' }}" placeholder="#alerts">
+                    <input type="text" id="host-owner-slack" name="owner_slack" class="cw-input" maxlength="100" value="{{ host_info.owner_slack or '' }}" placeholder="#alerts">
                   </div>
                   {% endif %}
                   <div class="cw-field">
@@ -215,7 +215,7 @@
                   </div>
                   <div class="cw-field wide">
                     <label class="cw-label" for="host-runbook-url">Runbook URL</label>
-                    <input type="text" id="host-runbook-url" name="runbook_url" class="cw-input" value="{{ host_info.runbook_url or '' }}" placeholder="https://wiki.example.com/cert-renewal">
+                    <input type="text" id="host-runbook-url" name="runbook_url" class="cw-input" maxlength="2048" value="{{ host_info.runbook_url or '' }}" placeholder="https://wiki.example.com/cert-renewal">
                   </div>
                 </div>
                 <div class="cw-form-foot">

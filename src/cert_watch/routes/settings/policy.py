@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import contextlib
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.config.schedule_validation import (
+    ScheduleValidationError,
+    validate_schedule,
+)
 from cert_watch.database import get_write_lock
 from cert_watch.policy import PolicyRule, PolicySet, save_policy_set
 from cert_watch.routes._deps import _db_path
@@ -25,6 +30,13 @@ async def save_policy_settings(
     db = _db_path(request)
     form = await request.form()
     if form.get("settings_section") == "schedule":
+        try:
+            validate_schedule(form.get("sched_hour"), form.get("sched_min"))
+        except ScheduleValidationError as exc:
+            return RedirectResponse(
+                url=f"/settings/policy?error={quote(str(exc))}#daily-scan-time",
+                status_code=303,
+            )
         return await _save_config_section(request, _SCHEDULE_KEYS, "policy")
 
     default_severity = str(form.get("default_severity") or "warning")

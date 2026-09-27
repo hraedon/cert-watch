@@ -105,8 +105,8 @@
     <span class="cw-hint">roles, identity-provider mapping, and local accounts</span>
   </div>
   <div class="cw-panel-body">
-    <div class="cw-seg" aria-label="Access sections">
-      <a class="on" href="#roles">Roles &amp; IdP mapping</a>
+    <div class="cw-seg" data-access-tabs aria-label="Access sections">
+      <a class="on" href="#roles" aria-current="location">Roles &amp; IdP mapping</a>
       <a href="#local-users">Local users</a>
     </div>
   </div>
@@ -293,6 +293,8 @@ Add user</summary>
     </main>
   </div>
   <script src="/static/js/core.js" nonce="{{CSP_NONCE}}"></script>
+
+<script src="/static/js/settings-access.js" nonce="{{CSP_NONCE}}"></script>
 
 </body>
 </html>

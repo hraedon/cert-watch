@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import init_schema, record_cert_history, store_scan_posture
+from cert_watch.services.posture_page import _reason
 from tests.test_route_coverage import _insert_certificate
 
 
@@ -47,6 +48,46 @@ def test_posture_leads_with_linked_distribution_and_offender_reason(
     assert 'href="/posture?grade=F#certificate-grades"' in response.text
     assert "RSA key size 1024 &lt; 2048 bits" in response.text
 
+
+
+def test_posture_reason_uses_only_worst_grade_contributors() -> None:
+    findings = [
+        {
+            "check": "long_validity",
+            "status": "warn",
+            "message": "Validity exceeds advisory limit",
+        },
+        {
+            "check": "chain_completeness",
+            "status": "warn",
+            "message": "Incomplete chain — server missing intermediate(s)",
+        },
+    ]
+    assert _reason(findings) == "Incomplete chain — server missing intermediate(s)"
+
+    findings.append(
+        {
+            "check": "rsa_key_size",
+            "status": "fail",
+            "message": "RSA key size 1024 < 2048 bits",
+        }
+    )
+    assert _reason(findings) == "RSA key size 1024 < 2048 bits"
+
+
+def test_posture_reason_ignores_advisory_only_warnings() -> None:
+    assert (
+        _reason(
+            [
+                {
+                    "check": "long_validity",
+                    "status": "warn",
+                    "message": "Validity exceeds advisory limit",
+                }
+            ]
+        )
+        == "No failing posture checks recorded."
+    )
 
 def test_posture_hides_trends_until_history_spans_more_than_a_month(
     tmp_path, reload_app,
