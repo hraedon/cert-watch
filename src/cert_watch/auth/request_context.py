@@ -62,10 +62,9 @@ def parse_bearer_credentials(request: Request) -> BearerCredentials:
         return BearerCredentials()
     if len(values) != 1:
         return BearerCredentials(malformed=True)
-    try:
-        value = values[0].decode("latin-1")
-    except UnicodeDecodeError:
-        return BearerCredentials(malformed=True)
+    # ASGI header values are bytes and Latin-1 maps every byte, so decoding is
+    # total; syntax validation below decides whether the value is acceptable.
+    value = values[0].decode("latin-1")
     if not value.startswith("Bearer "):
         return BearerCredentials(malformed=True)
     token = value[7:]

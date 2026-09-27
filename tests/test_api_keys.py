@@ -463,6 +463,7 @@ async def test_renewal_report_principal_and_guard(seeded):
         "renewal-hook", "renewal-report", binding="tags", bound_tags="Prod,edge"
     )
     request = _make_request(db, bearer=raw, path="/api/renewal-reports")
+    request.scope.pop("raw_path")  # Hand-built ASGI scopes may omit raw_path.
 
     assert await renewal_report_guard(request) == "renewal-hook"
     context = request.state.auth_context
@@ -481,6 +482,34 @@ async def test_renewal_report_principal_and_guard(seeded):
     )
     assert await renewal_report_guard(all_request) == "all-renewals"
     assert renewal_report_binding(all_request.state.auth_context) == "all"
+
+
+@pytest.mark.parametrize(
+    "scope,binding,path",
+    [
+        ("renewal-report", "all", "/api/renewal-reports"),
+        ("read", None, "/api/certificates"),
+    ],
+)
+def test_api_key_authentication_refuses_a_key_revoked_before_usage_recording(
+    seeded, monkeypatch, scope, binding, path,
+):
+    db, repo = seeded
+    _, raw = repo.create_key("racing-key", scope, binding=binding)
+    original_verify = SqliteApiKeyRepository.verify_key
+
+    def verify_with_revoke_race(self, token, **kwargs):
+        if kwargs.get("record_use", True):
+            return None
+        return original_verify(self, token, **kwargs)
+
+    monkeypatch.setattr(
+        SqliteApiKeyRepository, "verify_key", verify_with_revoke_race
+    )
+    request = _make_request(db, bearer=raw, method="GET", path=path)
+
+    assert authenticate_api_key(request, db) is None
+    assert not hasattr(request.state, "auth_context")
 
 
 def test_resolve_session_user_preserves_report_key_state(seeded):
