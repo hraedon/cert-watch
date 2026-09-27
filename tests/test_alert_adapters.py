@@ -20,6 +20,7 @@ from cert_watch.alerting.transports.adapters import (
     AlertmanagerAdapter,
     DiscordAdapter,
     GenericAdapter,
+    InvalidWebhookTemplateError,
     PagerDutyAdapter,
     SlackAdapter,
     TeamsAdapter,
@@ -119,10 +120,77 @@ class TestGenericAdapter:
 
         assert result.outcome == "failed"
         assert result.reached_transport is False
-        assert result.operator_message == (
-            "generic webhook JSON template is invalid after substitution"
-        )
+        assert "looks like JSON but is invalid" in result.operator_message
         urlopen.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "template",
+        ["[cert-watch] {{message}}", "{{message}}"],
+    )
+    def test_plain_text_that_starts_like_json_remains_text(self, template):
+        req = GenericAdapter().build(
+            _alert(message="Cert expires soon"), _config(template=template)
+        )
+
+        assert req.headers["Content-Type"] == "text/plain"
+        assert req.body.decode() in {
+            "[cert-watch] Cert expires soon",
+            "Cert expires soon",
+        }
+
+    def test_bom_prefixed_json_is_detected_and_bom_removed(self):
+        hostile = 'x", "injected": true, "tail": "'
+        req = GenericAdapter().build(
+            _alert(message=hostile),
+            _config(template='\ufeff{"text":"{{message}}"}'),
+        )
+
+        assert req.headers["Content-Type"] == "application/json"
+        assert json.loads(req.body) == {"text": hostile}
+        assert not req.body.startswith(b"\xef\xbb\xbf")
+
+    def test_substitution_is_single_pass(self):
+        req = GenericAdapter().build(
+            _alert(message="literal {{status}} and {{threshold_days}}"),
+            _config(template='{"text":"{{message}}"}'),
+        )
+
+        assert json.loads(req.body)["text"] == (
+            "literal {{status}} and {{threshold_days}}"
+        )
+
+    def test_form_style_text_percent_encodes_values(self):
+        req = GenericAdapter().build(
+            _alert(message="ok&channel=attacker value"),
+            _config(template="text={{message}}&channel=ops"),
+        )
+
+        assert req.headers["Content-Type"] == "text/plain"
+        assert req.body == b"text=ok%26channel%3Dattacker+value&channel=ops"
+
+    def test_nested_json_string_placeholder_is_rejected(self):
+        with pytest.raises(InvalidWebhookTemplateError, match="encoded"):
+            GenericAdapter().build(
+                _alert(),
+                _config(template='{"payload":"{\\"text\\":\\"{{message}}\\"}"}'),
+            )
+
+    def test_unquoted_threshold_is_json_number_or_null(self):
+        adapter = GenericAdapter()
+        config = _config(template='{"days":{{threshold_days}}}')
+
+        assert json.loads(adapter.build(_alert(threshold_days=7), config).body) == {
+            "days": 7
+        }
+        assert json.loads(adapter.build(_alert(threshold_days=None), config).body) == {
+            "days": None
+        }
+
+    def test_literal_json_null_is_json(self):
+        req = GenericAdapter().build(_alert(), _config(template="null"))
+
+        assert req.headers["Content-Type"] == "application/json"
+        assert req.body == b"null"
 
     def test_template_non_json(self):
         adapter = GenericAdapter()
@@ -192,6 +260,18 @@ class TestDiscordAdapter:
         body = json.loads(req.body)
         assert body["allowed_mentions"] == {"parse": []}
 
+    def test_untrusted_markdown_and_masked_links_are_escaped(self):
+        message = "[open](https://example.test) **bold** _italics_ ~x~ `code` > |"
+        req = DiscordAdapter().build(
+            _alert(message=message), _config(kind="discord")
+        )
+
+        description = json.loads(req.body)["embeds"][0]["description"]
+        assert description == (
+            r"\[open\]\(https://example.test\) \*\*bold\*\* "
+            r"\_italics\_ \~x\~ \`code\` \> \|"
+        )
+
     def test_expired_color_red(self):
         assert _status_color("expired") == 0xCC0000
 
@@ -254,10 +334,16 @@ class TestTeamsAdapter:
 
         body = json.loads(req.body)
         text = body["attachments"][0]["content"]["body"][2]["text"]
-        assert text == (
-            "&lt;at&gt;ops&lt;/at&gt; "
-            r"\[open\]\(https://example\.test\)"
+        assert text == "<\u200bat>ops<\u200b/at> " + r"\[open\]\(https://example.test\)"
+
+    def test_ordinary_hostname_renders_verbatim(self):
+        req = TeamsAdapter().build(
+            _alert(message="api-01.example.com expires soon"),
+            _config(kind="teams"),
         )
+
+        text = json.loads(req.body)["attachments"][0]["content"]["body"][2]["text"]
+        assert text == "api-01.example.com expires soon"
 
     def test_expired_urgency_attention(self):
         assert _status_urgency("expired") == "attention"

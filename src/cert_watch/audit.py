@@ -173,8 +173,9 @@ def list_audit(
         conditions.append("target_id = ?")
         params.append(target_id)
     if actor:
-        conditions.append("actor = ?")
-        params.append(actor)
+        condition, actor_params = _actor_filter_condition(actor)
+        conditions.append(condition)
+        params.extend(actor_params)
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
     offset = (page - 1) * limit
     with _connect(db_path) as conn:
@@ -202,12 +203,32 @@ def count_audit(
         conditions.append("target_id = ?")
         params.append(target_id)
     if actor:
-        conditions.append("actor = ?")
-        params.append(actor)
+        condition, actor_params = _actor_filter_condition(actor)
+        conditions.append(condition)
+        params.extend(actor_params)
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
     with _connect(db_path) as conn:
         row = conn.execute(f"SELECT COUNT(*) FROM audit_log{where}", params).fetchone()
     return row[0] if row else 0
+
+
+def _actor_filter_condition(actor: str) -> tuple[str, list[str]]:
+    """Match a stored actor, API-key display name, or displayed short id."""
+    short_id = actor.removeprefix("api_key:")
+    short_match = len(short_id) == 8 and all(
+        character in "0123456789abcdefABCDEF" for character in short_id
+    )
+    conditions = ["actor = ?"]
+    params = [actor]
+    if short_match:
+        conditions.append("actor LIKE ?")
+        params.append(f"api_key:{short_id}%")
+    conditions.append(
+        "(actor LIKE 'api_key:%' AND json_valid(detail) "
+        "AND json_extract(detail, '$.api_key_name') = ?)"
+    )
+    params.append(actor)
+    return "(" + " OR ".join(conditions) + ")", params
 
 
 def resolve_actor(request: Request) -> str:

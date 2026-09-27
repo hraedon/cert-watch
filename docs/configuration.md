@@ -41,6 +41,24 @@ rather than the application:
 | `CERT_WATCH_PORT` | `8000` | Port to listen on. Also settable with `--port`. |
 | `CERT_WATCH_RELOAD` | `0` | `1` reloads on code changes. Development only. |
 
+## Generic alert webhook templates
+
+Generic webhook templates support `{{alert_type}}`, `{{cert_id}}`,
+`{{message}}`, `{{threshold_days}}`, and `{{status}}`. A leading Unicode BOM is
+ignored. cert-watch treats a template as JSON only when a neutral substitution
+parses as JSON, so plain text such as `[cert-watch] {{message}}` and
+`{{message}}` remains `text/plain`. In JSON templates, put string-valued
+placeholders inside JSON string literals. `{{threshold_days}}` may also be
+unquoted, where it renders as a JSON number or `null`.
+
+Placeholder values are escaped for exactly one JSON string level. A
+placeholder inside a string that itself contains an encoded JSON document is
+rejected in Settings; build nested payloads as real JSON objects instead.
+Malformed JSON-looking templates are also rejected when saved. Plain-text
+templates strip control characters but otherwise preserve values. If a text
+template contains form fields such as `message={{message}}&status={{status}}`,
+placeholder values are percent-encoded before delivery.
+
 ## Reference
 
 This section is generated from the code by `scripts/gen_config_reference.py`,

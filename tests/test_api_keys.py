@@ -432,8 +432,12 @@ def test_unknown_scope_is_unauthenticated_on_api_and_html_routes(
     init_schema(db)
     repo = SqliteApiKeyRepository(db)
     entry, raw = repo.create_key("corrupt-scope", "read")
+    legacy_hash = hashlib.sha256(raw.encode()).hexdigest()
     with repo_conn(repo) as conn:
-        conn.execute("UPDATE api_keys SET scope = 'bogus' WHERE id = ?", (entry.id,))
+        conn.execute(
+            "UPDATE api_keys SET scope = 'bogus', key_hash = ? WHERE id = ?",
+            (legacy_hash, entry.id),
+        )
         conn.commit()
 
     headers = {"Authorization": f"Bearer {raw}"}
@@ -448,6 +452,39 @@ def test_unknown_scope_is_unauthenticated_on_api_and_html_routes(
 
     assert any(entry.id in record.message for record in caplog.records)
     assert all(raw not in record.message for record in caplog.records)
+    with repo_conn(repo) as conn:
+        row = conn.execute(
+            "SELECT key_hash, last_used_at FROM api_keys WHERE id = ?", (entry.id,)
+        ).fetchone()
+    assert row["key_hash"] == legacy_hash
+    assert row["last_used_at"] is None
+
+
+def test_non_cert_watch_bearer_on_html_page_uses_login_flow(reload_app):
+    from fastapi.testclient import TestClient
+
+    from cert_watch.auth.local_admin import _scrypt_hash
+
+    app_mod = reload_app(
+        CERT_WATCH_LOCAL_ADMIN_USER="admin",
+        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("pw-for-tests-1"),
+    )
+    with TestClient(app_mod.app) as client:
+        response = client.get(
+            "/",
+            headers={"Authorization": "Bearer proxy-issued-token"},
+            follow_redirects=False,
+        )
+        rejected_key = client.get(
+            "/",
+            headers={"Authorization": "Bearer cwk_not-a-real-key"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+    assert rejected_key.status_code == 401
+    assert rejected_key.json() == {"error": "unauthenticated"}
 
 
 def test_api_keys_management_routes(reload_app):

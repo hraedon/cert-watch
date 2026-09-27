@@ -848,7 +848,7 @@ def _check_renewal_overdue(
         return
     try:
         from cert_watch.database import AlertStore
-        from cert_watch.events import Event, emit_event
+        from cert_watch.events import Event, emit_event, load_event_config
         from cert_watch.renewal_analytics import detect_renewal_overdue
 
         store = AlertStore(db_path)
@@ -870,29 +870,42 @@ def _check_renewal_overdue(
                         suppression_keys=(legacy_key,),
                     ):
                         continue
-                    emit_event(
-                        Event(
-                            event_type="renewal_overdue",
-                            timestamp=current,
-                            payload={
-                                "hostname": signal.hostname,
-                                "port": port,
-                                "cert_fingerprint": signal.cert_fingerprint,
-                                "days_remaining": signal.days_remaining,
-                                "expected_renewal_at_days": signal.expected_renewal_at_days,
-                                "days_overdue": signal.days_overdue,
-                                "confidence": signal.confidence,
-                            },
-                            source="scheduler",
-                        ),
-                        db_path,
+                    event_config = load_event_config(db_path)
+                    event_enabled = (
+                        "renewal_overdue" in event_config.enabled_event_types
                     )
-                    store.claim_rule_firing(
-                        key,
-                        now=current,
-                        interval_seconds=24 * 60 * 60,
-                        suppression_keys=(legacy_key,),
-                    )
+                    event_row_id = None
+                    if event_enabled:
+                        event_row_id = emit_event(
+                            Event(
+                                event_type="renewal_overdue",
+                                timestamp=current,
+                                payload={
+                                    "hostname": signal.hostname,
+                                    "port": port,
+                                    "cert_fingerprint": signal.cert_fingerprint,
+                                    "days_remaining": signal.days_remaining,
+                                    "expected_renewal_at_days": (
+                                        signal.expected_renewal_at_days
+                                    ),
+                                    "days_overdue": signal.days_overdue,
+                                    "confidence": signal.confidence,
+                                },
+                                source="scheduler",
+                            ),
+                            db_path,
+                            config=event_config,
+                        )
+                    event_write_failed = event_enabled and event_row_id is None
+                    if not event_write_failed:
+                        claimed = store.claim_rule_firing(
+                            key,
+                            now=current,
+                            interval_seconds=24 * 60 * 60,
+                            suppression_keys=(legacy_key,),
+                        )
+                        if not claimed:
+                            continue
                     try:
                         if send_webhook is not None:
                             send_webhook(

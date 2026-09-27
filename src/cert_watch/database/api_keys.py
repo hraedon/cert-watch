@@ -195,6 +195,12 @@ class SqliteApiKeyRepository:
             )
             if row is None or row["revoked"]:
                 return None
+            auth = ApiKeyAuth(id=row["id"], name=row["name"], scope=row["scope"])
+            # A corrupt scope is still returned so the authentication boundary
+            # can log and reject the specific key, but it must not look used or
+            # receive a hash upgrade for a request that authorization refuses.
+            if row["scope"] not in VALID_SCOPES:
+                return auth
             now_iso = datetime.now(UTC).isoformat()
             updates = ["last_used_at = ?"]
             params: list[str] = [now_iso]
@@ -225,7 +231,7 @@ class SqliteApiKeyRepository:
                 params,
             )
             conn.commit()
-            return ApiKeyAuth(id=row["id"], name=row["name"], scope=row["scope"])
+            return auth
 
     def revoke_key(self, key_id: str) -> bool:
         """Mark a key revoked. Returns True if a row changed."""

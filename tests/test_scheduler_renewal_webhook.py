@@ -5,6 +5,7 @@ test_renewal_webhook.py. This file covers the *wiring* that those tests left
 uncovered: the scheduler path that detects an overdue cert, emits the event, and
 delivers the webhook — including the retry-on-transient-failure behaviour.
 """
+import sqlite3
 from unittest.mock import patch
 
 import pytest
@@ -195,6 +196,41 @@ def test_check_renewal_overdue_sends_when_event_type_is_disabled(
     send.assert_called_once()
     with _connect(db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM event_log").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM rule_firings").fetchone()[0] == 1
+
+
+def test_check_renewal_overdue_retries_event_after_event_log_write_failure(
+    runtime, seeded_db, monkeypatch,
+):
+    db, parsed = seeded_db
+    signal = _signal(fingerprint=parsed.fingerprint_sha256)
+    hosts = [("host.example.com", 443)]
+    monkeypatch.setenv("CERT_WATCH_RENEWAL_WEBHOOK_URL", "https://hook.example.com/r")
+    monkeypatch.setattr(
+        "cert_watch.renewal_analytics.detect_renewal_overdue", lambda *a, **k: signal,
+    )
+    with patch(
+        "cert_watch.renewal_webhook.send_renewal_webhook", return_value=True
+    ) as send:
+        with patch(
+            "cert_watch.events._write_event_log",
+            side_effect=sqlite3.OperationalError("database is locked"),
+        ):
+            runtime._check_renewal_overdue(db, hosts)
+        assert runtime.wait_for_webhooks()
+
+        from cert_watch.database.connection import _connect
+
+        with _connect(db) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM event_log").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM rule_firings").fetchone()[0] == 0
+
+        runtime._check_renewal_overdue(db, hosts)
+        assert runtime.wait_for_webhooks()
+
+    assert send.call_count == 2
+    with _connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM event_log").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM rule_firings").fetchone()[0] == 1
 
 

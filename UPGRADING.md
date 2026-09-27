@@ -29,6 +29,15 @@ API-key audit actors now use the stable `api_key:<id>` format instead of the
 key's display name. The display name is retained as `api_key_name` in the
 audit event's `detail` object. Update SIEM rules or other audit consumers that
 match API-key events by actor name; human-user actor values are unchanged.
+The Activity actor filter accepts the stored value, the displayed eight-digit
+short id, or the API-key display name.
+
+Generic webhook templates that look like JSON are now validated when saved.
+String placeholders must be inside JSON strings; only
+`{{threshold_days}}` may be unquoted. Placeholders inside JSON encoded as a
+string are rejected because escaping applies to one JSON level only. Existing
+plain-text templates remain plain text, while form-style template values are
+now percent-encoded.
 
 ### Migration 0044
 

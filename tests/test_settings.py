@@ -232,6 +232,53 @@ def test_save_alert_config(reload_app):
 
 
 @pytest.mark.parametrize(
+    "template",
+    ["[cert-watch] {{message}}", "{{message}}", '{"text":"{{message}}"}'],
+)
+def test_save_alert_config_accepts_valid_text_and_json_templates(
+    reload_app, template,
+):
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        response = client.post(
+            "/settings/alerts",
+            data={"webhook_template": template, "webhook_kind": "generic"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert "saved=1" in response.headers["location"]
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        '{"text": {{message}}}',
+        '{"text":"{{message}}"',
+        '{"payload":"{\\"text\\":\\"{{message}}\\"}"}',
+    ],
+)
+def test_save_alert_config_rejects_unsafe_json_template(reload_app, template):
+    from urllib.parse import unquote
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        response = client.post(
+            "/settings/alerts",
+            data={"webhook_template": template, "webhook_kind": "generic"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert "error=" in response.headers["location"]
+    assert "saved=1" not in response.headers["location"]
+    assert any(
+        message in unquote(response.headers["location"])
+        for message in ("looks like JSON but is invalid", "cannot be inside")
+    )
+
+
+@pytest.mark.parametrize(
     ("path", "data"),
     [
         ("/settings/smtp", {"smtp_host": "smtp.example.com"}),

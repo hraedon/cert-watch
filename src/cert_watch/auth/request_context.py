@@ -253,9 +253,10 @@ async def auth_middleware(
         return await call_next(request)
 
     # Unauthenticated
-    bearer_presented = request.headers.get("authorization", "").startswith("Bearer ")
+    authorization = request.headers.get("authorization", "")
+    cert_watch_key_presented = authorization.startswith("Bearer cwk_")
     if (
-        bearer_presented
+        cert_watch_key_presented
         or path.rstrip("/") == "/metrics"
         or path.startswith("/api/")
     ):
