@@ -24,9 +24,16 @@ are hidden from read-only callers; read [UPGRADING.md](UPGRADING.md) first.
   and host CSV exports, and in
   `GET /api/certificates/{id}/alert-routing`, which omits `matched_groups`
   and `recipients` for them (#126 S1, S4).
-- *Edit host* authorizes its host fields against the host's own tags and its
-  tag field against the certificate, separately, both before and inside its
-  write transaction, so a caller needs write access to both (#126 S4).
+- Every route that writes host-level fields -- owner, owner email and Slack
+  handle, renewal method and status, runbook -- authorizes against the host's
+  own tags, both before and inside the write transaction, including the
+  routes addressed by a certificate id (`POST /certificates/{id}/owner`,
+  *Edit host* on a certificate's page). In 1.0.4
+  `POST /certificates/{id}/owner` was judged by the certificate's effective tags, so a scoped operator with
+  write access only through a tag set on the certificate could change the
+  owner email -- an alert recipient -- of another team's host and redirect its
+  alerts. *Edit host* also authorizes its tag field against the certificate
+  separately, so it needs write access to both (#126 S4, #137).
 - Tag writes by a tag-scoped user require write-tier access to every
   submitted tag, on host and certificate tag edits, *Edit host*, Add, CSV
   import and certificate upload; the automatically merged scope tags are only
@@ -98,23 +105,15 @@ are hidden from read-only callers; read [UPGRADING.md](UPGRADING.md) first.
   certificate tags, as elsewhere, and entries gain `renewal_method` and
   `status` (#126 S1).
 - Ownership fields are trimmed and limited to 200 (owner name), 254 (email),
-  100 (Slack) and 2048 (runbook URL) characters on Add, `POST /api/hosts`,
-  CSV import and the ownership endpoints (#126 S5).
+  100 (Slack) and 2048 (runbook URL) characters on every write path: Add,
+  `POST /api/hosts`, CSV import, *Edit host* (HTML and JSON) and the
+  field-specific ownership endpoints (#126 S5, #137).
 - Visual system: one type scale (12, 14, 16, 20, 28 px); colour means status
   only, so links, focus rings, active states and the wordmark are neutral ink
   and links carry a hairline underline; expired uses the critical colour plus
   the word *Expired* instead of violet; a failing scan renders as a warning,
   not critical; monospace is limited to hostnames, serials and fingerprints
   (#126 S2).
-
-### Security
-
-- Every route that writes host ownership, alert-recipient, or renewal fields
-  now authorizes against the host's own tags, including routes addressed by a
-  certificate ID. This prevents a certificate-only scoped operator from
-  redirecting another team's alerts. Complete host edits also use the shared
-  server-side ownership normalizer and size limits used by legacy editing,
-  Add, JSON, and CSV import.
 
 ### Fixed
 

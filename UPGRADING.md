@@ -145,16 +145,28 @@ recipients will get empty or missing values after the upgrade.** Give it a
   `notes` and `tags`. `{id}` may be a host id or a current certificate id;
   addressed by certificate, `tags` sets the certificate's own tags (the
   response says `"tags_apply_to": "certificate"`), otherwise the host's. The
-  host fields are authorized against the host and the tags against the
-  certificate, so a caller needs write access to both.
+  host fields are authorized against the host's own tags and the tags against
+  the certificate, so a caller needs write access to both.
 - **The field-specific endpoints are still accepted:**
   `POST /hosts/{id}/owner`, `/settings`, `/notes` and `/tags`;
   `POST /certificates/{id}/owner` and `/tags`;
   `PATCH /api/hosts/{id}/owner`, `/settings` and `/notes`;
   `PUT /api/hosts/{id}/tags` and `PUT /api/certificates/{id}/tags`. Apart
-  from the tag and ownership rules below, the only difference is that
-  `POST /hosts/{id}/settings` now redirects to `#edit-host` instead of
+  from the host-scope, tag and ownership rules below, the only difference is
+  that `POST /hosts/{id}/settings` now redirects to `#edit-host` instead of
   `#endpoint-settings`.
+- **Host fields are authorized against the host on every route.** Every
+  write of host-level fields (owner, owner email and Slack handle, renewal
+  method and status, runbook) is judged by the host's own tags, before and
+  inside the write transaction, even when the route is addressed by a
+  certificate id. This closes a 1.0.4 gap: `POST /certificates/{id}/owner`
+  was judged by the certificate's effective tags, so a tag-scoped operator
+  whose only write access came from a tag set on the certificate could change
+  the owner email -- an alert recipient -- of a host belonging to another
+  team. Such a request is now refused (*operation not permitted outside your
+  team scope*). If a scoped team edited ownership through a certificate tag,
+  give it a writable tag on the host, or have an administrator make the
+  change.
 - **Tag writes need write access to every tag.** For a tag-scoped user,
   every tag submitted -- when editing host or certificate tags, adding or
   importing hosts, or uploading a certificate -- must be one their role can
@@ -177,10 +189,11 @@ recipients will get empty or missing values after the upgrade.** Give it a
   exported `hosts.csv` sets ownership on the endpoints it adds, and a row
   with an invalid owner email or renewal method is reported as an error
   instead of being imported without them.
-- **Ownership field limits.** Add, `POST /api/hosts`, CSV import and the
-  field-specific ownership endpoints (`POST /hosts/{id}/owner`,
-  `POST /certificates/{id}/owner`, `PATCH /api/hosts/{id}/owner`) trim
-  surrounding whitespace and refuse values longer than 200 characters
+- **Ownership field limits.** Every write path -- Add, `POST /api/hosts`,
+  CSV import, *Edit host* (`POST /hosts/{id}/edit`, `PUT /api/hosts/{id}`)
+  and the field-specific ownership endpoints (`POST /hosts/{id}/owner`,
+  `POST /certificates/{id}/owner`, `PATCH /api/hosts/{id}/owner`) -- trims
+  surrounding whitespace and refuses values longer than 200 characters
   (`owner_name`), 254 (`owner_email`), 100 (`owner_slack`) or 2048
   (`runbook_url`); 1.0.4 stored them as sent. Values already stored are not
   changed by the upgrade.
