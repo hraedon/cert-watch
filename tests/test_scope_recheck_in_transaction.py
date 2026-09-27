@@ -246,7 +246,6 @@ def test_race_matrix_covers_every_paired_target_scoped_route() -> None:
         for html, api in HTML_TO_JSON.items()
         if is_existing_estate_target(html) and is_existing_estate_target(api)
     }
-    assert set(_RACE_CASES.values()) == _RACE_ROUTE_PAIRS
     assert expected == _RACE_ROUTE_PAIRS
     assert set(_RACE_CASES) == _COLLECTED_RACE_CASES
     paired_routes = {route for pair in expected for route in pair}

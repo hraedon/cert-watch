@@ -19,7 +19,7 @@ import ast
 import inspect
 import re
 import textwrap
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -433,28 +433,6 @@ def _contains_loop_control(statements: list[ast.stmt]) -> bool:
     return visitor.found
 
 
-def _contains_raise(statements: list[ast.stmt]) -> bool:
-    class Visitor(ast.NodeVisitor):
-        found = False
-
-        def visit_Raise(self, node: ast.Raise) -> None:
-            self.found = True
-
-        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-            return
-
-        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-            return
-
-        def visit_Lambda(self, node: ast.Lambda) -> None:
-            return
-
-    visitor = Visitor()
-    for statement in statements:
-        visitor.visit(statement)
-    return visitor.found
-
-
 def _loop_has_break(loop: ast.While) -> bool:
     class Visitor(ast.NodeVisitor):
         found = False
@@ -521,16 +499,22 @@ def _statement_always_exits(statement: ast.stmt) -> bool:
             return False
         if not _suite_always_exits(statement.body):
             return False
-        # An explicit raise may enter a handler. A return cannot, so handlers
-        # only affect the proof when the body contains an explicit raise.
-        return not (
-            statement.handlers
-            and _contains_raise(statement.body)
-            and not all(_suite_always_exits(handler.body) for handler in statement.handlers)
-        )
+        # Any expression in the body may raise (``return f()`` included), so a
+        # handler that falls through makes the statements after the try live.
+        return all(_suite_always_exits(handler.body) for handler in statement.handlers)
     if isinstance(statement, (ast.With, ast.AsyncWith)):
+        # A context manager may swallow an exception raised in its body; treat
+        # the known suppressing managers as falling through.
+        if any(_is_suppressing_manager(item.context_expr) for item in statement.items):
+            return False
         return _suite_always_exits(statement.body)
     return False
+
+
+def _is_suppressing_manager(expr: ast.expr) -> bool:
+    func = expr.func if isinstance(expr, ast.Call) else expr
+    name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+    return name == "suppress"
 
 
 def _is_reachable(
@@ -718,6 +702,24 @@ def _synthetic_finally_service(db_path: str, host_id: str) -> None:
         host_management.delete_host(db_path, host_id, auth=None, actor="synthetic", source_ip=None)
 
 
+def _synthetic_suppressed_raise_service(db_path: str, host_id: str) -> None:
+    with suppress(RuntimeError):
+        raise RuntimeError("swallowed")
+    host_management.delete_host(db_path, host_id, auth=None, actor="synthetic", source_ip=None)
+
+
+def _synthetic_handled_return_service(db_path: str, host_id: str) -> None:
+    try:
+        return _synthetic_boom()
+    except RuntimeError:
+        pass
+    host_management.delete_host(db_path, host_id, auth=None, actor="synthetic", source_ip=None)
+
+
+def _synthetic_boom() -> None:
+    raise RuntimeError("boom")
+
+
 def _synthetic_dead_transaction(transaction: Any) -> None:
     return
     transaction.begin_immediate()
@@ -807,6 +809,16 @@ def test_service_call_in_finally_is_reachable() -> None:
         _synthetic_finally_service,
         host_management.delete_host,
     )
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [_synthetic_suppressed_raise_service, _synthetic_handled_return_service],
+    ids=["with-suppress-raise", "try-return-call-except-pass"],
+)
+def test_service_call_after_a_swallowed_exit_is_reachable(handler: Any) -> None:
+    # Review of #141 round 2: both shapes do reach the service at runtime.
+    assert _endpoint_calls_service(handler, host_management.delete_host)
 
 
 @pytest.mark.parametrize(
