@@ -170,6 +170,15 @@ from cert_watch.migrations.m0043_endpoint_renewal_analytics import (
 from cert_watch.migrations.m0043_endpoint_renewal_analytics import (
     upgrade as endpoint_renewal_analytics_upgrade,
 )
+from cert_watch.migrations.m0044_renewal_classifier_version import (
+    DESCRIPTION as renewal_classifier_version_description,
+)
+from cert_watch.migrations.m0044_renewal_classifier_version import (
+    MIGRATION_ID as renewal_classifier_version_id,
+)
+from cert_watch.migrations.m0044_renewal_classifier_version import (
+    upgrade as renewal_classifier_version_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -317,4 +326,9 @@ runner.register(
     endpoint_renewal_analytics_id,
     endpoint_renewal_analytics_description,
     endpoint_renewal_analytics_upgrade,
+)
+runner.register(
+    renewal_classifier_version_id,
+    renewal_classifier_version_description,
+    renewal_classifier_version_upgrade,
 )
