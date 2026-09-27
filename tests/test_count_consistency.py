@@ -290,9 +290,9 @@ def test_posture_page_grades_each_certificate_once(tmp_path, reload_app, monkeyp
     app_mod = reload_app()
     _seed_estate(tmp_path / "cert-watch.sqlite3")
     with TestClient(app_mod.app) as client:
-        html = client.get("/posture").text
+        response = client.get("/posture")
     # 7 scanned certificates (two posture rows each) + 2 uploads graded live.
-    assert f"worst-weighted across {EXPECTED_CERTIFICATES} graded certificates" in html
+    assert response.context["headline"].total == EXPECTED_CERTIFICATES
 
 
 def test_metrics_urgency_counts_match_the_dashboard(tmp_path, reload_app, monkeypatch):

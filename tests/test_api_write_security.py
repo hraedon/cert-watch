@@ -201,6 +201,9 @@ def test_html_and_json_share_each_action_rate_limit(
         {"hostname": "example.test", "tags": ["A"]},
         {"hostname": "example.test", "notes": 7},
         {"hostname": "example.test", "starttls_mode": 5},
+        {"hostname": "example.test", "owner_name": 5},
+        {"hostname": "example.test", "owner_email": ["ops@example.test"]},
+        {"hostname": "example.test", "renewal_method": True},
         {"hostname": "example.test", "threshold_days": 2**70},
         {"hostname": "example.test", "scan_interval_hours": 1.5},
     ],
@@ -219,6 +222,37 @@ def test_api_create_host_rejects_type_confusion_without_calling_service(
     assert response.status_code in {400, 422}
     assert "AssertionError" not in response.text
     assert "TypeError" not in response.text
+
+
+def test_api_create_host_passes_creation_ownership_to_service(
+    reload_app, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api_hosts = importlib.import_module("cert_watch.routes.api.hosts")
+    from cert_watch.services.host_management import HostCreateResult
+
+    captured: dict[str, Any] = {}
+
+    async def fake_create(*_args: Any, **kwargs: Any) -> HostCreateResult:
+        captured.update(kwargs)
+        return HostCreateResult(("00000000-0000-4000-8000-000000000001",), 1, 0)
+
+    monkeypatch.setattr(api_hosts, "create_hosts", fake_create)
+    with TestClient(reload_app().app) as client:
+        response = client.post(
+            "/api/hosts",
+            json={
+                "hostname": "api-owned.example.test",
+                "owner_name": "API Team",
+                "owner_email": "api-team@example.test",
+                "renewal_method": "acme",
+            },
+        )
+    assert response.status_code == 201
+    assert (
+        captured["owner_name"],
+        captured["owner_email"],
+        captured["renewal_method"],
+    ) == ("API Team", "api-team@example.test", "acme")
 
 
 @pytest.mark.parametrize(

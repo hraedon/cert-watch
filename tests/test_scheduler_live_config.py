@@ -175,11 +175,15 @@ def test_lifespan_jobs_use_saved_configuration_without_restart(
             "smtp_host": "saved.example.invalid", "smtp_port": "587",
             "alert_from": "watch@example.invalid", "alert_recipients": "ops@example.invalid",
         }, follow_redirects=False)
-        alerts = client.post("/settings/alerts", data={
-            "sched_hour": "20", "sched_min": "15", "renewal_window_days": "0",
+        schedule = client.post("/settings/policy", data={
+            "settings_section": "schedule", "sched_hour": "20", "sched_min": "15",
         }, follow_redirects=False)
-        assert smtp.status_code == alerts.status_code == 303
+        alerts = client.post("/settings/alerts", data={
+            "renewal_window_days": "0",
+        }, follow_redirects=False)
+        assert smtp.status_code == schedule.status_code == alerts.status_code == 303
         assert "saved=1" in smtp.headers["location"]
+        assert "saved=1" in schedule.headers["location"]
         assert "saved=1" in alerts.headers["location"]
         runtime = app.state.scheduler
         assert runtime is created[0]
@@ -187,7 +191,7 @@ def test_lifespan_jobs_use_saved_configuration_without_restart(
         assert runtime.context.settings.renewal_window_days == 0
         runtime.context.run_alerts()
     assert delivered.call_args.args[1].smtp_host == "saved.example.invalid"
-    assert created[0].wake_count == 2
+    assert created[0].wake_count == 3
 
 
 class _Clock(datetime):

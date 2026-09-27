@@ -61,7 +61,7 @@
   </div>
 {% endmacro %}
 
-{% block section %}
+{% macro roles_panel() %}
 <div class="cw-panel">
   <div class="cw-panel-head">
     <h2>Roles</h2>
@@ -81,18 +81,18 @@
   </div>
   {% if roles %}
   <div class="cw-table-clip">
-  <table class="cw-table">
+  <table class="cw-table cw-mobile-wrap-table cw-mobile-card-table">
     <thead>
       <tr><th>Name</th><th>Access</th><th>Alert group</th><th>Email</th><th><span class="cw-sr">Actions</span></th></tr>
     </thead>
     <tbody>
       {% for r in roles %}
       <tr>
-        <td>
+        <td data-label="Name">
           <span class="cw-strong">{{ r.name }}</span>
           {% if r.description %}<div class="cw-sub">{{ r.description }}</div>{% endif %}
         </td>
-        <td>
+        <td data-label="Access">
           {% set overrides = role_tag_tiers.get(r.id, {}) %}
           {% if r.scope_tag %}
             <div class="cw-chiprow">
@@ -105,9 +105,9 @@
             <span class="cw-chip {{ 't-ink' if r.permission_tier in ('operator', 'admin') else 't-muted' }}">{{ r.permission_tier }} · whole estate</span>
           {% endif %}
         </td>
-        <td>{% if r.alert_group_id %}{% for ag in alert_groups %}{% if ag.id == r.alert_group_id %}{{ ag.name }}{% endif %}{% endfor %}{% else %}<span class="cw-muted">—</span>{% endif %}</td>
-        <td>{{ r.email or '—' }}</td>
-        <td>
+        <td data-label="Alert group">{% if r.alert_group_id %}{% for ag in alert_groups %}{% if ag.id == r.alert_group_id %}{{ ag.name }}{% endif %}{% endfor %}{% else %}<span class="cw-muted">—</span>{% endif %}</td>
+        <td data-label="Email">{{ r.email or '—' }}</td>
+        <td data-label="Actions">
           <div class="cw-chiprow">
             <details class="cw-editor">
               <summary class="cw-btn ghost sm">Edit</summary>
@@ -159,4 +159,8 @@
     {{ ui.empty('No roles yet', 'Create one above to define a team and its access.', icon='users') }}
   {% endif %}
 </div>
+{% endmacro %}
+
+{% block section %}
+{{ roles_panel() }}
 {% endblock %}

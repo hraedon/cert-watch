@@ -150,6 +150,7 @@ from cert_watch.database.drift import (
     list_cert_history,
     list_grade_trends,
     list_tls_version_trends,
+    posture_trend_ready,
     purge_old_history,
     record_cert_history,
 )
@@ -322,6 +323,7 @@ __all__ = [  # noqa: RUF022 — exports are grouped by database subsystem
     "list_cert_history",
     "list_tls_version_trends",
     "list_grade_trends",
+    "posture_trend_ready",
     # dashboard
     "count_dashboard_leaves",
     "count_leaf_certs",

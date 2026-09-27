@@ -105,21 +105,160 @@ SC-081 readiness <span class="cw-hint">47-day regime</span></a>
 
 
 
+
+<div class="cw-section">
+  <div>
+    <h2>Certificate grades</h2>
+    <div class="cw-sub">Latest posture grade per visible certificate. Select a count to inspect that exact grade.</div>
+  </div>
+
+</div>
+
   <div class="cw-stats">
 
 
 
-<div class="cw-stat">
-  <span class="cw-stat-label">
 
-    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>
+<a href="/posture?grade=A%2B#certificate-grades" class="cw-stat" data-testid="grade-count-Aplus">
+  <span class="cw-stat-label">Grade A+</span>
+  <div class="cw-stat-val">0</div>
+  <div class="cw-stat-sub">certificates</div>
+</a>
 
-Fleet grade</span>
-  <div class="cw-stat-val t-warn">B</div>
-  <div class="cw-stat-sub">worst-weighted across 5 graded certificates</div>
+
+
+
+
+<a href="/posture?grade=A#certificate-grades" class="cw-stat" data-testid="grade-count-A">
+  <span class="cw-stat-label">Grade A</span>
+  <div class="cw-stat-val">0</div>
+  <div class="cw-stat-sub">certificates</div>
+</a>
+
+
+
+
+
+<a href="/posture?grade=B#certificate-grades" class="cw-stat" data-testid="grade-count-B">
+  <span class="cw-stat-label">Grade B</span>
+  <div class="cw-stat-val t-warn">5</div>
+  <div class="cw-stat-sub">certificates</div>
+</a>
+
+
+
+
+
+<a href="/posture?grade=C#certificate-grades" class="cw-stat" data-testid="grade-count-C">
+  <span class="cw-stat-label">Grade C</span>
+  <div class="cw-stat-val">0</div>
+  <div class="cw-stat-sub">certificates</div>
+</a>
+
+
+
+
+
+<a href="/posture?grade=F#certificate-grades" class="cw-stat" data-testid="grade-count-F">
+  <span class="cw-stat-label">Grade F</span>
+  <div class="cw-stat-val">0</div>
+  <div class="cw-stat-sub">certificates</div>
+</a>
+
+
+  </div>
+
+
+
+  <div class="cw-panel" id="certificate-grades">
+    <div class="cw-panel-head">
+      <h2>Worst certificates</h2>
+      <span class="cw-hint">lowest grades first · reason shown</span>
+    </div>
+
+    <div class="cw-table-clip">
+      <table class="cw-table cw-mobile-wrap-table cw-mobile-card-table" data-testid="posture-offenders">
+        <thead><tr><th>Certificate</th><th>Grade</th><th>Reason</th><th><span class="cw-sr">Open</span></th></tr></thead>
+        <tbody>
+
+          <tr>
+            <td data-label="Certificate"><a class="cw-id" href="/certificates/{{CERT_1_ID}}">intranet.demo.test</a><div class="cw-sub">O=Demo Estate,CN=intranet.demo.test</div></td>
+            <td data-label="Grade"><span class="cw-grade t-warn" title="Posture grade B">B</span></td>
+            <td data-label="Reason">Incomplete chain — server missing intermediate(s)</td>
+            <td data-label=""><a class="cw-iconbtn sm" href="/certificates/{{CERT_1_ID}}" aria-label="Open intranet.demo.test">
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
+
+</a></td>
+          </tr>
+
+          <tr>
+            <td data-label="Certificate"><a class="cw-id" href="/certificates/{{CERT_2_ID}}">ldaps.demo.test</a><div class="cw-sub">O=Demo Estate,CN=ldaps.demo.test</div></td>
+            <td data-label="Grade"><span class="cw-grade t-warn" title="Posture grade B">B</span></td>
+            <td data-label="Reason">Incomplete chain — server missing intermediate(s)</td>
+            <td data-label=""><a class="cw-iconbtn sm" href="/certificates/{{CERT_2_ID}}" aria-label="Open ldaps.demo.test">
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
+
+</a></td>
+          </tr>
+
+          <tr>
+            <td data-label="Certificate"><a class="cw-id" href="/certificates/{{CERT_3_ID}}">legacy.demo.test</a><div class="cw-sub">O=Demo Estate,CN=legacy.demo.test</div></td>
+            <td data-label="Grade"><span class="cw-grade t-warn" title="Posture grade B">B</span></td>
+            <td data-label="Reason">Incomplete chain — server missing intermediate(s)</td>
+            <td data-label=""><a class="cw-iconbtn sm" href="/certificates/{{CERT_3_ID}}" aria-label="Open legacy.demo.test">
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
+
+</a></td>
+          </tr>
+
+          <tr>
+            <td data-label="Certificate"><a class="cw-id" href="/certificates/{{CERT_4_ID}}">mail.demo.test</a><div class="cw-sub">O=Demo Estate,CN=mail.demo.test</div></td>
+            <td data-label="Grade"><span class="cw-grade t-warn" title="Posture grade B">B</span></td>
+            <td data-label="Reason">Incomplete chain — server missing intermediate(s)</td>
+            <td data-label=""><a class="cw-iconbtn sm" href="/certificates/{{CERT_4_ID}}" aria-label="Open mail.demo.test">
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
+
+</a></td>
+          </tr>
+
+          <tr>
+            <td data-label="Certificate"><a class="cw-id" href="/certificates/{{CERT_5_ID}}">vpn.demo.test</a><div class="cw-sub">O=Demo Estate,CN=vpn.demo.test</div></td>
+            <td data-label="Grade"><span class="cw-grade t-warn" title="Posture grade B">B</span></td>
+            <td data-label="Reason">Incomplete chain — server missing intermediate(s)</td>
+            <td data-label=""><a class="cw-iconbtn sm" href="/certificates/{{CERT_5_ID}}" aria-label="Open vpn.demo.test">
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
+
+</a></td>
+          </tr>
+
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+
+
+
+  <div class="cw-sub cw-muted" data-testid="posture-trends-waiting">Trends appear after more than a month of scan history.</div>
+
+
+
+
+
+<div class="cw-section">
+  <div>
+    <h2>Crypto inventory</h2>
+    <div class="cw-sub">Key algorithms, signature hashes, and weak primitives. Informational — does not affect grades.</div>
+  </div>
+
 </div>
 
-
+  <div class="cw-stats">
 
 
 <div class="cw-stat" data-testid="crypto-total">
@@ -157,116 +296,6 @@ Key families</span>
 </div>
 
   </div>
-
-
-
-  <div class="cw-grid-2">
-    <div class="cw-panel">
-      <div class="cw-panel-head">
-        <h2>Posture grades over time</h2>
-        <span class="cw-hint">worst-weighted grade · monthly</span>
-      </div>
-      <div class="cw-panel-body">
-
-
-<div class="cw-empty">
-  <div class="cw-empty-icon ">
-
-    <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M21 7v6h-6"/></svg>
-
-</div>
-  <div class="cw-empty-title">Not enough history</div>
-  <div class="cw-empty-sub">Grade trends appear after a few scheduled scans.</div>
-
-</div>
-
-
-      </div>
-    </div>
-    <div class="cw-panel">
-      <div class="cw-panel-head">
-        <h2>TLS versions across the fleet</h2>
-        <span class="cw-hint">negotiated protocol · monthly</span>
-      </div>
-      <div class="cw-panel-body">
-
-
-<div class="cw-empty">
-  <div class="cw-empty-icon ">
-
-    <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M21 7v6h-6"/></svg>
-
-</div>
-  <div class="cw-empty-title">Not enough history</div>
-  <div class="cw-empty-sub">Protocol trends appear after a few scheduled scans.</div>
-
-</div>
-
-
-      </div>
-    </div>
-  </div>
-
-
-
-  <div class="cw-panel">
-    <div class="cw-panel-head">
-      <h2>Current grade distribution</h2>
-      <span class="cw-hint">latest grade per certificate · uploaded files graded from the file</span>
-    </div>
-    <div class="cw-panel-body">
-
-
-
-
-
-
-        <div class="cw-cal-row">
-          <div class="cw-cal-date"><span class="cw-grade t-ok" title="Posture grade A">A</span></div>
-          <svg class="cw-bar t-ok" role="img" aria-label="0 certificates graded A" preserveAspectRatio="none">
-            <rect class="track" width="100%" height="100%"/>
-            <rect class="fill" width="0%" height="100%"/>
-          </svg>
-          <span class="tnum cw-gradecount">0</span>
-        </div>
-
-
-
-
-        <div class="cw-cal-row">
-          <div class="cw-cal-date"><span class="cw-grade t-warn" title="Posture grade B">B</span></div>
-          <svg class="cw-bar t-warn" role="img" aria-label="5 certificates graded B" preserveAspectRatio="none">
-            <rect class="track" width="100%" height="100%"/>
-            <rect class="fill" width="100%" height="100%"/>
-          </svg>
-          <span class="tnum cw-gradecount">5</span>
-        </div>
-
-
-
-
-
-
-
-
-
-
-
-    </div>
-  </div>
-
-
-
-
-
-<div class="cw-section">
-  <div>
-    <h2>Crypto inventory</h2>
-    <div class="cw-sub">Key algorithms, signature hashes, and weak-primitive offenders. Informational — does not affect grades.</div>
-  </div>
-
-</div>
-
   <div class="cw-invgrid">
     <div class="cw-panel">
       <div class="cw-panel-head"><h2>Key algorithms</h2></div>

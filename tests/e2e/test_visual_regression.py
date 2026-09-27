@@ -80,6 +80,8 @@ _VISUAL_PAGES = {
     "posture": ("/posture", "insights-heading"),
     "audit": ("/audit", "audit-heading"),
     "settings": ("/settings/auth", "settings-heading"),
+    "settings-policy": ("/settings/policy", "settings-heading"),
+    "settings-access": ("/settings/access", "settings-heading"),
     "api-keys": ("/settings/api-keys", "api-keys-heading"),
     # This server explicitly disables auth: /login redirects to Home.
     "login": ("/login", "home-heading"),
@@ -99,6 +101,18 @@ def test_page_visual(
     page.evaluate("document.fonts.ready")
     page.wait_for_timeout(400)
     assert_snapshot(page, name=f"{name}.png", mask_elements=_MASKS)
+
+
+@pytest.mark.visual
+def test_add_drawer_visual(
+    page: Page, visual_server: str, assert_snapshot,
+) -> None:
+    page.goto(f"{visual_server}/browse")
+    page.get_by_test_id("add-host-btn").click()
+    expect(page.locator("#add-drawer")).to_be_visible()
+    page.evaluate("document.fonts.ready")
+    page.wait_for_timeout(400)
+    assert_snapshot(page, name="add-drawer.png", mask_elements=_MASKS)
 
 
 # ---------------------------------------------------------------------------

@@ -83,8 +83,7 @@
 <nav class="cw-sidenav" aria-label="Settings sections">
   <div class="grp">Access</div>
   <a href="/settings/auth" class="">Authentication</a>
-  <a href="/settings/roles" class="">Roles</a>
-  <a href="/settings/users" class="">Users</a>
+  <a href="/settings/access" class="">Access</a>
   <a href="/settings/api-keys" class="" data-testid="settings-api-keys-link">API keys</a>
   <a href="/settings/tags" class="" data-testid="settings-tags-link">Tags</a>
   <div class="grp">Alerting</div>
@@ -99,6 +98,38 @@
     <div class="cw-vstack">
 
 
+
+<div class="cw-panel" id="daily-scan-time">
+  <div class="cw-panel-head">
+    <h2>Scan schedule</h2>
+    <span class="cw-hint">when monitoring policy is evaluated each day</span>
+  </div>
+  <div class="cw-panel-body">
+    <form method="post" action="/settings/policy" class="cw-form" data-testid="scan-schedule-form">
+      <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
+      <input type="hidden" name="settings_section" value="schedule">
+      <div class="cw-field">
+        <span class="cw-label">Daily scan time (UTC)
+
+        </span>
+        <div class="cw-form-grid">
+          <div class="cw-field">
+            <label class="cw-label" for="sched_hour">Hour (0–23)</label>
+            <input class="cw-input tnum" type="number" min="0" max="23" id="sched_hour"
+                   name="sched_hour" value="6">
+          </div>
+          <div class="cw-field">
+            <label class="cw-label" for="sched_min">Minute (0–59)</label>
+            <input class="cw-input tnum" type="number" min="0" max="59" id="sched_min"
+                   name="sched_min" value="0">
+          </div>
+        </div>
+        <div class="cw-hint">The daily scan and alert cycle. Default 06:00 UTC; per-endpoint cadence still takes precedence.</div>
+      </div>
+      <div class="cw-form-foot"><button type="submit" class="cw-btn primary">Save scan schedule</button></div>
+    </form>
+  </div>
+</div>
 
 <div class="cw-panel">
   <div class="cw-panel-head">
@@ -119,7 +150,7 @@
       </div>
     </div>
   </div>
-  <form method="post" action="/settings/policy">
+  <form method="post" action="/settings/policy" data-testid="policy-form">
     <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
     <input type="hidden" name="default_severity" value="warning">
     <div class="cw-table-clip">

@@ -110,3 +110,77 @@ def test_add_host_validation_error_still_bounces_home(tmp_path, reload_app):
         r = client.post("/hosts", data={"hostname": "bad host!"}, follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"].startswith("/?error=")
+
+
+def test_add_host_stores_creation_owner_and_renewal_fields(
+    tmp_path, reload_app, monkeypatch,
+):
+    _no_dns(monkeypatch)
+    _scan_fails(monkeypatch)
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    with TestClient(app_mod.app) as client:
+        response = client.post(
+            "/hosts",
+            data={
+                "hostname": "owned.example.test",
+                "owner_name": "Platform Team",
+                "owner_email": "platform@example.test",
+                "renewal_method": "cert-manager",
+            },
+            follow_redirects=False,
+        )
+    assert response.status_code == 303
+    host = SqliteHostRepository(db).list_all()[0]
+    assert (host.owner_name, host.owner_email, host.renewal_method) == (
+        "Platform Team",
+        "platform@example.test",
+        "cert-manager",
+    )
+
+
+def test_add_host_rejects_invalid_creation_ownership_before_insert(
+    tmp_path, reload_app, monkeypatch,
+):
+    _no_dns(monkeypatch)
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    with TestClient(app_mod.app) as client:
+        response = client.post(
+            "/hosts",
+            data={
+                "hostname": "bad-owner.example.test",
+                "owner_email": "not-an-address",
+                "renewal_method": "hand-wavy",
+            },
+            follow_redirects=False,
+        )
+    assert response.status_code == 303
+    assert "error=" in response.headers["location"]
+    assert SqliteHostRepository(db).list_all() == []
+
+
+def test_csv_import_accepts_creation_owner_and_renewal_columns(
+    tmp_path, reload_app, monkeypatch,
+):
+    _no_dns(monkeypatch)
+    _scan_fails(monkeypatch)
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    content = (
+        b"hostname,owner_name,owner_email,renewal_method\n"
+        b"csv-owned.example.test,Network Team,network@example.test,manual\n"
+    )
+    with TestClient(app_mod.app) as client:
+        response = client.post(
+            "/hosts/import",
+            files={"file": ("hosts.csv", content, "text/csv")},
+            follow_redirects=False,
+        )
+    assert response.status_code == 303
+    host = SqliteHostRepository(db).list_all()[0]
+    assert (host.owner_name, host.owner_email, host.renewal_method) == (
+        "Network Team",
+        "network@example.test",
+        "manual",
+    )

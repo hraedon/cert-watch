@@ -1,0 +1,29 @@
+{% extends "settings/_base.html" %}
+
+{% from "settings/roles.html" import roles_panel with context %}
+{% from "settings/users.html" import users_panel with context %}
+
+{% block section %}
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2>Access workflow</h2>
+    <span class="cw-hint">roles, identity-provider mapping, and local accounts</span>
+  </div>
+  <div class="cw-panel-body">
+    <div class="cw-seg" aria-label="Access sections">
+      <a class="on" href="#roles">Roles &amp; IdP mapping</a>
+      <a href="#local-users">Local users</a>
+    </div>
+  </div>
+</div>
+
+<section id="roles" class="cw-vstack" aria-labelledby="roles-heading">
+  <h2 id="roles-heading" class="cw-sr cw-sub">Roles and identity-provider mapping</h2>
+  {{ roles_panel() }}
+</section>
+
+<section id="local-users" class="cw-vstack" aria-labelledby="local-users-heading">
+  <h2 id="local-users-heading" class="cw-sr cw-sub">Local users</h2>
+  {{ users_panel() }}
+</section>
+{% endblock %}

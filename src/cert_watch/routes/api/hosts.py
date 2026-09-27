@@ -83,6 +83,9 @@ class HostCreateBody(BaseModel):
     common_ports: StrictBool = False
     notes: StrictStr = Field(default="", max_length=10_000)
     starttls_mode: StrictStr = ""
+    owner_name: StrictStr = ""
+    owner_email: StrictStr = ""
+    renewal_method: StrictStr = ""
 
 
 class HostSettingsBody(BaseModel):
@@ -145,6 +148,9 @@ async def api_create_host(
             common_ports=body.common_ports,
             notes=body.notes,
             starttls_mode=body.starttls_mode,
+            owner_name=body.owner_name,
+            owner_email=body.owner_email,
+            renewal_method=body.renewal_method,
             auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
@@ -266,6 +272,7 @@ def api_list_hosts(
                     "owner_email": h.owner_email,
                     "owner_slack": h.owner_slack,
                     "renewal_status": h.renewal_status,
+                    "renewal_method": h.renewal_method,
                     "notes": h.notes,
                     "expected_issuers": h.expected_issuers,
                     "added_at": h.added_at.isoformat(),

@@ -83,8 +83,7 @@
 <nav class="cw-sidenav" aria-label="Settings sections">
   <div class="grp">Access</div>
   <a href="/settings/auth" class="">Authentication</a>
-  <a href="/settings/roles" class="">Roles</a>
-  <a href="/settings/users" class="">Users</a>
+  <a href="/settings/access" class="">Access</a>
   <a href="/settings/api-keys" class="" data-testid="settings-api-keys-link">API keys</a>
   <a href="/settings/tags" class="" data-testid="settings-tags-link">Tags</a>
   <div class="grp">Alerting</div>
@@ -206,6 +205,14 @@
 
       <div class="cw-divider"></div>
       <div class="cw-kv-label">Alert behavior</div>
+      <div class="cw-note" id="daily-scan-time">
+
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+
+
+        <div>Daily scan time now lives under <a href="/settings/policy#daily-scan-time">Policy</a>.</div>
+      </div>
       <div class="cw-hint">
         Env vars take precedence: a field with an <span class="cw-envbadge">env</span>
         badge is locked to its environment value and changes here will not take
@@ -248,22 +255,6 @@
                  name="alert_retention_days"
                  value="90">
           <div class="cw-hint">Days of alert history to keep before purging. Default 90. Set 0 to disable purging.</div>
-        </div>
-        <div class="cw-field">
-          <span class="cw-label">Daily scan time (UTC)
-
-          </span>
-          <div class="cw-form-grid">
-            <input class="cw-input" type="number" min="0" max="23" id="sched_hour"
-                   name="sched_hour"
-                   value="6"
-                   aria-label="Hour (0-23)">
-            <input class="cw-input" type="number" min="0" max="59" id="sched_min"
-                   name="sched_min"
-                   value="0"
-                   aria-label="Minute (0-59)">
-          </div>
-          <div class="cw-hint">When the daily scan + alert cycle runs, in UTC. Default 06:00.</div>
         </div>
         <div class="cw-field">
           <label class="cw-label" for="check_revocation">OCSP/CRL endpoint reachability

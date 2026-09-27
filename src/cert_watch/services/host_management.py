@@ -34,6 +34,11 @@ from cert_watch.scan import (
 )
 from cert_watch.scan_freshness import scan_interval_out_of_range
 from cert_watch.scheduler import ScanHistory, record_scan_history
+from cert_watch.services.host_ownership import (
+    HostOwnershipUpdate,
+    HostOwnershipValidationError,
+    validate_host_ownership,
+)
 from cert_watch.tags import format_tags, merge_tags
 
 logger = logging.getLogger("cert_watch.services.host_management")
@@ -266,6 +271,9 @@ async def create_hosts(
     common_ports: bool = False,
     notes: str = "",
     starttls_mode: str = "",
+    owner_name: str = "",
+    owner_email: str = "",
+    renewal_method: str = "",
     auth: Any,
     actor: str,
     source_ip: str | None,
@@ -294,6 +302,15 @@ async def create_hosts(
         raise HostValidationError("threshold_days must be at least 1")
     if scan_interval_out_of_range(scan_interval_hours):
         raise HostValidationError("scan interval must be between 1 and 8760 hours, or blank")
+    ownership = HostOwnershipUpdate(
+        owner_name=owner_name.strip(),
+        owner_email=owner_email.strip(),
+        renewal_method=renewal_method.strip(),
+    )
+    try:
+        validate_host_ownership(ownership)
+    except HostOwnershipValidationError as exc:
+        raise HostValidationError(str(exc)) from None
     normalized_tags = _scoped_tags(auth, tags)
     ensure_new_tags_in_scope(auth, normalized_tags)
     ssrf_error, pinned_ip = _resolve_fn(
@@ -318,6 +335,9 @@ async def create_hosts(
             scan_interval_hours=scan_interval_hours,
             notes=notes,
             starttls_mode=starttls_mode,
+            owner_name=ownership.owner_name or "",
+            owner_email=ownership.owner_email or "",
+            renewal_method=ownership.renewal_method or "",
         )
     for host_id, candidate_port in added:
         record_audit(
@@ -439,6 +459,16 @@ async def import_hosts_csv(
         if starttls_mode and starttls_mode not in STARTTLS_MODES:
             errors.append(f"row {row_number}: unsupported starttls_mode '{starttls_mode}'")
             continue
+        ownership = HostOwnershipUpdate(
+            owner_name=(row.get("owner_name") or "").strip(),
+            owner_email=(row.get("owner_email") or "").strip(),
+            renewal_method=(row.get("renewal_method") or "").strip(),
+        )
+        try:
+            validate_host_ownership(ownership)
+        except HostOwnershipValidationError as exc:
+            errors.append(f"row {row_number}: {exc}")
+            continue
         error, pinned_ip = _resolve_fn(
             hostname,
             allow_private=settings.allow_private,
@@ -466,6 +496,9 @@ async def import_hosts_csv(
                     scan_interval_hours=interval,
                     notes=(row.get("notes") or "").strip(),
                     starttls_mode=starttls_mode,
+                    owner_name=ownership.owner_name or "",
+                    owner_email=ownership.owner_email or "",
+                    renewal_method=ownership.renewal_method or "",
                 )
             except PermissionError as exc:
                 errors.append(f"row {row_number}: {exc}")

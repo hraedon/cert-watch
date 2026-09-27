@@ -341,6 +341,9 @@ async def add_host(
     common_ports: bool = Form(False),
     notes: str = Form(""),
     starttls_mode: str = Form(""),
+    owner_name: str = Form(""),
+    owner_email: str = Form(""),
+    renewal_method: str = Form(""),
     _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
     # Once framework parsing and guards complete, both adapters charge the
@@ -361,6 +364,9 @@ async def add_host(
             common_ports=common_ports,
             notes=notes,
             starttls_mode=starttls_mode,
+            owner_name=owner_name,
+            owner_email=owner_email,
+            renewal_method=renewal_method,
             auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),

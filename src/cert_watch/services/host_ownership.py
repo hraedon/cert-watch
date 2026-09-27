@@ -146,6 +146,11 @@ def _validate(update: HostOwnershipUpdate) -> None:
             raise HostOwnershipValidationError("runbook_url", error)
 
 
+def validate_host_ownership(update: HostOwnershipUpdate) -> None:
+    """Validate ownership fields for creation and editing with one contract."""
+    _validate(update)
+
+
 def _unknown_answer(auth: Any, db_path: str | Path) -> Callable[[], Exception]:
     """What an id that names no host or certificate gets from this caller:
     the scope refusal for a scoped caller (authorization comes before the

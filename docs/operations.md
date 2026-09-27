@@ -163,8 +163,10 @@ Every page counts the estate with the same definitions.
   identities to non-admins. Row building remains bounded; expanding a
   Browse group loads it 100 rows at a time.
 - **Graded** — a certificate with a posture grade: its latest scan's grade, or,
-  for an uploaded file, the grade of the file itself. The Posture fleet grade
-  and the compliance report's grade distribution cover the same certificates.
+  for an uploaded file, the grade of the file itself. Posture leads with the
+  scoped grade distribution and the lowest-grade certificates plus their
+  reason; it does not collapse the estate to one worst-certificate grade.
+  Selecting a grade count opens the complete matching certificate list.
 - **Compliance report** — *Certificates* are the certificates in scope and
   *Endpoints* the scanned endpoints among them. Its expiry sections place each
   certificate by its effective days, with the legacy display-status boundaries
@@ -174,7 +176,8 @@ Every page counts the estate with the same definitions.
   intermediate's. Each entry also carries monitoring, renewal and delivery;
   condition remains a separate expiry fact.
 - **Posture trends** count each endpoint once per month, by its latest scan
-  that month.
+  that month. The charts stay hidden, with an explanatory note, until the
+  visible scan history spans more than 30 days.
 - **Scan history** groups scans that ran within five minutes of each other.
   *Endpoints* counts each endpoint once, judged by its latest attempt in the
   batch: successful only when that scan fully succeeded. A partial scan is
