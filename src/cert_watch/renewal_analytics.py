@@ -368,6 +368,10 @@ def refresh_stale_classifier_rows(db_path: str | Path) -> int:
         ).fetchall()
         for batch_start in range(0, len(endpoints), _STALE_REFRESH_BATCH_SIZE):
             batch = endpoints[batch_start : batch_start + _STALE_REFRESH_BATCH_SIZE]
+            # sqlite3 does not open a transaction for SAVEPOINT, so without an
+            # explicit BEGIN each RELEASE would commit one endpoint on its own.
+            if not conn.in_transaction:
+                conn.execute("BEGIN")
             for hostname, port in batch:
                 endpoint_hostname = str(hostname)
                 endpoint_port = int(port)

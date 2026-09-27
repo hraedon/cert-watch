@@ -1060,3 +1060,37 @@ def test_purge_refreshes_exactly_the_endpoints_it_purged(tmp_path):
     assert purged is not None
     assert tuple(purged) == ("unknown", 0)
     assert _cached(db, fresh_host, 443) == "likely-automated"
+
+
+def test_startup_refresh_commits_once_per_batch(tmp_path, monkeypatch):
+    import contextlib
+
+    import cert_watch.renewal_analytics as analytics
+
+    db = tmp_path / "batches.sqlite3"
+    init_schema(db)
+    hostnames = [f"batch-{i}.example.test" for i in range(5)]
+    with _connect(db) as conn:
+        for hostname in hostnames:
+            _seed_acme(conn, hostname, 443)
+            refresh_endpoint_analytics(conn, hostname, 443)
+        conn.execute("UPDATE endpoint_renewal_analytics SET classifier_version = 0")
+        conn.commit()
+
+    statements: list[str] = []
+    original_connect = analytics._connect
+
+    @contextlib.contextmanager
+    def traced(path):
+        with original_connect(path) as conn:
+            conn.set_trace_callback(statements.append)
+            yield conn
+
+    monkeypatch.setattr(analytics, "_connect", traced)
+    monkeypatch.setattr(analytics, "_STALE_REFRESH_BATCH_SIZE", 2)
+    assert refresh_stale_classifier_rows(db) == 5
+
+    # Three batches (2 + 2 + 1): each opens one transaction, so the per-endpoint
+    # savepoints nest inside it instead of each committing on its own.
+    assert sum(s.strip().upper() == "BEGIN" for s in statements) == 3
+    assert sum(s.strip().upper() == "COMMIT" for s in statements) == 3
