@@ -137,7 +137,7 @@ def test_browse_presenter_uses_four_axis_facts_without_recomputing_status() -> N
     )
     row = view.entries[0]
 
-    assert row.condition_label == "Expired 3 days ago"
+    assert row.condition_label == "Last seen · expired 3 days ago"
     assert row.condition_tone == "t-expired"
     assert row.condition_is_chain_limited is True
     assert row.monitoring_label == "Failing since 2026-09-22 06:00 UTC"
@@ -208,6 +208,16 @@ def test_browse_presenter_distinguishes_overdue_never_and_uploads() -> None:
         "Never scanned",
         "",
     ]
+    assert [row.condition_label for row in view.entries] == [
+        "Last seen · 10 days left",
+        "No certificate",
+        "10 days left",
+    ]
+    assert [row.condition_tone for row in view.entries] == [
+        "t-warn",
+        "t-muted",
+        "t-warn",
+    ]
 
 
 def test_browse_presenter_derives_calendar_tones_and_storms() -> None:
@@ -233,3 +243,49 @@ def test_browse_presenter_derives_calendar_tones_and_storms() -> None:
         "",
     ]
     assert view.calendar_storms == 2
+
+
+def test_pivot_group_preserves_overdue_count_and_earliest_since() -> None:
+    data = _browse_data()
+    group = {
+        "key": "Platform team",
+        "count": 3,
+        "worst_urgency": "failing",
+        "earliest_expiry": 80,
+        "condition": "ok",
+        "monitoring": "failing",
+        "monitoring_failing_count": 2,
+        "monitoring_overdue_count": 2,
+        "monitoring_since": "2026-09-18T06:00:00+00:00",
+        "renewal": "unknown",
+        "delivery": "ok",
+        "chain_trust_problem": False,
+    }
+    view = present_browse(
+        BrowsePageData(
+            **{
+                **data.__dict__,
+                "entries": [],
+                "pivot_groups": [
+                    group,
+                    {
+                        **group,
+                        "key": "Mixed team",
+                        "monitoring_overdue_count": 1,
+                    },
+                ],
+                "pivot_view": "owner",
+            }
+        )
+    )
+
+    pivot = (view.pivot_groups or ())[0]
+    assert pivot.condition_label == "Last seen OK · expires in 80 days"
+    assert pivot.condition_tone == "t-muted"
+    assert pivot.monitoring_label == (
+        "2 of 3 overdue since 2026-09-18 06:00 UTC"
+    )
+    mixed = (view.pivot_groups or ())[1]
+    assert mixed.monitoring_label == (
+        "1 of 3 failing since 2026-09-18 06:00 UTC"
+    )

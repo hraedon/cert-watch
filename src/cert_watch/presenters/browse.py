@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from cert_watch.filters import compute_urgency
+from cert_watch.presenters.status_display import condition_display
 from cert_watch.scan_freshness import ScanEvidence
 from cert_watch.services.browse_page import BrowsePageData
 from cert_watch.tags import parse_tags
@@ -83,6 +84,9 @@ class PivotGroupView:
     renewal: str
     delivery: str
     chain_trust_problem: bool
+    monitoring_failing_count: int
+    monitoring_overdue_count: int
+    monitoring_since: str | None
 
     @property
     def earliest_expiry_label(self) -> str:
@@ -91,18 +95,25 @@ class PivotGroupView:
 
     @property
     def condition_label(self) -> str:
-        return _condition_label(self.condition, self.earliest_expiry)[0]
+        return condition_display(
+            self.condition, self.earliest_expiry, self.monitoring
+        ).label
 
     @property
     def condition_tone(self) -> str:
-        return _condition_label(self.condition, self.earliest_expiry)[1]
+        return condition_display(
+            self.condition, self.earliest_expiry, self.monitoring
+        ).tone
 
     @property
     def monitoring_label(self) -> str:
-        return {
-            "failing": "Monitoring failing",
-            "never_scanned": "Never scanned",
-        }.get(self.monitoring, "")
+        return _group_monitoring_label(
+            self.monitoring,
+            self.count,
+            self.monitoring_failing_count,
+            self.monitoring_overdue_count,
+            self.monitoring_since,
+        )
 
     @property
     def monitoring_cause(self) -> str:
@@ -139,20 +150,6 @@ def days_remaining_label(days: int | None) -> str:
     return f"{days} day{'s' if days != 1 else ''}"
 
 
-def _condition_label(condition: str | None, days: int | None) -> tuple[str, str]:
-    if condition is None or days is None:
-        return "No certificate", "t-muted"
-    if condition == "expired":
-        count = abs(days)
-        return f"Expired {count} day{'s' if count != 1 else ''} ago", "t-expired"
-    if days == 0:
-        return "Expires today", "t-crit"
-    tone = {"le7": "t-crit", "8to30": "t-warn", "ok": "t-ok"}.get(
-        condition, "t-muted"
-    )
-    return f"{days} day{'s' if days != 1 else ''} left", tone
-
-
 def _format_timestamp(value: object) -> str:
     if not value:
         return ""
@@ -163,6 +160,34 @@ def _format_timestamp(value: object) -> str:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _group_monitoring_label(
+    monitoring: str,
+    total: int,
+    failing_count: int,
+    overdue_count: int,
+    since_raw: object,
+) -> str:
+    if monitoring == "never_scanned":
+        return "Never scanned"
+    if monitoring != "failing":
+        return ""
+    since = _format_timestamp(since_raw)
+    active_failures = max(failing_count - overdue_count, 0)
+    if active_failures:
+        label = (
+            f"{active_failures} of {total} failing"
+            if total > 1
+            else "Monitoring failing"
+        )
+    else:
+        label = (
+            f"{overdue_count} of {total} overdue"
+            if total > 1
+            else "Monitoring overdue"
+        )
+    return f"{label} since {since}" if since else label
 
 
 def _monitoring_display(
@@ -176,6 +201,17 @@ def _monitoring_display(
     if monitoring == "never_scanned":
         return "Never scanned", cause
     if monitoring == "failing":
+        if raw.get("kind") == "grouped":
+            return (
+                _group_monitoring_label(
+                    monitoring,
+                    int(detail.get("total") or raw.get("host_count") or 1),
+                    int(detail.get("failing_count") or 0),
+                    int(detail.get("overdue_count") or 0),
+                    detail.get("since"),
+                ),
+                cause,
+            )
         # A successful latest attempt with stale evidence is overdue. A later
         # incomplete attempt is an active failure whose first timestamp is
         # already supplied by the canonical S1 model.
@@ -389,7 +425,7 @@ def _present_entry(
     condition_days = (
         int(condition_days_raw) if condition_days_raw is not None else None
     )
-    condition_label, condition_tone = _condition_label(condition, condition_days)
+    condition_status = condition_display(condition, condition_days, monitoring)
     monitoring_label, monitoring_cause = _monitoring_display(raw, status, monitoring)
     renewal = str(raw.get("renewal") or "unknown")
     delivery = str(raw.get("delivery") or "unrouted")
@@ -454,8 +490,8 @@ def _present_entry(
         renewal=renewal,
         delivery=delivery,
         condition_days=condition_days,
-        condition_label=condition_label,
-        condition_tone=condition_tone,
+        condition_label=condition_status.label,
+        condition_tone=condition_status.tone,
         condition_is_chain_limited=(
             condition_days is not None
             and days_remaining is not None
@@ -516,6 +552,13 @@ def present_browse(data: BrowsePageData, *, now: datetime | None = None) -> Brow
                 renewal=str(group.get("renewal") or "unknown"),
                 delivery=str(group.get("delivery") or "unrouted"),
                 chain_trust_problem=bool(group.get("chain_trust_problem")),
+                monitoring_failing_count=int(group.get("monitoring_failing_count") or 0),
+                monitoring_overdue_count=int(group.get("monitoring_overdue_count") or 0),
+                monitoring_since=(
+                    str(group["monitoring_since"])
+                    if group.get("monitoring_since")
+                    else None
+                ),
             )
             for group in data.pivot_groups
         )

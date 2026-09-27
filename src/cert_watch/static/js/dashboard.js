@@ -20,16 +20,38 @@
     var state = condition.state || entry.condition;
     var days = condition.effective_days;
     if (days == null) days = entry.effective_days;
-    if (state == null || days == null) return { label: 'No certificate', tone: 't-muted' };
+    var monitoring = status.monitoring || {};
+    var monitoringState = monitoring.state || entry.monitoring;
+    var stale = monitoringState !== 'current' && monitoringState !== 'not_monitored';
+    if (state == null || days == null) return { label: 'No certificate', tone: 't-muted', state: state, days: days };
     if (state === 'expired') {
       var ago = Math.abs(days);
-      return { label: 'Expired ' + ago + ' day' + (ago === 1 ? '' : 's') + ' ago', tone: 't-expired' };
+      var expired = 'Expired ' + ago + ' day' + (ago === 1 ? '' : 's') + ' ago';
+      return { label: stale ? 'Last seen · ' + expired.toLowerCase() : expired, tone: 't-expired', state: state, days: days };
     }
-    if (days === 0) return { label: 'Expires today', tone: 't-crit' };
+    if (days === 0) return { label: stale ? 'Last seen · expires today' : 'Expires today', tone: 't-crit', state: state, days: days };
+    if (state === 'ok' && stale) {
+      return {
+        label: 'Last seen OK · expires in ' + days + ' day' + (days === 1 ? '' : 's'),
+        tone: 't-muted', state: state, days: days
+      };
+    }
+    var label = days + ' day' + (days === 1 ? '' : 's') + ' left';
     return {
-      label: days + ' day' + (days === 1 ? '' : 's') + ' left',
-      tone: { le7: 't-crit', '8to30': 't-warn', ok: 't-ok' }[state] || 't-muted'
+      label: stale ? 'Last seen · ' + label : label,
+      tone: { le7: 't-crit', '8to30': 't-warn', ok: 't-ok' }[state] || 't-muted',
+      state: state,
+      days: days
     };
+  }
+
+  function metadata(entry) {
+    var meta = document.createElement('div');
+    meta.className = 'cw-chiprow cw-metarow';
+    if (entry.source === 'uploaded') meta.appendChild(textSpan('cw-chip', 'Uploaded'));
+    if (entry.owner_name) meta.appendChild(textSpan('cw-chip', entry.owner_name));
+    if (entry.host_id && entry.notes) meta.appendChild(textSpan('cw-chip t-muted cw-note-chip', 'note'));
+    return meta;
   }
 
   function utcLabel(value) {
@@ -99,7 +121,7 @@
       if (entry.id) {
         link = document.createElement('a');
         link.href = '/certificates/' + encodeURIComponent(entry.id);
-        link.className = 'cw-id';
+        link.className = 'cw-id cw-link';
         link.textContent = name;
       } else {
         link = document.createElement('span');
@@ -107,7 +129,8 @@
         link.textContent = name;
       }
       subject.appendChild(link);
-      if (entry.source === 'uploaded') subject.appendChild(textSpan('cw-chip', 'Uploaded'));
+      var meta = metadata(entry);
+      if (meta.children.length) subject.appendChild(meta);
       div.appendChild(subject);
       var condition = conditionDisplay(entry);
       var conditionCell = document.createElement('div');
@@ -118,6 +141,15 @@
       dot.setAttribute('aria-hidden', 'true');
       pill.insertBefore(dot, pill.firstChild);
       conditionCell.appendChild(pill);
+      if (entry.not_after) {
+        var leafDays = entry.days_remaining;
+        var chainFirst = condition.days != null && leafDays != null && condition.days !== leafDays;
+        var dateTone = condition.state === 'expired' || condition.state === 'le7' ? ' ' + condition.tone : '';
+        conditionCell.appendChild(textSpan(
+          'cw-condition-date' + dateTone,
+          (chainFirst ? 'Chain expires first · leaf ' : 'Expires ') + entry.not_after.slice(0, 10)
+        ));
+      }
       div.appendChild(conditionCell);
       div.appendChild(factFlags(entry));
       return div;

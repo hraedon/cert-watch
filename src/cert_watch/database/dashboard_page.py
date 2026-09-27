@@ -61,7 +61,6 @@ def inventory_candidates_sql(
     status: StatusContext | None = None,
     axes: StatusModelContext | None = None,
     entry_id: str | None = None,
-    sql_delivery: bool = False,
     axis_columns: frozenset[str] | None = None,
     entry_keys: tuple[tuple[str, str], ...] | None = None,
     history_endpoints: tuple[tuple[str, int], ...] | None = None,
@@ -225,17 +224,17 @@ def inventory_candidates_sql(
     )
     delivery_col = (
         delivery_state_sql("c", "h", delivery_settings)
-        if need_delivery and sql_delivery
+        if need_delivery
         else "'unrouted'"
     )
     pending_delivery_col = (
         delivery_state_sql(None, "h", delivery_settings)
-        if need_delivery and sql_delivery
+        if need_delivery
         else "'unrouted'"
     )
     uploaded_delivery_col = (
         delivery_state_sql("c", None, delivery_settings)
-        if need_delivery and sql_delivery
+        if need_delivery
         else "'unrouted'"
     )
     scanned_routing_gap_col = routing_gap_sql("c", "h") if need_routing else "0"
@@ -256,6 +255,7 @@ def inventory_candidates_sql(
                    h.added_at AS sort_added,
                    {status_cols},
                    {monitoring_cols},
+                   h.scan_interval_hours AS monitoring_interval_hours,
                    {renewal_col},
                    {renewal_analytics_col} AS renewal_analytics,
                    EXISTS(SELECT 1 FROM certificates succ
@@ -311,6 +311,7 @@ def inventory_candidates_sql(
                    h.added_at AS sort_added,
                    NULL AS eff_days, NULL AS chain_status,
                    {monitoring_cols},
+                   h.scan_interval_hours AS monitoring_interval_hours,
                    {pending_renewal_col},
                    {renewal_analytics_col} AS renewal_analytics,
                    0 AS has_successor,
@@ -369,6 +370,7 @@ def inventory_candidates_sql(
                    NULL AS monitoring_attempt_status,
                    NULL AS monitoring_error,
                    NULL AS monitoring_first_failed,
+                   NULL AS monitoring_interval_hours,
                    'unknown' AS renewal,
                    'unknown' AS renewal_analytics,
                    0 AS has_successor,
@@ -523,7 +525,7 @@ def build_inventory_entries(
         for key in (
             "eff_days", "condition", "monitoring", "monitoring_last_success",
             "monitoring_last_attempt", "monitoring_attempt_status", "monitoring_error",
-            "monitoring_first_failed", "renewal", "delivery",
+            "monitoring_first_failed", "monitoring_interval_hours", "renewal", "delivery",
             "renewal_analytics", "has_successor", "overall_state", "hostname", "port",
         ):
             if key in keys:
@@ -637,7 +639,7 @@ def list_dashboard_page(
     # keys, so an unfiltered 20k estate evaluates at most 25/50 display rows.
     candidates = inventory_candidates_sql(
         source=source, q=q, scope_tags=scope_tags, status=status, axes=axes,
-        entry_id=entry_id, sql_delivery=bool(delivery), axis_columns=filter_axes,
+        entry_id=entry_id, axis_columns=filter_axes,
     )
     if candidates is None:
         return [], 0
@@ -714,7 +716,6 @@ def list_dashboard_page(
             entry_id=entry_id,
             entry_keys=keys,
             history_endpoints=endpoints,
-            sql_delivery=True,
         )
         assert full_candidates is not None
         full_sql, full_params = full_candidates

@@ -56,15 +56,18 @@
   --cw-pad-panel: 15px 18px;
   --cw-pad-page: 22px 26px;
   --cw-topbar-h: 58px;
-  --cw-critical-date: var(--crit);
+  --cw-critical-text: color-mix(in srgb, var(--crit) 90%, var(--text));
+  --cw-critical-date: var(--cw-critical-text);
 }
 :root[data-theme="dark"] {
-  /* Browse places critical dates on panel/inset surfaces. The vendored
-     terracotta clears body and panel, but not every nested row surface. */
-  --cw-critical-date: #d46f60; /* patina-allow: critical dates need 4.5:1 on nested dark rows */
+  /* The vendored terracotta is 4.32:1 on a hovered row. Keep the component
+     text above 4.8:1 there without changing the shared patina token. */
+  --cw-critical-text: color-mix(in srgb, var(--crit) 90%, var(--text));
 }
 :root[data-theme="light"] {
   --cw-backdrop: rgba(40, 32, 16, .35);
+  /* Above 4.9:1 on the darkest light inset/hover combination. */
+  --cw-critical-text: color-mix(in srgb, var(--crit) 90%, var(--text));
 }
 
 /* ---------- RECONCILIATION OVERRIDES ----------
@@ -132,7 +135,7 @@ form.cw-inline { display: inline; }
 .t-warn    { --cw-tone: var(--warn);    --cw-tone-soft: color-mix(in srgb, var(--warn) 14%, transparent);    color: var(--warn); --cw-on-tint: var(--text); }
 /* Expired is crit; the word "Expired" carries the difference. */
 .t-crit,
-.t-expired { --cw-tone: var(--crit);    --cw-tone-soft: color-mix(in srgb, var(--crit) 14%, transparent);    color: var(--crit); --cw-on-tint: var(--text); }
+.t-expired { --cw-tone: var(--cw-critical-text); --cw-tone-soft: color-mix(in srgb, var(--cw-critical-text) 14%, transparent); color: var(--cw-critical-text); --cw-on-tint: var(--text); }
 /* Neutral emphasis (a current item, a privileged tier): ink, not a hue. */
 .t-ink     { --cw-tone: var(--text);    --cw-tone-soft: var(--panel-3);                                       color: var(--text); --cw-on-tint: var(--text); }
 /* Muted is --text-2, not --text-3: components render --cw-tone as text,
@@ -463,7 +466,7 @@ tr[data-expand] { cursor: pointer; }
 .chev.open { transform: rotate(180deg); }
 /* wrap a table in a panel without double padding */
 .cw-table-clip {
-  max-width: 100%; min-width: 0; overflow-x: auto;
+  position: relative; max-width: 100%; min-width: 0; overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
 .cw-panel > .cw-table-clip { border-radius: inherit; }

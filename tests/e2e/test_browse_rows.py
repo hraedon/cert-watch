@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -85,7 +86,7 @@ def browse_rows_server(
         [],
         True,
     )
-    _history(db, "current.alpha.example.test", "success", 2)
+    _history(db, "current.alpha.example.test", "success", 0)
 
     hosts.add(
         "peer.alpha.example.test",
@@ -120,7 +121,7 @@ def browse_rows_server(
         [],
         True,
     )
-    _history(db, "critical.alpha.example.test", "success", 2)
+    _history(db, "critical.alpha.example.test", "success", 0)
 
     hosts.add("overdue.alpha.example.test", tags="alpha")
     replace_scanned(
@@ -143,7 +144,7 @@ def browse_rows_server(
         [],
         True,
     )
-    _history(db, "hidden.beta.example.test", "success", 1)
+    _history(db, "hidden.beta.example.test", "success", 0)
 
     SqliteCertificateRepository(db, source="uploaded").add(
         _cert("upload.example.test", 90)
@@ -155,7 +156,7 @@ def browse_rows_server(
     )
 
     roles = SqliteRoleRepository(db)
-    roles.add(Role(name="browse-admin", permission_tier="administrator"))
+    roles.add(Role(name="browse-admin", permission_tier="admin"))
     roles.add(Role(name="alpha-viewer", permission_tier="viewer", scope_tag="alpha"))
     role_map = {
         "browse-admin": {"groups": [_ADMIN_GROUP]},
@@ -221,9 +222,9 @@ def test_grouped_and_pivot_expansions_use_the_same_four_fact_presentation(
     page.goto(f"{browse_rows_server}/browse?grouped=1")
     shared = _row(page, "current.alpha.example.test")
     expect(shared).to_contain_text("2 hosts")
-    expect(shared).to_contain_text("days left")
+    expect(shared).to_contain_text("Last seen OK")
     expect(shared).not_to_contain_text("No certificate")
-    expect(shared).to_contain_text("Monitoring failing")
+    expect(shared).to_contain_text("1 of 2 failing since")
     shared.get_by_role("button", name="Show endpoints").click()
     expansion = page.locator("tr[id^='group-hosts-']:not(.cw-hidden)")
     expect(expansion).to_contain_text("peer.alpha.example.test")
@@ -232,12 +233,95 @@ def test_grouped_and_pivot_expansions_use_the_same_four_fact_presentation(
     page.goto(f"{browse_rows_server}/browse?view=owner")
     alpha = page.get_by_role("button", name="Alpha team")
     expect(alpha).to_be_visible()
+    alpha_row = alpha.locator("xpath=ancestor::tr[1]")
+    expect(alpha_row).to_contain_text("Last seen OK")
+    expect(alpha_row.locator(".cw-status")).to_have_class(re.compile(r"\bt-muted\b"))
+    expect(alpha_row).to_contain_text("1 of 2 failing since")
     alpha.click()
     pivot = page.locator("tr[data-group-key='Alpha team']")
     expect(pivot).to_contain_text("current.alpha.example.test")
     expect(pivot).to_contain_text("days left")
     expect(pivot).to_contain_text("Failing since")
     expect(pivot).not_to_contain_text("Healthy")
+
+
+def test_server_and_js_pivot_rows_render_the_same_condition_and_metadata(
+    page: Page, browse_rows_server: str,
+) -> None:
+    _session(page, browse_rows_server, groups=[_ADMIN_GROUP])
+    page.goto(f"{browse_rows_server}/browse?grouped=0")
+    server = page.locator("tr[data-testid='cert-row']").evaluate_all(
+        """rows => Object.fromEntries(rows.map(row => {
+          const link = row.querySelector('a[href^="/certificates/"]');
+          const id = link && link.getAttribute('href').split('/')[2];
+          const status = row.querySelector('.cw-condition .cw-status');
+          const date = row.querySelector('.cw-condition-date');
+          const meta = [...row.querySelectorAll('.cw-metarow .cw-chip')]
+            .map(chip => chip.textContent.trim());
+          return [id, {
+            condition: status && status.textContent.trim(),
+            tone: status && [...status.classList].find(name => name.startsWith('t-')),
+            date: date && date.textContent.trim().replace(/\\s+/g, ' '),
+            meta,
+          }];
+        }))"""
+    )
+
+    for view in ("issuer", "owner", "renewal_method"):
+        page.goto(f"{browse_rows_server}/browse?view={view}")
+        for toggle in page.locator(".cw-pivot-table .cw-expand-toggle").all():
+            toggle.click()
+        expect(page.locator(".cw-pivot-table .cw-browse-subrow")).to_have_count(7)
+        pivot = page.locator(".cw-pivot-table .cw-browse-subrow").evaluate_all(
+            """rows => Object.fromEntries(rows.map(row => {
+              const link = row.querySelector('a[href^="/certificates/"]');
+              const id = link && link.getAttribute('href').split('/')[2];
+              const status = row.querySelector('.cw-condition .cw-status');
+              const date = row.querySelector('.cw-condition-date');
+              const meta = [...row.querySelectorAll('.cw-metarow .cw-chip')]
+                .map(chip => chip.textContent.trim());
+              return [id, {
+                condition: status && status.textContent.trim(),
+                tone: status && [...status.classList].find(name => name.startsWith('t-')),
+                date: date && date.textContent.trim().replace(/\\s+/g, ' '),
+                meta,
+              }];
+            }))"""
+        )
+
+        assert pivot == server, view
+
+
+def test_pending_delivery_chip_agrees_in_every_browse_path(
+    page: Page, browse_rows_server: str,
+) -> None:
+    _session(page, browse_rows_server, groups=[_ADMIN_GROUP])
+    api = page.request.get(f"{browse_rows_server}/api/certificates?limit=200").json()
+    pending_api = next(
+        row for row in api["certificates"]
+        if row["host"].startswith("never.alpha.example.test:")
+    )
+    assert pending_api["delivery"] == "failing"
+
+    for path in ("/browse?grouped=0", "/browse", "/browse?delivery=failing"):
+        page.goto(f"{browse_rows_server}{path}")
+        expect(_row(page, "never.alpha.example.test")).to_contain_text(
+            "Can't be delivered"
+        )
+
+    page.goto(f"{browse_rows_server}/browse?view=owner")
+    page.get_by_role("button", name="Unassigned").click()
+    pending = page.locator(".cw-browse-subrow").filter(
+        has_text="never.alpha.example.test"
+    )
+    expect(pending).to_contain_text("Can't be delivered")
+
+    for state, chip in (("failing", "Can't be delivered"), ("unrouted", "Unrouted")):
+        page.goto(f"{browse_rows_server}/browse?delivery={state}")
+        rows = page.get_by_test_id("cert-row")
+        assert rows.count() > 0
+        for row in rows.all():
+            expect(row).to_contain_text(chip)
 
 
 def test_scoped_browse_rows_counts_groups_and_pivots_stay_in_scope(
@@ -264,6 +348,8 @@ def test_browse_and_alert_groups_do_not_scroll_document_at_390(
     page.set_viewport_size({"width": 390, "height": 844})
     for path in ("/browse", "/browse?grouped=0", "/browse?view=owner", "/settings/alert-groups"):
         page.goto(f"{browse_rows_server}{path}")
+        if path == "/settings/alert-groups":
+            expect(page.get_by_test_id("alert-groups-table")).to_be_visible()
         assert page.evaluate("document.documentElement.scrollWidth === innerWidth"), path
         assert page.locator(".cw-page").evaluate("el => el.scrollWidth === el.clientWidth"), path
 
@@ -276,3 +362,67 @@ def test_browse_expanders_are_not_nested_interactive_controls(
         page.goto(f"{browse_rows_server}{path}")
         expect(page.locator("tr[role='button'], tr[role='link']")).to_have_count(0)
         expect(page.locator("button a, button button, a button, a a")).to_have_count(0)
+
+
+_STATUS_CONTRAST = """element => {
+  const rgba = value => {
+    const parts = value.match(/[\\d.]+/g).map(Number);
+    const scale = value.startsWith('color(srgb') ? 255 : 1;
+    return [parts[0] * scale, parts[1] * scale, parts[2] * scale,
+      parts.length > 3 ? parts[3] : 1];
+  };
+  const over = (front, back) => {
+    const alpha = front[3] + back[3] * (1 - front[3]);
+    if (!alpha) return [0, 0, 0, 0];
+    return [0, 1, 2].map(i =>
+      (front[i] * front[3] + back[i] * back[3] * (1 - front[3])) / alpha
+    ).concat(alpha);
+  };
+  const ancestors = [];
+  for (let node = element; node; node = node.parentElement) ancestors.push(node);
+  let background = [0, 0, 0, 0];
+  ancestors.reverse().forEach(node => {
+    background = over(rgba(getComputedStyle(node).backgroundColor), background);
+  });
+  const foreground = rgba(getComputedStyle(element).color);
+  const luminance = color => {
+    const linear = color.slice(0, 3).map(channel => {
+      channel /= 255;
+      return channel <= .04045 ? channel / 12.92 : Math.pow((channel + .055) / 1.055, 2.4);
+    });
+    return .2126 * linear[0] + .7152 * linear[1] + .0722 * linear[2];
+  };
+  const a = luminance(foreground);
+  const b = luminance(background);
+  return (Math.max(a, b) + .05) / (Math.min(a, b) + .05);
+}"""
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_hovered_row_critical_text_meets_the_axe_contrast_floor(
+    page: Page, browse_rows_server: str, theme: str,
+) -> None:
+    _session(page, browse_rows_server, groups=[_ADMIN_GROUP])
+    page.add_init_script(f"localStorage.setItem('cw-theme', '{theme}')")
+    page.goto(f"{browse_rows_server}/browse?grouped=0")
+    row = _row(page, "critical.alpha.example.test")
+    row.hover()
+    ratios = row.locator(".cw-status.t-crit, .t-expired, .cw-chip.t-crit").evaluate_all(
+        f"elements => elements.map(element => ({_STATUS_CONTRAST})(element))"
+    )
+    assert ratios and min(ratios) >= 4.5, ratios
+
+    if theme == "light":
+        page.set_viewport_size({"width": 390, "height": 844})
+        page.goto(f"{browse_rows_server}/browse?view=owner")
+        page.get_by_role("button", name="Unassigned").click()
+        subrow = page.locator(".cw-browse-subrow").filter(
+            has_text="critical.alpha.example.test"
+        )
+        subrow.hover()
+        ratios = subrow.locator(
+            ".cw-status.t-crit, .t-expired, .cw-chip.t-crit"
+        ).evaluate_all(
+            f"elements => elements.map(element => ({_STATUS_CONTRAST})(element))"
+        )
+        assert ratios and min(ratios) >= 4.5, ratios

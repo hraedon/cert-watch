@@ -41,7 +41,6 @@ def dashboard_axis_stats(
     )
     candidates = inventory_candidates_sql(
         q=q, source=source, scope_tags=scope_tags, status=status, axes=axes,
-        sql_delivery=True,
         axis_columns=axis_columns,
     )
     result: dict[str, Any] = {

@@ -80,7 +80,7 @@ def _seed(tmp_path, db_name: str = "four-axis.sqlite3"):
                 hostname=host,
                 port=443,
                 status="success",
-                scanned_at=NOW - timedelta(hours=1),
+                scanned_at=NOW,
             ),
         )
 
@@ -347,6 +347,10 @@ def test_group_rollup_uses_worst_condition_and_monitoring(tmp_path):
             "id": "b", "host_id": "hb", "kind": "scanned", "condition": "expired",
             "monitoring": "failing", "renewal": "manual", "delivery": "unrouted",
             "urgency": "expired", "chain_status": "public", "effective_days": -14,
+            "monitoring_attempt_status": "failure",
+            "monitoring_first_failed": (NOW - timedelta(hours=3)).isoformat(),
+            "monitoring_since": (NOW - timedelta(hours=3)).isoformat(),
+            "monitoring_error": "connection refused",
         },
     ]
     context = StatusModelContext(
@@ -365,6 +369,51 @@ def test_group_rollup_uses_worst_condition_and_monitoring(tmp_path):
     assert group["condition"] == "expired"
     assert group["status"]["condition"]["effective_days"] == -14
     assert group["monitoring"] == "failing"
+    assert group["status"]["monitoring"] == {
+        "state": "failing",
+        "since": (NOW - timedelta(hours=3)).isoformat(),
+        "cause": None,
+        "raw_error": None,
+        "failing_count": 1,
+        "overdue_count": 0,
+        "total": 2,
+    }
+
+
+def test_pending_delivery_agrees_across_ungrouped_grouped_pivot_and_filters(tmp_path):
+    from cert_watch.database import (
+        get_pivot_group_entries,
+        list_dashboard_grouped_page,
+    )
+
+    db = tmp_path / "pending-delivery.sqlite3"
+    init_schema(db)
+    SqliteHostRepository(db).add(
+        "pending.example.test", 443, tags="pending-team", owner_name="Pending team"
+    )
+    SqliteAlertGroupRepository(db).create(
+        name="Pending team routes",
+        recipients=["pending@example.test"],
+        match_tags=["pending-team"],
+    )
+
+    ungrouped, _ = list_dashboard_page(db, per_page=0, now=NOW)
+    grouped, _ = list_dashboard_grouped_page(db, per_page=0, now=NOW)
+    pivot = get_pivot_group_entries(db, "owner", "Pending team", now=NOW)
+
+    assert len(ungrouped) == len(grouped) == len(pivot) == 1
+    assert {
+        ungrouped[0]["delivery"],
+        grouped[0]["delivery"],
+        pivot[0]["delivery"],
+    } == {"failing"}
+    for state in ("failing", "unrouted"):
+        filtered, total = list_dashboard_grouped_page(
+            db, delivery=state, per_page=0, now=NOW
+        )
+        assert total == len(filtered)
+        assert all(row["delivery"] == state for row in filtered)
+        assert (total > 0) is (state == "failing")
 
 
 def test_delivery_filter_uses_last_channel_outcome(tmp_path):
@@ -604,7 +653,7 @@ def test_delivery_route_shapes_agree_between_row_filter_and_count(
             hostname=host,
             port=443,
             status="success",
-            scanned_at=NOW - timedelta(hours=1),
+            scanned_at=NOW,
         ),
     )
     if group is not None:
@@ -919,7 +968,7 @@ def test_grouped_pagination_filter_and_whole_group_membership(tmp_path):
         hosts.add(hostname, 443, tags="visible")
         replace_scanned(db, hostname, 443, _cert(hostname, 90, f"page-{index:02d}"), [], True)
         record_scan_history(
-            db, ScanHistory(hostname, 443, "success", scanned_at=NOW - timedelta(hours=1))
+            db, ScanHistory(hostname, 443, "success", scanned_at=NOW)
         )
 
     def keys(page: int) -> list[str]:
@@ -944,7 +993,10 @@ def test_grouped_pagination_filter_and_whole_group_membership(tmp_path):
         hosts.add(hostname, 443, tags="visible")
         replace_scanned(db, hostname, 443, shared, [], True)
         record_scan_history(
-            db, ScanHistory(hostname, 443, "success", scanned_at=NOW - timedelta(hours=1))
+            db,
+            ScanHistory(
+                hostname, 443, "success", scanned_at=NOW - timedelta(seconds=1)
+            ),
         )
     groups, total = list_dashboard_grouped_page(
         db, q="needle", per_page=5, now=NOW, scope_tags=("visible",)
@@ -956,7 +1008,7 @@ def test_grouped_pagination_filter_and_whole_group_membership(tmp_path):
     record_scan_history(
         db,
         ScanHistory(
-            "needle.example.test", 443, "failure", scanned_at=NOW - timedelta(minutes=1)
+            "needle.example.test", 443, "failure", scanned_at=NOW
         ),
     )
     groups, total = list_dashboard_grouped_page(

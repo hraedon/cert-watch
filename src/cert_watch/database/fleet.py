@@ -81,7 +81,6 @@ def list_fleet_pivot(
         scope_tags=scope_tags,
         status=status,
         axes=axes,
-        sql_delivery=True,
     )
     if candidates is None:
         return []
@@ -93,6 +92,16 @@ def list_fleet_pivot(
         rows = conn.execute(
             f"SELECT {column} AS grp, overall_state, condition, monitoring, renewal,"
             " delivery, chain_status, COUNT(*) AS n,"
+            " SUM(CASE WHEN monitoring = 'failing' THEN 1 ELSE 0 END)"
+            " AS monitoring_failing_count,"
+            " SUM(CASE WHEN monitoring = 'failing'"
+            " AND monitoring_attempt_status = 'success'"
+            " AND monitoring_error IS NULL THEN 1 ELSE 0 END)"
+            " AS monitoring_overdue_count,"
+            " MIN(CASE WHEN monitoring = 'failing' THEN"
+            " cw_monitoring_since(monitoring, monitoring_last_success,"
+            " monitoring_attempt_status, monitoring_interval_hours,"
+            " monitoring_first_failed) END) AS monitoring_since,"
             f" MIN(eff_days) AS min_days, MIN(sort_expiry) AS first_expiry"
             " FROM (" + sql + ")"
             " GROUP BY grp, overall_state, condition, monitoring, renewal, delivery,"
@@ -112,6 +121,9 @@ def list_fleet_pivot(
                 "_urgencies": set(),
                 "_conditions": set(),
                 "_monitoring": set(),
+                "monitoring_failing_count": 0,
+                "monitoring_overdue_count": 0,
+                "monitoring_since": None,
                 "_renewal": set(),
                 "_delivery": set(),
                 "_chain_statuses": set(),
@@ -126,6 +138,17 @@ def list_fleet_pivot(
         if row["condition"]:
             group["_conditions"].add(row["condition"])
         group["_monitoring"].add(row["monitoring"] or "not_monitored")
+        group["monitoring_failing_count"] += int(
+            row["monitoring_failing_count"] or 0
+        )
+        group["monitoring_overdue_count"] += int(
+            row["monitoring_overdue_count"] or 0
+        )
+        if row["monitoring_since"] and (
+            group["monitoring_since"] is None
+            or row["monitoring_since"] < group["monitoring_since"]
+        ):
+            group["monitoring_since"] = row["monitoring_since"]
         group["_renewal"].add(row["renewal"] or "unknown")
         group["_delivery"].add(row["delivery"] or "unrouted")
         if row["chain_status"]:
@@ -256,6 +279,7 @@ def get_pivot_group_page(
             "SELECT etype, ekey, hostname, port, sort_expiry, chain_status, eff_days, condition,"
             " monitoring, monitoring_last_success, monitoring_last_attempt,"
             " monitoring_attempt_status, monitoring_error, monitoring_first_failed,"
+            " monitoring_interval_hours,"
             " renewal, has_successor, delivery, overall_state"
             f" FROM ({sql}) WHERE {column} IN ({ph})"
         )

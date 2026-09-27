@@ -45,6 +45,13 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Browse no longer presents last-known certificate evidence as healthy when
+  endpoint monitoring is failing, overdue, or has never succeeded. Group and
+  pivot rows preserve the earliest failure time, pending-host delivery agrees
+  with filters and APIs, lazy pivot rows include expiry and metadata details,
+  mobile alert-group tables stay contained, and critical status text clears
+  contrast requirements on hovered rows (#126 S6).
+
 - S5 follow-up: mobile content wraps or uses labeled keyboard-scrollable table
   regions instead of being clipped; Posture explains the checks that actually
   determine a grade; moved and activity links keep accessible dark-theme
