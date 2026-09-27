@@ -167,67 +167,93 @@ def _admin_client(db: Path, tmp_path: Path):
 
 _REFUSED = {"error": "operation not permitted outside your team scope"}
 
-_RACE_ROUTE_PAIRS = {
-    (("POST", "/alerts/{alert_id}/retry"), ("POST", "/api/alerts/{alert_id}/retry")),
-    (("POST", "/hosts"), ("POST", "/api/hosts")),
-    (("POST", "/hosts/import"), ("POST", "/api/hosts/import")),
-    (("POST", "/hosts/all/scan"), ("POST", "/api/hosts/scan")),
-    (("POST", "/hosts/{resource_id}/edit"), ("PUT", "/api/hosts/{resource_id}")),
-    (
+_RACE_CASES = {
+    "alert_retry": (
+        ("POST", "/alerts/{alert_id}/retry"),
+        ("POST", "/api/alerts/{alert_id}/retry"),
+    ),
+    "create": (("POST", "/hosts"), ("POST", "/api/hosts")),
+    "import": (("POST", "/hosts/import"), ("POST", "/api/hosts/import")),
+    "scan_all": (("POST", "/hosts/all/scan"), ("POST", "/api/hosts/scan")),
+    "edit": (
+        ("POST", "/hosts/{resource_id}/edit"),
+        ("PUT", "/api/hosts/{resource_id}"),
+    ),
+    "settings": (
         ("POST", "/hosts/{host_id}/settings"),
         ("PATCH", "/api/hosts/{host_id}/settings"),
     ),
-    (("POST", "/hosts/{host_id}/notes"), ("PATCH", "/api/hosts/{host_id}/notes")),
-    (("POST", "/hosts/{host_id}/tags"), ("PUT", "/api/hosts/{host_id}/tags")),
-    (
+    "notes": (
+        ("POST", "/hosts/{host_id}/notes"),
+        ("PATCH", "/api/hosts/{host_id}/notes"),
+    ),
+    "host_tags": (
+        ("POST", "/hosts/{host_id}/tags"),
+        ("PUT", "/api/hosts/{host_id}/tags"),
+    ),
+    "expected_issuers": (
         ("POST", "/hosts/{host_id}/expected-issuers"),
         ("PUT", "/api/hosts/{host_id}/issuers"),
     ),
-    (("POST", "/hosts/{host_id}/delete"), ("DELETE", "/api/hosts/{host_id}")),
-    (("POST", "/hosts/{host_id}/scan"), ("POST", "/api/hosts/{host_id}/scan")),
-    (
+    "host_delete": (
+        ("POST", "/hosts/{host_id}/delete"),
+        ("DELETE", "/api/hosts/{host_id}"),
+    ),
+    "host_scan": (
+        ("POST", "/hosts/{host_id}/scan"),
+        ("POST", "/api/hosts/{host_id}/scan"),
+    ),
+    "certificate_delete": (
         ("POST", "/certificates/{cert_id}/delete"),
         ("DELETE", "/api/certificates/{cert_id}"),
     ),
-    (
+    "certificate_tags": (
         ("POST", "/certificates/{cert_id}/tags"),
         ("PUT", "/api/certificates/{cert_id}/tags"),
     ),
-    (
+    "certificate_owner": (
         ("POST", "/certificates/{cert_id}/owner"),
         ("PATCH", "/api/hosts/{host_id}/owner"),
     ),
-    (("POST", "/hosts/{host_id}/owner"), ("PATCH", "/api/hosts/{host_id}/owner")),
+    "host_owner": (
+        ("POST", "/hosts/{host_id}/owner"),
+        ("PATCH", "/api/hosts/{host_id}/owner"),
+    ),
 }
+_RACE_ROUTE_PAIRS = set(_RACE_CASES.values())
+_COLLECTED_RACE_CASES: set[str] = set()
+
+
+def _race_adapters(*case_names: str):
+    assert set(case_names) <= set(_RACE_CASES)
+    _COLLECTED_RACE_CASES.update(case_names)
+    return pytest.mark.parametrize("adapter", ("html", "api"))
 
 
 def test_race_matrix_covers_every_paired_target_scoped_route() -> None:
     from tests.test_api_completeness import HTML_TO_JSON
     from tests.test_write_scope_transaction_inventory import _TARGET_CONTRACTS
 
-    target_routes = {
-        tuple(key.split(" ", 1))
-        for key in _TARGET_CONTRACTS
-    }
+    target_routes = {tuple(key.split(" ", 1)) for key in _TARGET_CONTRACTS}
+
+    def is_existing_estate_target(route: tuple[str, str]) -> bool:
+        return route in target_routes or any(
+            parameter in route[1] for parameter in ("{host_id}", "{resource_id}", "{cert_id}")
+        )
+
     expected = {
         (html, api)
         for html, api in HTML_TO_JSON.items()
-        if html in target_routes and api in target_routes
+        if is_existing_estate_target(html) and is_existing_estate_target(api)
     }
-    # Expected issuers is deliberately admin-only, but is still a target-scoped
-    # HTML/API pair and belongs in the adapter race matrix requested by #124.
-    expected.add(
-        (
-            ("POST", "/hosts/{host_id}/expected-issuers"),
-            ("PUT", "/api/hosts/{host_id}/issuers"),
-        )
-    )
+    assert set(_RACE_CASES.values()) == _RACE_ROUTE_PAIRS
     assert expected == _RACE_ROUTE_PAIRS
+    assert set(_RACE_CASES) == _COLLECTED_RACE_CASES
     paired_routes = {route for pair in expected for route in pair}
     assert target_routes - paired_routes == {("POST", "/api/alerts/{alert_id}/read")}
 
 
-@pytest.mark.parametrize("adapter", ["html", "api"])
+@_race_adapters("certificate_delete")
 def test_certificate_delete(tmp_path, monkeypatch, adapter):
     db, host_id, cert_id = _estate(tmp_path)
     moved: list = []
@@ -246,7 +272,7 @@ def test_certificate_delete(tmp_path, monkeypatch, adapter):
     assert SqliteCertificateRepository(db).get_by_id(cert_id) is not None
 
 
-@pytest.mark.parametrize("adapter", ["html", "api"])
+@_race_adapters("certificate_tags")
 def test_certificate_tags(tmp_path, monkeypatch, adapter):
     db, host_id, cert_id = _estate(tmp_path)
     moved: list = []
@@ -269,7 +295,7 @@ def test_certificate_tags(tmp_path, monkeypatch, adapter):
     assert SqliteCertificateRepository(db).get_tags(cert_id) == ""
 
 
-@pytest.mark.parametrize("adapter", ["html", "api"])
+@_race_adapters("edit")
 def test_combined_certificate_edit_rechecks_host_scope_after_two_process_race(
     tmp_path, monkeypatch, adapter
 ):
@@ -291,9 +317,7 @@ def test_combined_certificate_edit_rechecks_host_scope_after_two_process_race(
     }
     with _team_a_client(db, tmp_path) as client:
         if adapter == "html":
-            r = client.post(
-                f"/hosts/{cert_id}/edit", data=body, follow_redirects=False
-            )
+            r = client.post(f"/hosts/{cert_id}/edit", data=body, follow_redirects=False)
         else:
             r = client.put(f"/api/hosts/{cert_id}", json=body)
     assert moved == ["moved"]
@@ -308,15 +332,8 @@ def test_combined_certificate_edit_rechecks_host_scope_after_two_process_race(
     assert SqliteCertificateRepository(db).get_tags(cert_id) == "team-a"
 
 
-@pytest.mark.parametrize(
-    ("addressed_by", "adapter"),
-    [
-        ("certificate", "html"),
-        ("certificate", "api"),
-        ("host", "html"),
-        ("host", "api"),
-    ],
-)
+@_race_adapters("certificate_owner", "host_owner")
+@pytest.mark.parametrize("addressed_by", ["certificate", "host"])
 def test_ownership(tmp_path, monkeypatch, addressed_by, adapter):
     db, host_id, cert_id = _estate(tmp_path)
     # The certificate remains visible to team-a after the host moves.  That
@@ -352,7 +369,7 @@ def test_ownership(tmp_path, monkeypatch, addressed_by, adapter):
 
 
 @pytest.mark.parametrize("field", ["notes", "tags"])
-@pytest.mark.parametrize("adapter", ["html", "api"])
+@_race_adapters("notes", "host_tags")
 def test_host_notes_and_tags(tmp_path, monkeypatch, field, adapter):
     db, host_id, _cert_id = _estate(tmp_path)
     moved: list = []
@@ -360,9 +377,7 @@ def test_host_notes_and_tags(tmp_path, monkeypatch, field, adapter):
     body = {"notes": "team-a was here"} if field == "notes" else {"tags": "team-a"}
     with _team_a_client(db, tmp_path) as client:
         if adapter == "html":
-            r = client.post(
-                f"/hosts/{host_id}/{field}", data=body, follow_redirects=False
-            )
+            r = client.post(f"/hosts/{host_id}/{field}", data=body, follow_redirects=False)
         else:
             method = "patch" if field == "notes" else "put"
             r = getattr(client, method)(f"/api/hosts/{host_id}/{field}", json=body)
@@ -376,7 +391,7 @@ def test_host_notes_and_tags(tmp_path, monkeypatch, field, adapter):
     assert (host.tags, host.notes) == ("team-b", "")
 
 
-@pytest.mark.parametrize("adapter", ["html", "api"])
+@_race_adapters("settings")
 def test_host_settings(tmp_path, monkeypatch, adapter):
     db, host_id, _cert_id = _estate(tmp_path)
     moved: list = []
@@ -388,9 +403,7 @@ def test_host_settings(tmp_path, monkeypatch, adapter):
             "renewal_status": "in_progress",
         }
         if adapter == "html":
-            r = client.post(
-                f"/hosts/{host_id}/settings", data=body, follow_redirects=False
-            )
+            r = client.post(f"/hosts/{host_id}/settings", data=body, follow_redirects=False)
         else:
             r = client.patch(f"/api/hosts/{host_id}/settings", json=body)
     assert moved == ["moved"]
@@ -408,12 +421,11 @@ def test_host_settings(tmp_path, monkeypatch, adapter):
     )
 
 
-@pytest.mark.parametrize("adapter", ["html", "api"])
-def test_expected_issuers_twins_survive_cross_process_tag_transfer(
+@_race_adapters("expected_issuers")
+def test_expected_issuers_admin_adapters_share_service_during_tag_change(
     tmp_path, monkeypatch, adapter
 ):
-    """The admin-only pair has no scope denial, but both adapters must still
-    traverse the shared target service while another process changes tags."""
+    """Both admin adapters reach the service; no scope re-check is expected."""
     db, host_id, _cert_id = _estate(tmp_path)
     moved: list = []
     _move_after_check(monkeypatch, "cert_watch.services.host_management", db, host_id, moved)
@@ -434,7 +446,7 @@ def test_expected_issuers_twins_survive_cross_process_tag_transfer(
     assert SqliteHostRepository(db).get_expected_issuers(host_id) == ["Example CA"]
 
 
-@pytest.mark.parametrize("adapter", ["html", "api"])
+@_race_adapters("host_delete")
 def test_host_delete(tmp_path, monkeypatch, adapter):
     db, host_id, _cert_id = _estate(tmp_path)
     moved: list = []
@@ -465,17 +477,13 @@ def test_alert_mark_read(tmp_path, monkeypatch):
         assert conn.execute("SELECT read FROM alerts WHERE id = ?", (alert_id,)).fetchone()[0] == 0
 
 
-@pytest.mark.parametrize("adapter", ["html", "api"])
+@_race_adapters("alert_retry")
 def test_alert_retry(tmp_path, monkeypatch, adapter):
     db, host_id, alert_id = _alert_estate(tmp_path, status="failed")
     moved: list = []
     _move_after_check(monkeypatch, "cert_watch.auth.scope", db, host_id, moved)
     with _team_a_client(db, tmp_path) as client:
-        path = (
-            f"/alerts/{alert_id}/retry"
-            if adapter == "html"
-            else f"/api/alerts/{alert_id}/retry"
-        )
+        path = f"/alerts/{alert_id}/retry" if adapter == "html" else f"/api/alerts/{alert_id}/retry"
         r = client.post(path, follow_redirects=False)
     assert moved == ["moved"]
     # Alert ids are deliberately hidden from out-of-scope callers.
@@ -489,7 +497,7 @@ def test_alert_retry(tmp_path, monkeypatch, adapter):
         assert row[0] == "failed"
 
 
-@pytest.mark.parametrize("adapter", ["html", "api"])
+@_race_adapters("create")
 def test_existing_host_create_rechecks_inside_the_insert_transaction(
     tmp_path, monkeypatch, adapter
 ):
@@ -500,8 +508,10 @@ def test_existing_host_create_rechecks_inside_the_insert_transaction(
         "cert_watch.routes.hosts.resolve_and_validate_host",
         lambda *args, **kwargs: (None, "192.0.2.1"),
     )
+    api_host_routes = importlib.import_module("cert_watch.routes.api.hosts")
     monkeypatch.setattr(
-        "cert_watch.services.host_management.resolve_and_validate_host",
+        api_host_routes,
+        "resolve_and_validate_host",
         lambda *args, **kwargs: (None, "192.0.2.1"),
     )
 
@@ -528,7 +538,7 @@ def test_existing_host_create_rechecks_inside_the_insert_transaction(
     assert host is not None and host.tags == "team-b"
 
 
-@pytest.mark.parametrize("adapter", ["html", "api"])
+@_race_adapters("import")
 def test_existing_host_import_rechecks_inside_the_insert_transaction(
     tmp_path, monkeypatch, adapter
 ):
@@ -539,8 +549,10 @@ def test_existing_host_import_rechecks_inside_the_insert_transaction(
         "cert_watch.routes.hosts.resolve_and_validate_host",
         lambda *args, **kwargs: (None, "192.0.2.1"),
     )
+    api_host_routes = importlib.import_module("cert_watch.routes.api.hosts")
     monkeypatch.setattr(
-        "cert_watch.services.host_management.resolve_and_validate_host",
+        api_host_routes,
+        "resolve_and_validate_host",
         lambda *args, **kwargs: (None, "192.0.2.1"),
     )
 
@@ -567,21 +579,15 @@ def test_existing_host_import_rechecks_inside_the_insert_transaction(
     assert host is not None and host.tags == "team-b"
 
 
-@pytest.mark.parametrize("adapter", ["html", "api"])
-def test_manual_scan_rechecks_inside_the_scan_store_transaction(
-    tmp_path, monkeypatch, adapter
-):
+@_race_adapters("host_scan")
+def test_manual_scan_rechecks_inside_the_scan_store_transaction(tmp_path, monkeypatch, adapter):
     db, host_id, cert_id = _estate(tmp_path)
     original = SqliteCertificateRepository(db).get_by_id(cert_id)
     moved: list = []
     _move_after_check(monkeypatch, "cert_watch.services.host_management", db, host_id, moved)
     _fake_successful_scan(monkeypatch)
     with _team_a_client(db, tmp_path) as client:
-        path = (
-            f"/hosts/{host_id}/scan"
-            if adapter == "html"
-            else f"/api/hosts/{host_id}/scan"
-        )
+        path = f"/hosts/{host_id}/scan" if adapter == "html" else f"/api/hosts/{host_id}/scan"
         r = client.post(path, follow_redirects=False)
     assert moved == ["moved"]
     if adapter == "html":
@@ -592,10 +598,8 @@ def test_manual_scan_rechecks_inside_the_scan_store_transaction(
     assert SqliteCertificateRepository(db).get_by_id(cert_id) == original
 
 
-@pytest.mark.parametrize("adapter", ["html", "api"])
-def test_scan_all_rechecks_each_host_inside_its_store_transaction(
-    tmp_path, monkeypatch, adapter
-):
+@_race_adapters("scan_all")
+def test_scan_all_rechecks_each_host_inside_its_store_transaction(tmp_path, monkeypatch, adapter):
     db, host_id, cert_id = _estate(tmp_path)
     original = SqliteCertificateRepository(db).get_by_id(cert_id)
     real = SqliteHostRepository.list_scoped
