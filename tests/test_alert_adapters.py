@@ -92,12 +92,53 @@ class TestGenericAdapter:
         body = json.loads(req.body)
         assert body["text"] == "[expiry_warning] Cert expires soon"
 
+    def test_json_template_escapes_untrusted_values(self):
+        adapter = GenericAdapter()
+        config = _config(template='{"text":"{{message}}"}')
+        hostile = 'quote " slash \\ newline\n snowman \u2603'
+
+        req = adapter.build(_alert(message=hostile), config)
+
+        assert json.loads(req.body) == {"text": hostile}
+
+    def test_json_template_injection_cannot_add_fields(self):
+        adapter = GenericAdapter()
+        config = _config(template='{"text":"{{message}}"}')
+        hostile = '\",\"status\":\"resolved\",\"x\":\"'
+
+        req = adapter.build(_alert(message=hostile), config)
+
+        assert json.loads(req.body) == {"text": hostile}
+
+    def test_invalid_json_template_fails_before_transport(self):
+        config = _config(template='{"text": {{message}}}')
+        with patch(
+            "cert_watch.alerting.transports.webhook.ssrf_safe_urlopen"
+        ) as urlopen:
+            result = send_webhook(_alert(message="not-json"), config)
+
+        assert result.outcome == "failed"
+        assert result.reached_transport is False
+        assert result.operator_message == (
+            "generic webhook JSON template is invalid after substitution"
+        )
+        urlopen.assert_not_called()
+
     def test_template_non_json(self):
         adapter = GenericAdapter()
         config = _config(template="Alert: {{alert_type}}")
         alert = _alert()
         req = adapter.build(alert, config)
         assert req.headers["Content-Type"] == "text/plain"
+        assert req.body == b"Alert: expiry_warning"
+
+    def test_non_json_template_strips_control_characters(self):
+        adapter = GenericAdapter()
+        config = _config(template="Alert: {{message}}")
+
+        req = adapter.build(_alert(message="host\r\nname\x00\x7f\x85"), config)
+
+        assert req.body == b"Alert: hostname"
 
     def test_extra_recipients_in_payload(self):
         adapter = GenericAdapter()
@@ -141,6 +182,15 @@ class TestDiscordAdapter:
         assert "expiry warning" in embed["title"].lower()
         assert embed["description"] == alert.body
         assert isinstance(embed["color"], int)
+
+    def test_untrusted_mentions_are_disabled(self):
+        req = DiscordAdapter().build(
+            _alert(message="<@123> @everyone https://example.test"),
+            _config(kind="discord"),
+        )
+
+        body = json.loads(req.body)
+        assert body["allowed_mentions"] == {"parse": []}
 
     def test_expired_color_red(self):
         assert _status_color("expired") == 0xCC0000
@@ -195,6 +245,19 @@ class TestTeamsAdapter:
         assert card["type"] == "AdaptiveCard"
         assert card["version"] == "1.4"
         assert len(card["body"]) == 3  # title, factset, message
+
+    def test_untrusted_mentions_and_links_are_plain_text(self):
+        req = TeamsAdapter().build(
+            _alert(message="<at>ops</at> [open](https://example.test)"),
+            _config(kind="teams"),
+        )
+
+        body = json.loads(req.body)
+        text = body["attachments"][0]["content"]["body"][2]["text"]
+        assert text == (
+            "&lt;at&gt;ops&lt;/at&gt; "
+            r"\[open\]\(https://example\.test\)"
+        )
 
     def test_expired_urgency_attention(self):
         assert _status_urgency("expired") == "attention"
@@ -541,6 +604,17 @@ class TestSlackAdapter:
         att = body["attachments"][0]
         assert att["footer"] == "cert-watch"
         assert att["text"] == alert.body
+
+    def test_untrusted_mentions_and_links_are_escaped(self):
+        req = SlackAdapter().build(
+            _alert(message="<!channel> <https://example.test|open> & done"),
+            _config(kind="slack"),
+        )
+
+        body = json.loads(req.body)
+        assert body["attachments"][0]["text"] == (
+            "&lt;!channel&gt; &lt;https://example.test|open&gt; &amp; done"
+        )
 
     def test_expired_color_danger(self):
         assert _slack_color("expired") == "danger"

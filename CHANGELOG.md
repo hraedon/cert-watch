@@ -4,6 +4,13 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- Generic JSON webhook templates now JSON-escape certificate-derived values
+  and reject invalid rendered JSON before delivery. Plain-text templates strip
+  control characters, and Slack, Discord and Teams payloads neutralize
+  untrusted mention and link markup.
+
 ### Fixed
 
 - Repeated scans of the same deployed certificate keep the persisted renewal

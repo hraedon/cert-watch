@@ -8,7 +8,10 @@ which dispatches to the right adapter and sends the result through
 from __future__ import annotations
 
 import hashlib
+import html
 import json
+import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
@@ -23,6 +26,10 @@ class AlertRequest:
     body: bytes
     headers: dict[str, str]
     method: str = "POST"
+
+
+class InvalidWebhookTemplateError(ValueError):
+    """Rendered generic webhook template is not valid for its declared format."""
 
 
 class AlertAdapter(Protocol):
@@ -87,8 +94,27 @@ def _alertname(alert_type: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Generic adapter — preserves existing behaviour exactly
+# Generic adapter
 # ---------------------------------------------------------------------------
+
+
+def _strip_control_characters(value: str) -> str:
+    return "".join(
+        character for character in value
+        if unicodedata.category(character) != "Cc"
+    )
+
+
+def _escape_slack_text(value: str) -> str:
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+_TEAMS_MARKDOWN = re.compile(r"([\\`*_{}\[\]()#+\-.!])")
+
+
+def _escape_teams_text(value: str) -> str:
+    escaped = html.escape(value, quote=False)
+    return _TEAMS_MARKDOWN.sub(r"\\\1", escaped)
 
 class GenericAdapter:
     kind = "generic"
@@ -96,6 +122,7 @@ class GenericAdapter:
     def build(self, msg: OutboundMessage, config: WebhookConfig) -> AlertRequest:
         if config.template:
             payload = config.template
+            is_json = payload.lstrip().startswith(("{", "["))
             values = {
                 "alert_type": msg.severity,
                 "cert_id": msg.cert_id,
@@ -105,9 +132,20 @@ class GenericAdapter:
             }
             for key in values:
                 value = str(values[key])
+                value = (
+                    json.dumps(value)[1:-1]
+                    if is_json
+                    else _strip_control_characters(value)
+                )
                 payload = payload.replace("{{" + key + "}}", value)
             content_type = "text/plain"
-            if payload.lstrip().startswith("{"):
+            if is_json:
+                try:
+                    json.loads(payload)
+                except json.JSONDecodeError as exc:
+                    raise InvalidWebhookTemplateError(
+                        "generic webhook JSON template is invalid after substitution"
+                    ) from exc
                 content_type = "application/json"
         else:
             payload_dict: dict[str, Any] = {
@@ -150,7 +188,13 @@ class DiscordAdapter:
             "color": color,
             "fields": fields,
         }
-        payload = json.dumps({"username": "cert-watch", "embeds": [embed]})
+        payload = json.dumps(
+            {
+                "username": "cert-watch",
+                "embeds": [embed],
+                "allowed_mentions": {"parse": []},
+            }
+        )
         headers = {**config.headers, "Content-Type": "application/json"}
         return AlertRequest(url=config.url, body=payload.encode("utf-8"), headers=headers)
 
@@ -194,7 +238,7 @@ class TeamsAdapter:
                             },
                             {
                                 "type": "TextBlock",
-                                "text": msg.body,
+                                "text": _escape_teams_text(msg.body),
                                 "wrap": True,
                             },
                         ],
@@ -308,7 +352,7 @@ class SlackAdapter:
         attachment = {
             "color": color,
             "title": f"cert-watch: {msg.severity.replace('_', ' ').title()}",
-            "text": msg.body,
+            "text": _escape_slack_text(msg.body),
             "fields": fields,
             "footer": "cert-watch",
         }
