@@ -8,15 +8,15 @@ pytest.importorskip("playwright")
 from playwright.sync_api import Page, expect
 
 CASES = {
-    "current": ("Current", "Expires in", None),
-    "expiring": ("Current", "Expires in", "Renew the certificate"),
+    "current": ("Current", "days left", None),
+    "expiring": ("Current", "days left", "Renew the certificate"),
     "expired": ("Current", "Expired", "Renew the certificate now"),
     "failing": ("Failing since", "Last seen", "Check the service"),
     "overdue": ("Scan overdue", "Last seen", "overdue"),
-    "never": ("Never scanned", "No certificate observed", "Assign an owner"),
-    "uploaded": ("Not monitored", "Expires in", "Add an alert group"),
-    "chain": ("Current", "Expires in", "chain"),
-    "routing_gap": ("Current", "Expires in", "Assign an owner"),
+    "never": ("Never scanned", "No certificate", "Assign an owner"),
+    "uploaded": ("Not monitored", "days left", "Add an alert group"),
+    "chain": ("Current", "days left", "chain"),
+    "routing_gap": ("Current", "days left", "Assign an owner"),
 }
 
 

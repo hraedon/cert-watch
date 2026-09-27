@@ -17,6 +17,7 @@ from cert_watch.chain_guidance import ChainGuidance, describe_chain
 from cert_watch.database import LatestScanRecord
 from cert_watch.filters import compute_urgency, friendly_issuer, issuer_cn, subject_cn
 from cert_watch.posture import GRADE_WORST_ORDER
+from cert_watch.presenters.status_display import condition_display
 from cert_watch.scan_error_guidance import ScanErrorGuidance, describe_scan_error
 from cert_watch.scan_freshness import ScanEvidence
 from cert_watch.services.certificate_detail import (
@@ -573,34 +574,32 @@ def _detail_axes(
     delivery = str(delivery_data.get("state") or "unrouted")
 
     if cert is None:
+        display = condition_display(condition, None, monitoring)
         certificate_axis = DetailAxisView(
             "Certificate",
-            "No certificate observed",
+            display.label,
             "A successful scan has not stored certificate evidence yet.",
+            display.tone,
         )
     else:
-        words = _condition_words(days, condition)
-        tone = {
-            "expired": "t-expired",
-            "le7": "t-crit",
-            "8to30": "t-warn",
-            "ok": "t-ok",
-        }.get(condition or "", "t-muted")
+        condition_data = status.get("condition") or {}
+        effective_days = condition_data.get("effective_days")
+        display = condition_display(
+            condition,
+            int(effective_days) if effective_days is not None else days,
+            monitoring,
+        )
         detail = f"Issued {cert.not_before:%Y-%m-%d} · expires {cert.not_after:%Y-%m-%d}."
         if monitoring not in {"current", "not_monitored"}:
-            words = (
-                f"Last seen OK · expires in {days} day{'s' if days != 1 else ''}"
-                if condition == "ok"
-                else f"Last seen {words.lower()}"
-            )
-            tone = "t-muted"
             last_seen = evidence.last_success if evidence else None
             detail = (
                 "Certificate facts are earlier evidence from the last successful "
                 f"scan at {_when(last_seen)}. "
                 "cert-watch can't confirm what the server serves now."
             )
-        certificate_axis = DetailAxisView("Certificate", words, detail, tone)
+        certificate_axis = DetailAxisView(
+            "Certificate", display.label, detail, display.tone
+        )
 
     if monitoring == "not_monitored":
         monitoring_axis = DetailAxisView(

@@ -7,7 +7,98 @@
   /* ---- pivot group lazy expansion (BC-048) ----
    * The expansion row itself is toggled by core.js via data-expand;
    * this hook fills it with fetched entries on first open.          */
-  var VALID_URGENCY = { expired: 1, critical: 1, warning: 1, healthy: 1, failing: 1, gray: 1 };
+  function textSpan(className, value) {
+    var span = document.createElement('span');
+    span.className = className;
+    span.textContent = value;
+    return span;
+  }
+
+  function conditionDisplay(entry) {
+    var status = entry.status || {};
+    var condition = status.condition || {};
+    var state = condition.state || entry.condition;
+    var days = condition.effective_days;
+    if (days == null) days = entry.effective_days;
+    var monitoring = status.monitoring || {};
+    var monitoringState = monitoring.state || entry.monitoring;
+    var stale = monitoringState !== 'current' && monitoringState !== 'not_monitored';
+    if (state == null || days == null) return { label: 'No certificate', tone: 't-muted', state: state, days: days };
+    if (state === 'expired') {
+      var ago = Math.abs(days);
+      var expired = 'Expired ' + ago + ' day' + (ago === 1 ? '' : 's') + ' ago';
+      return { label: stale ? 'Last seen · ' + expired.toLowerCase() : expired, tone: 't-expired', state: state, days: days };
+    }
+    if (days === 0) return { label: stale ? 'Last seen · expires today' : 'Expires today', tone: 't-crit', state: state, days: days };
+    if (state === 'ok' && stale) {
+      return {
+        label: 'Last seen OK · expires in ' + days + ' day' + (days === 1 ? '' : 's'),
+        tone: 't-muted', state: state, days: days
+      };
+    }
+    var label = days + ' day' + (days === 1 ? '' : 's') + ' left';
+    return {
+      label: stale ? 'Last seen · ' + label : label,
+      tone: { le7: 't-crit', '8to30': 't-warn', ok: 't-ok' }[state] || 't-muted',
+      state: state,
+      days: days
+    };
+  }
+
+  function metadata(entry) {
+    var meta = document.createElement('div');
+    meta.className = 'cw-chiprow cw-metarow';
+    if (entry.source === 'uploaded') meta.appendChild(textSpan('cw-chip', 'Uploaded'));
+    if (entry.owner_name) meta.appendChild(textSpan('cw-chip', entry.owner_name));
+    if (entry.host_id && entry.notes) meta.appendChild(textSpan('cw-chip t-muted cw-note-chip', 'note'));
+    return meta;
+  }
+
+  function utcLabel(value) {
+    if (!value) return '';
+    var date = new Date(value);
+    if (isNaN(date.getTime())) return '';
+    return date.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+  }
+
+  function addFact(flags, label, tone) {
+    if (!label) return;
+    flags.appendChild(textSpan('cw-chip ' + tone, label));
+  }
+
+  function factFlags(entry) {
+    var flags = document.createElement('div');
+    flags.className = 'cw-fact-flags';
+    var status = entry.status || {};
+    var monitoring = status.monitoring || {};
+    var monitoringState = monitoring.state || entry.monitoring;
+    var monitoringLabel = '';
+    if (monitoringState === 'never_scanned') monitoringLabel = 'Never scanned';
+    if (monitoringState === 'failing') {
+      if (entry.monitoring_attempt_status === 'success' && !monitoring.raw_error) {
+        monitoringLabel = 'Monitoring overdue';
+      } else {
+        var since = utcLabel(monitoring.since);
+        monitoringLabel = since ? 'Failing since ' + since : 'Monitoring failing';
+      }
+    }
+    addFact(flags, monitoringLabel, 't-warn');
+    if (status.chain_trust_problem) {
+      addFact(flags, {
+        incomplete: 'Chain incomplete', invalid: 'Chain invalid',
+        unknown: 'Chain not verified', unverified: 'Chain not verified',
+        'self-signed': 'Self-signed chain'
+      }[status.chain_status || entry.chain_status] || 'Chain problem', 't-warn');
+    }
+    var renewal = (status.renewal || {}).state || entry.renewal;
+    addFact(flags, { stalled: 'Renewal stalled', in_progress: 'Renewal in progress' }[renewal],
+      renewal === 'stalled' ? 't-warn' : 't-ink');
+    var delivery = (status.delivery || {}).state || entry.delivery;
+    addFact(flags, { failing: "Can't be delivered", unrouted: 'Unrouted' }[delivery],
+      delivery === 'failing' ? 't-crit' : 't-muted');
+    if (!flags.children.length) flags.appendChild(textSpan('cw-sr', 'No exceptions'));
+    return flags;
+  }
 
   document.addEventListener('click', function (e) {
     var trigger = e.target.closest('[data-expand^="pivot-detail-"]');
@@ -22,33 +113,45 @@
 
     function entryRow(entry) {
       var div = document.createElement('div');
-      div.className = 'row';
+      div.className = 'row cw-browse-subrow';
       var name = entry.name || entry.host || '—';
-      var urg = VALID_URGENCY[entry.urgency] ? entry.urgency : 'gray';
-      var tone = { expired: 't-expired', critical: 't-crit', warning: 't-warn', healthy: 't-ok', failing: 't-warn', gray: 't-muted' }[urg];
+      var subject = document.createElement('div');
+      subject.className = 'cw-browse-subject';
       var link;
       if (entry.id) {
         link = document.createElement('a');
         link.href = '/certificates/' + encodeURIComponent(entry.id);
-        link.className = 'cw-id';
+        link.className = 'cw-id cw-link';
         link.textContent = name;
       } else {
         link = document.createElement('span');
         link.className = 'cw-id';
         link.textContent = name;
       }
-      div.appendChild(link);
-      var pill = document.createElement('span');
-      pill.className = 'cw-status ' + tone;
-      pill.innerHTML = '<span class="dot" aria-hidden="true"></span>';
-      pill.appendChild(document.createTextNode(entry.urgency_label || 'Unknown'));
-      div.appendChild(pill);
-      if (entry.days_remaining != null) {
-        var days = document.createElement('span');
-        days.className = 'cw-muted tnum';
-        days.textContent = entry.days_remaining + ' days';
-        div.appendChild(days);
+      subject.appendChild(link);
+      var meta = metadata(entry);
+      if (meta.children.length) subject.appendChild(meta);
+      div.appendChild(subject);
+      var condition = conditionDisplay(entry);
+      var conditionCell = document.createElement('div');
+      conditionCell.className = 'cw-condition';
+      var pill = textSpan('cw-status ' + condition.tone, condition.label);
+      var dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.setAttribute('aria-hidden', 'true');
+      pill.insertBefore(dot, pill.firstChild);
+      conditionCell.appendChild(pill);
+      if (entry.not_after) {
+        var leafDays = entry.days_remaining;
+        var chainFirst = condition.days != null && leafDays != null && condition.days !== leafDays;
+        var dateTone = condition.state === 'expired' || condition.state === 'le7' ? ' ' + condition.tone : '';
+        conditionCell.appendChild(textSpan(
+          'cw-condition-date' + dateTone,
+          (chainFirst ? 'Chain expires first · leaf ' : 'Expires ') + entry.not_after.slice(0, 10)
+        ));
       }
+      div.appendChild(conditionCell);
+      div.appendChild(factFlags(entry));
       return div;
     }
 

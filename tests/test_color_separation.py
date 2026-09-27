@@ -189,4 +189,7 @@ def test_expired_renders_as_crit_not_a_separate_hue() -> None:
     assert "--cw-expired" not in app_css
     rule = re.search(r"\.t-expired\s*\{([^}]*)\}", app_css)
     assert rule, ".t-expired rule not found in cw.css"
-    assert "var(--crit)" in rule.group(1)
+    assert "var(--cw-critical-text)" in rule.group(1)
+    critical_token = re.search(r"--cw-critical-text:\s*([^;]+)", app_css)
+    assert critical_token
+    assert "var(--crit)" in critical_token.group(1)

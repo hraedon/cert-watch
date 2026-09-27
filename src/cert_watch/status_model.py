@@ -302,6 +302,19 @@ def register_status_model_functions(conn: sqlite3.Connection, context: StatusMod
         ),
     )
     conn.create_function(
+        "cw_monitoring_since",
+        5,
+        lambda state, success, attempt_status, interval, first_failed: monitoring_since(
+            str(state or "never_scanned"),
+            str(success) if success else None,
+            str(attempt_status) if attempt_status else None,
+            int(interval) if interval is not None else None,
+            cfg.sched_hour,
+            cfg.sched_min,
+            str(first_failed) if first_failed else None,
+        ),
+    )
+    conn.create_function(
         "cw_renewal_analytics",
         2,
         lambda hostname, port: context.renewal_analytics.get(
@@ -677,9 +690,23 @@ def attach_status_models(
         if not children:
             continue
         conditions = [child["condition"] for child in children if child.get("condition")]
+        condition_days = [
+            child["status"]["condition"]["effective_days"]
+            for child in children
+            if child["status"]["condition"].get("effective_days") is not None
+        ]
         condition_order = {"expired": 0, "le7": 1, "8to30": 2, "ok": 3}
         monitoring = "current"
-        if any(child["monitoring"] == "failing" for child in children):
+        failing_children = [
+            child for child in children if child["monitoring"] == "failing"
+        ]
+        overdue_children = [
+            child
+            for child in failing_children
+            if child.get("monitoring_attempt_status") == "success"
+            and not child["status"]["monitoring"].get("raw_error")
+        ]
+        if failing_children:
             monitoring = "failing"
         elif any(child["monitoring"] == "never_scanned" for child in children):
             monitoring = "never_scanned"
@@ -694,6 +721,10 @@ def attach_status_models(
         row["condition"] = (
             min(conditions, key=lambda value: condition_order[value]) if conditions else None
         )
+        # A grouped row is a summary of canonical child facts. Preserve the
+        # worst effective certificate/chain lifetime so the presentation can
+        # state the condition in days without deriving a second status.
+        row["effective_days"] = min(condition_days) if condition_days else None
         row["monitoring"] = monitoring
         row["renewal"] = min(
             (child["renewal"] for child in children),
@@ -704,12 +735,30 @@ def attach_status_models(
             key=lambda value: delivery_order[value],
         )
         row["status"] = {
-            "condition": {"state": row["condition"], "effective_days": row.get("effective_days")},
+            "condition": {
+                "state": row["condition"],
+                "effective_days": row["effective_days"],
+            },
             "chain_trust_problem": any(
                 child["status"]["chain_trust_problem"] for child in children
             ),
             "chain_status": row.get("chain_status"),
-            "monitoring": {"state": monitoring, "since": None, "cause": None, "raw_error": None},
+            "monitoring": {
+                "state": monitoring,
+                "since": min(
+                    (
+                        str(child["status"]["monitoring"]["since"])
+                        for child in failing_children
+                        if child["status"]["monitoring"].get("since")
+                    ),
+                    default=None,
+                ),
+                "cause": None,
+                "raw_error": None,
+                "failing_count": len(failing_children),
+                "overdue_count": len(overdue_children),
+                "total": len(children),
+            },
             "renewal": {"state": row["renewal"], "source": "group"},
             "delivery": {
                 "state": row["delivery"],

@@ -56,9 +56,18 @@
   --cw-pad-panel: 15px 18px;
   --cw-pad-page: 22px 26px;
   --cw-topbar-h: 58px;
+  --cw-critical-text: color-mix(in srgb, var(--crit) 90%, var(--text));
+  --cw-critical-date: var(--cw-critical-text);
+}
+:root[data-theme="dark"] {
+  /* The vendored terracotta is 4.32:1 on a hovered row. Keep the component
+     text above 4.8:1 there without changing the shared patina token. */
+  --cw-critical-text: color-mix(in srgb, var(--crit) 90%, var(--text));
 }
 :root[data-theme="light"] {
   --cw-backdrop: rgba(40, 32, 16, .35);
+  /* Above 4.9:1 on the darkest light inset/hover combination. */
+  --cw-critical-text: color-mix(in srgb, var(--crit) 90%, var(--text));
 }
 
 /* ---------- RECONCILIATION OVERRIDES ----------
@@ -126,7 +135,7 @@ form.cw-inline { display: inline; }
 .t-warn    { --cw-tone: var(--warn);    --cw-tone-soft: color-mix(in srgb, var(--warn) 14%, transparent);    color: var(--warn); --cw-on-tint: var(--text); }
 /* Expired is crit; the word "Expired" carries the difference. */
 .t-crit,
-.t-expired { --cw-tone: var(--crit);    --cw-tone-soft: color-mix(in srgb, var(--crit) 14%, transparent);    color: var(--crit); --cw-on-tint: var(--text); }
+.t-expired { --cw-tone: var(--cw-critical-text); --cw-tone-soft: color-mix(in srgb, var(--cw-critical-text) 14%, transparent); color: var(--cw-critical-text); --cw-on-tint: var(--text); }
 /* Neutral emphasis (a current item, a privileged tier): ink, not a hue. */
 .t-ink     { --cw-tone: var(--text);    --cw-tone-soft: var(--panel-3);                                       color: var(--text); --cw-on-tint: var(--text); }
 /* Muted is --text-2, not --text-3: components render --cw-tone as text,
@@ -457,7 +466,7 @@ tr[data-expand] { cursor: pointer; }
 .chev.open { transform: rotate(180deg); }
 /* wrap a table in a panel without double padding */
 .cw-table-clip {
-  max-width: 100%; min-width: 0; overflow-x: auto;
+  position: relative; max-width: 100%; min-width: 0; overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
 .cw-panel > .cw-table-clip { border-radius: inherit; }
@@ -470,6 +479,26 @@ tr[data-expand] { cursor: pointer; }
 .cw-subrow .row:hover { background: var(--row-hover); }
 .cw-subrow .row > a.cw-id { text-decoration: none; }
 .cw-subrow .row .cw-spacer { flex: 1; }
+.cw-expand-toggle {
+  appearance: none; display: inline-flex; align-items: center; gap: 8px;
+  padding: 3px 0; border: 0; background: transparent; color: var(--text);
+  font: inherit; cursor: pointer; text-align: left;
+}
+.cw-expand-toggle.icon-only { padding: 3px; color: var(--text-2); }
+.cw-condition { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.cw-condition-date {
+  color: var(--text-2); font-size: var(--cw-fs-xs); font-variant-numeric: tabular-nums;
+}
+.cw-condition-date.t-crit, .cw-condition-date.t-expired { color: var(--cw-critical-date); }
+.cw-fact-flags { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; min-width: 0; }
+.cw-browse-subrow {
+  display: grid !important;
+  grid-template-columns: minmax(190px, 1.1fr) minmax(150px, .7fr) minmax(240px, 1.4fr) auto;
+  align-items: center;
+}
+.cw-browse-subject {
+  min-width: 0; display: flex; flex-direction: column; align-items: flex-start;
+}
 /* read-only note indicator chip (V2: editing lives on the detail page) */
 .cw-note-chip { cursor: help; }
 
@@ -495,6 +524,7 @@ details.cw-editor { display: block; }
 details.cw-editor > summary { list-style: none; cursor: pointer; display: inline-flex; }
 details.cw-editor > summary::-webkit-details-marker { display: none; }
 details.cw-editor > .cw-editor-body { margin-top: var(--space-3); display: flex; flex-direction: column; gap: var(--space-3); }
+details.cw-editor:not([open]) > .cw-editor-body { display: none; }
 details.cw-editor .when-open { display: none; }
 details.cw-editor[open] .when-closed { display: none; }
 details.cw-editor[open] .when-open { display: inline; }
@@ -754,12 +784,30 @@ details.cw-editor[open] .when-open { display: inline; }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td:not(:first-child):not(:last-child) { grid-column: 1 / -1; }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td::before { content: attr(data-label); margin-right: auto; font-size: var(--cw-fs-xs); font-weight: 600; color: var(--text-2); }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td:first-child::before { display: none; }
-  .cw-inventory-table tbody > tr:not(.cw-subrow) > td[data-label="Expires"] { grid-column: 1 / -1; }
+  .cw-inventory-table tbody > tr:not(.cw-subrow) > td[data-label="Condition"] { grid-column: 1 / -1; }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td:last-child { position: absolute; right: 14px; top: 12px; }
   .cw-inventory-table .cw-expiry { display: grid; grid-template-columns: auto auto; align-items: center; justify-items: end; gap: 3px 8px; }
   .cw-inventory-table .cw-expiry-track { grid-column: 1 / -1; width: 100%; min-width: 88px; }
   .cw-inventory-table .cw-rowact { opacity: 1; }
   .cw-inventory-table .cw-subrow > td { display: block; }
+  .cw-browse-subrow { grid-template-columns: minmax(0, 1fr); align-items: start; }
+  .cw-browse-subrow > form { justify-self: end; }
+  .cw-pivot-table, .cw-pivot-table tbody,
+  .cw-pivot-table tr, .cw-pivot-table td { display: block; width: 100%; }
+  .cw-pivot-table { min-width: 0; }
+  .cw-pivot-table thead { display: none; }
+  .cw-pivot-table tbody > tr:not(.cw-subrow) {
+    padding: 12px 14px; border-bottom: 1px solid var(--border);
+  }
+  .cw-pivot-table tbody > tr:not(.cw-subrow) > td {
+    display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 10px;
+    padding: 5px 0; border: 0; text-align: left;
+  }
+  .cw-pivot-table tbody > tr:not(.cw-subrow) > td::before {
+    content: attr(data-label); color: var(--text-2);
+    font-size: var(--cw-fs-xs); font-weight: 600;
+  }
+  .cw-pivot-table .cw-subrow > td { padding: 8px; }
 
   .cw-att-row { align-items: flex-start; flex-wrap: wrap; }
   .cw-att-sev { min-width: 0; }

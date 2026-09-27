@@ -81,7 +81,7 @@ def list_dashboard_grouped_page(
     )
     candidates = inventory_candidates_sql(
         source=source, q=q, scope_tags=scope_tags, status=status, axes=axes,
-        sql_delivery=bool(delivery), axis_columns=filter_axes,
+        axis_columns=filter_axes,
     )
     if candidates is None:
         return [], 0

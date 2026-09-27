@@ -15,6 +15,10 @@ All notable changes to cert-watch are documented in this file.
 
 ### Changed
 
+- Browse rows and issuer, owner, and renewal-method groups now lead with the
+  expiry condition in days and show monitoring, chain, renewal, and delivery
+  only when they need attention. Repeated one-host, current-scan, private-root,
+  and unknown-renewal labels are removed (#126 S6).
 - Detail A (#126 S4) reorganizes endpoint and uploaded-certificate pages around
   certificate, monitoring, renewal and alert-delivery state; state-derived
   next steps; an alert-recipient table; one atomic Edit host form; and collapsed
@@ -48,6 +52,12 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Browse no longer presents last-known certificate evidence as healthy when
+  endpoint monitoring is failing, overdue, or has never succeeded. Group and
+  pivot rows preserve the earliest failure time, pending-host delivery agrees
+  with filters and APIs, lazy pivot rows include expiry and metadata details,
+  mobile alert-group tables stay contained, and critical status text clears
+  contrast requirements on hovered rows (#126 S6).
 - Detail pages keep the Edit host disclosure full-width at desktop and mobile,
   preserve submitted values beside field errors, open disclosures addressed by
   URL fragments, and give viewers role-appropriate next steps. Pending hosts

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from cert_watch.certificate_model import Certificate
 from cert_watch.chain_guidance import ChainGuidance
 from cert_watch.database import Alert, HostEntry, LatestScanRecord
+from cert_watch.presenters.browse import PivotGroupView, _present_entry
 from cert_watch.presenters.certificate_detail import (
     _chain_guidance_for_role,
     _delivery_routes,
@@ -93,6 +96,105 @@ def _host() -> HostEntry:
         threshold_days=14,
         scan_interval_hours=12,
     )
+
+
+@pytest.mark.parametrize(
+    ("condition", "days", "current_label", "current_tone"),
+    [
+        ("expired", -3, "Expired 3 days ago", "t-expired"),
+        ("le7", 5, "5 days left", "t-crit"),
+        ("8to30", 20, "20 days left", "t-warn"),
+        ("ok", 60, "60 days left", "t-ok"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("state_name", "monitoring"),
+    [
+        ("current", "current"),
+        ("failing", "failing"),
+        ("overdue", "failing"),
+        ("never scanned", "never_scanned"),
+        ("uploaded", "not_monitored"),
+    ],
+)
+def test_condition_header_agrees_across_detail_browse_and_pivot(
+    condition: str,
+    days: int,
+    current_label: str,
+    current_tone: str,
+    state_name: str,
+    monitoring: str,
+) -> None:
+    """One display contract covers every monitoring and expiry state."""
+    stale = monitoring not in {"current", "not_monitored"}
+    if stale and condition == "ok":
+        expected_label = f"Last seen OK · expires in {days} days"
+    elif stale:
+        expected_label = f"Last seen · {current_label.lower()}"
+    else:
+        expected_label = current_label
+    expected_tone = "t-muted" if stale and condition == "ok" else current_tone
+    status = {
+        "condition": {"state": condition, "effective_days": days},
+        "monitoring": {"state": monitoring},
+        "renewal": {"state": "manual"},
+        "delivery": {"state": "ok", "channels": []},
+    }
+    now = datetime(2026, 9, 22, 12, tzinfo=UTC)
+    cert = Certificate(
+        subject="CN=agreement.example.test",
+        issuer="CN=Example CA",
+        not_before=now - timedelta(days=30),
+        not_after=now + timedelta(days=days),
+        fingerprint_sha256=f"agreement-{condition}-{state_name}",
+        source="uploaded" if monitoring == "not_monitored" else "scanned",
+    )
+    detail = _detail_axes(
+        model=status,
+        cert=cert,
+        host=None if monitoring == "not_monitored" else _host(),
+        evidence=None,
+        days=days,
+        now=now,
+    )[0]
+    browse = _present_entry(
+        {
+            "id": cert.fingerprint_sha256,
+            "host_id": None if monitoring == "not_monitored" else "host-1",
+            "kind": "uploaded" if monitoring == "not_monitored" else "scanned",
+            "source": cert.source,
+            "name": "agreement.example.test",
+            "condition": condition,
+            "effective_days": days,
+            "days_remaining": days,
+            "monitoring": monitoring,
+            "renewal": "manual",
+            "delivery": "ok",
+            "status": status,
+        },
+        {},
+        {},
+    )
+    pivot = PivotGroupView(
+        key="Agreement",
+        count=1,
+        worst_urgency="healthy",
+        earliest_expiry=days,
+        condition=condition,
+        monitoring=monitoring,
+        renewal="manual",
+        delivery="ok",
+        chain_trust_problem=False,
+        monitoring_failing_count=int(monitoring == "failing"),
+        monitoring_overdue_count=int(state_name == "overdue"),
+        monitoring_since=None,
+    )
+
+    assert {
+        (detail.value, detail.tone),
+        (browse.condition_label, browse.condition_tone),
+        (pivot.condition_label, pivot.condition_tone),
+    } == {(expected_label, expected_tone)}
 
 
 def test_full_detail_presenter_builds_stored_certificate_view() -> None:

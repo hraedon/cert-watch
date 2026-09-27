@@ -195,8 +195,7 @@ def test_uploaded_chain_warning_agrees_between_browse_and_api(
         None,
     )
     assert row is not None
-    assert "Warning" in row
-    assert "chain not verified" in row
+    assert "Chain not verified" in row
     assert ">OK<" not in row
 
 

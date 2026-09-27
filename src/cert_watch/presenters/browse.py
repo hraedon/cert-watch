@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from cert_watch.filters import compute_urgency
+from cert_watch.presenters.status_display import condition_display
 from cert_watch.scan_freshness import ScanEvidence
 from cert_watch.services.browse_page import BrowsePageData
 from cert_watch.tags import parse_tags
@@ -55,6 +56,15 @@ class BrowseEntryView:
     monitoring: str
     renewal: str
     delivery: str
+    condition_days: int | None
+    condition_label: str
+    condition_tone: str
+    condition_is_chain_limited: bool
+    monitoring_label: str
+    monitoring_cause: str
+    renewal_flag_label: str
+    delivery_flag_label: str
+    chain_problem_label: str
     overall_label: str
     overall_tone: str
 
@@ -69,11 +79,63 @@ class PivotGroupView:
     count: int
     worst_urgency: str
     earliest_expiry: int | None
+    condition: str | None
+    monitoring: str
+    renewal: str
+    delivery: str
+    chain_trust_problem: bool
+    monitoring_failing_count: int
+    monitoring_overdue_count: int
+    monitoring_since: str | None
 
     @property
     def earliest_expiry_label(self) -> str:
         """Days to the group's earliest expiry, honest once it has passed."""
         return days_remaining_label(self.earliest_expiry)
+
+    @property
+    def condition_label(self) -> str:
+        return condition_display(
+            self.condition, self.earliest_expiry, self.monitoring
+        ).label
+
+    @property
+    def condition_tone(self) -> str:
+        return condition_display(
+            self.condition, self.earliest_expiry, self.monitoring
+        ).tone
+
+    @property
+    def monitoring_label(self) -> str:
+        return _group_monitoring_label(
+            self.monitoring,
+            self.count,
+            self.monitoring_failing_count,
+            self.monitoring_overdue_count,
+            self.monitoring_since,
+        )
+
+    @property
+    def monitoring_cause(self) -> str:
+        return ""
+
+    @property
+    def chain_problem_label(self) -> str:
+        return "Chain problem" if self.chain_trust_problem else ""
+
+    @property
+    def renewal_flag_label(self) -> str:
+        return {
+            "stalled": "Renewal stalled",
+            "in_progress": "Renewal in progress",
+        }.get(self.renewal, "")
+
+    @property
+    def delivery_flag_label(self) -> str:
+        return {
+            "failing": "Can't be delivered",
+            "unrouted": "Unrouted",
+        }.get(self.delivery, "")
 
 
 def days_remaining_label(days: int | None) -> str:
@@ -86,6 +148,94 @@ def days_remaining_label(days: int | None) -> str:
     if days == 0:
         return "today"
     return f"{days} day{'s' if days != 1 else ''}"
+
+
+def _format_timestamp(value: object) -> str:
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError, OverflowError):
+        return ""
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _group_monitoring_label(
+    monitoring: str,
+    total: int,
+    failing_count: int,
+    overdue_count: int,
+    since_raw: object,
+) -> str:
+    if monitoring == "never_scanned":
+        return "Never scanned"
+    if monitoring != "failing":
+        return ""
+    since = _format_timestamp(since_raw)
+    active_failures = max(failing_count - overdue_count, 0)
+    if active_failures:
+        label = (
+            f"{active_failures} of {total} failing"
+            if total > 1
+            else "Monitoring failing"
+        )
+    else:
+        label = (
+            f"{overdue_count} of {total} overdue"
+            if total > 1
+            else "Monitoring overdue"
+        )
+    return f"{label} since {since}" if since else label
+
+
+def _monitoring_display(
+    raw: dict[str, Any], status: dict[str, Any], monitoring: str
+) -> tuple[str, str]:
+    axis = status.get("monitoring")
+    detail = axis if isinstance(axis, dict) else {}
+    cause = str(detail.get("cause") or "")
+    if monitoring in {"current", "not_monitored"}:
+        return "", cause
+    if monitoring == "never_scanned":
+        return "Never scanned", cause
+    if monitoring == "failing":
+        if raw.get("kind") == "grouped":
+            return (
+                _group_monitoring_label(
+                    monitoring,
+                    int(detail.get("total") or raw.get("host_count") or 1),
+                    int(detail.get("failing_count") or 0),
+                    int(detail.get("overdue_count") or 0),
+                    detail.get("since"),
+                ),
+                cause,
+            )
+        # A successful latest attempt with stale evidence is overdue. A later
+        # incomplete attempt is an active failure whose first timestamp is
+        # already supplied by the canonical S1 model.
+        if (
+            raw.get("kind") != "grouped"
+            and raw.get("monitoring_attempt_status") == "success"
+            and not detail.get("raw_error")
+        ):
+            return "Monitoring overdue", cause
+        since = _format_timestamp(detail.get("since"))
+        return (f"Failing since {since}" if since else "Monitoring failing"), cause
+    return "Monitoring unavailable", cause
+
+
+def _chain_problem_label(status: dict[str, Any], chain_status: object) -> str:
+    if not status.get("chain_trust_problem"):
+        return ""
+    return {
+        "incomplete": "Chain incomplete",
+        "invalid": "Chain invalid",
+        "unknown": "Chain not verified",
+        "unverified": "Chain not verified",
+        "self-signed": "Self-signed chain",
+    }.get(str(chain_status or ""), "Chain problem")
 
 
 @dataclass(frozen=True)
@@ -267,6 +417,26 @@ def _present_entry(
     raw_condition = raw.get("condition")
     condition = str(raw_condition) if raw_condition is not None else None
     monitoring = str(raw.get("monitoring") or "never_scanned")
+    condition_axis = status.get("condition")
+    condition_detail = condition_axis if isinstance(condition_axis, dict) else {}
+    condition_days_raw = condition_detail.get(
+        "effective_days", raw.get("effective_days", days_remaining)
+    )
+    condition_days = (
+        int(condition_days_raw) if condition_days_raw is not None else None
+    )
+    condition_status = condition_display(condition, condition_days, monitoring)
+    monitoring_label, monitoring_cause = _monitoring_display(raw, status, monitoring)
+    renewal = str(raw.get("renewal") or "unknown")
+    delivery = str(raw.get("delivery") or "unrouted")
+    renewal_flag_label = {
+        "stalled": "Renewal stalled",
+        "in_progress": "Renewal in progress",
+    }.get(renewal, "")
+    delivery_flag_label = {
+        "failing": "Can't be delivered",
+        "unrouted": "Unrouted",
+    }.get(delivery, "")
     overall = str(raw.get("overall_state") or raw.get("urgency") or "gray")
     overall_label, overall_tone = {
         "expired": ("Expired", "t-expired"),
@@ -317,8 +487,21 @@ def _present_entry(
         status=status,
         condition=condition,
         monitoring=monitoring,
-        renewal=str(raw.get("renewal") or "unknown"),
-        delivery=str(raw.get("delivery") or "unrouted"),
+        renewal=renewal,
+        delivery=delivery,
+        condition_days=condition_days,
+        condition_label=condition_status.label,
+        condition_tone=condition_status.tone,
+        condition_is_chain_limited=(
+            condition_days is not None
+            and days_remaining is not None
+            and condition_days != days_remaining
+        ),
+        monitoring_label=monitoring_label,
+        monitoring_cause=monitoring_cause,
+        renewal_flag_label=renewal_flag_label,
+        delivery_flag_label=delivery_flag_label,
+        chain_problem_label=_chain_problem_label(status, raw.get("chain_status")),
         overall_label=overall_label,
         overall_tone=overall_tone,
     )
@@ -362,6 +545,20 @@ def present_browse(data: BrowsePageData, *, now: datetime | None = None) -> Brow
                 count=int(group["count"]),
                 worst_urgency=str(group["worst_urgency"]),
                 earliest_expiry=group.get("earliest_expiry"),
+                condition=(
+                    str(group["condition"]) if group.get("condition") is not None else None
+                ),
+                monitoring=str(group.get("monitoring") or "not_monitored"),
+                renewal=str(group.get("renewal") or "unknown"),
+                delivery=str(group.get("delivery") or "unrouted"),
+                chain_trust_problem=bool(group.get("chain_trust_problem")),
+                monitoring_failing_count=int(group.get("monitoring_failing_count") or 0),
+                monitoring_overdue_count=int(group.get("monitoring_overdue_count") or 0),
+                monitoring_since=(
+                    str(group["monitoring_since"])
+                    if group.get("monitoring_since")
+                    else None
+                ),
             )
             for group in data.pivot_groups
         )

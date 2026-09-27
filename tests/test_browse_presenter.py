@@ -29,6 +29,25 @@ def _browse_data() -> BrowsePageData:
                 "not_before": "2026-08-01T00:00:00+00:00",
                 "not_after": "2026-10-02T00:00:00+00:00",
                 "days_remaining": 10,
+                "effective_days": 10,
+                "condition": "8to30",
+                "monitoring": "current",
+                "renewal": "manual",
+                "delivery": "ok",
+                "chain_status": "public",
+                "status": {
+                    "condition": {"state": "8to30", "effective_days": 10},
+                    "chain_trust_problem": False,
+                    "chain_status": "public",
+                    "monitoring": {
+                        "state": "current",
+                        "since": None,
+                        "cause": None,
+                        "raw_error": None,
+                    },
+                    "renewal": {"state": "manual", "source": "renewal_method"},
+                    "delivery": {"state": "ok", "channels": []},
+                },
                 "owner_name": "Network team",
                 "renewal_method": "manual",
                 "tags": " production, vpn, production ",
@@ -76,8 +95,129 @@ def test_browse_presenter_derives_row_display_without_http() -> None:
     assert entry.posture_grade == "B"
     assert entry.freshness_label == "Current scan"
     assert entry.freshness_tone == "cw-muted"
+    assert entry.condition_label == "10 days left"
+    assert entry.condition_tone == "t-warn"
+    assert entry.monitoring_label == ""
+    assert entry.renewal_flag_label == ""
+    assert entry.delivery_flag_label == ""
+    assert entry.chain_problem_label == ""
     assert view.has_next is True
     assert view.browse_url(page=2).startswith("/browse?")
+
+
+def test_browse_presenter_uses_four_axis_facts_without_recomputing_status() -> None:
+    data = _browse_data()
+    entry = {
+        **data.entries[0],
+        "days_remaining": 62,
+        "effective_days": -3,
+        "condition": "expired",
+        "monitoring": "failing",
+        "monitoring_attempt_status": "failure",
+        "renewal": "stalled",
+        "delivery": "failing",
+        "chain_status": "invalid",
+        "status": {
+            "condition": {"state": "expired", "effective_days": -3},
+            "chain_trust_problem": True,
+            "chain_status": "invalid",
+            "monitoring": {
+                "state": "failing",
+                "since": "2026-09-22T06:00:00+00:00",
+                "cause": "The endpoint refused the connection.",
+                "raw_error": "connection refused",
+            },
+            "renewal": {"state": "stalled", "source": "renewal_window"},
+            "delivery": {"state": "failing", "channels": []},
+        },
+    }
+    view = present_browse(
+        BrowsePageData(**{**data.__dict__, "entries": [entry]}),
+        now=datetime(2026, 9, 22, 12, tzinfo=UTC),
+    )
+    row = view.entries[0]
+
+    assert row.condition_label == "Last seen · expired 3 days ago"
+    assert row.condition_tone == "t-expired"
+    assert row.condition_is_chain_limited is True
+    assert row.monitoring_label == "Failing since 2026-09-22 06:00 UTC"
+    assert row.monitoring_cause == "The endpoint refused the connection."
+    assert row.renewal_flag_label == "Renewal stalled"
+    assert row.delivery_flag_label == "Can't be delivered"
+    assert row.chain_problem_label == "Chain invalid"
+
+
+def test_browse_presenter_distinguishes_overdue_never_and_uploads() -> None:
+    data = _browse_data()
+    base = data.entries[0]
+    entries = [
+        {
+            **base,
+            "id": "overdue",
+            "monitoring": "failing",
+            "monitoring_attempt_status": "success",
+            "monitoring_last_success": "2026-09-19T06:00:00+00:00",
+            "status": {
+                **base["status"],
+                "monitoring": {
+                    "state": "failing",
+                    "since": "2026-09-20T06:00:00+00:00",
+                    "cause": "The endpoint has no current successful observation.",
+                    "raw_error": None,
+                },
+            },
+        },
+        {
+            **base,
+            "id": "never",
+            "condition": None,
+            "effective_days": None,
+            "monitoring": "never_scanned",
+            "status": {
+                **base["status"],
+                "condition": {"state": None, "effective_days": None},
+                "monitoring": {
+                    "state": "never_scanned",
+                    "since": None,
+                    "cause": None,
+                    "raw_error": None,
+                },
+            },
+        },
+        {
+            **base,
+            "id": "upload",
+            "host_id": None,
+            "source": "uploaded",
+            "monitoring": "not_monitored",
+            "status": {
+                **base["status"],
+                "monitoring": {
+                    "state": "not_monitored",
+                    "since": None,
+                    "cause": None,
+                    "raw_error": None,
+                },
+            },
+        },
+    ]
+    view = present_browse(BrowsePageData(**{**data.__dict__, "entries": entries}))
+
+    assert [row.monitoring_label for row in view.entries] == [
+        "Monitoring overdue",
+        "Never scanned",
+        "",
+    ]
+    assert [row.condition_label for row in view.entries] == [
+        "Last seen · 10 days left",
+        "No certificate",
+        "10 days left",
+    ]
+    assert [row.condition_tone for row in view.entries] == [
+        "t-warn",
+        "t-muted",
+        "t-warn",
+    ]
 
 
 def test_browse_presenter_derives_calendar_tones_and_storms() -> None:
@@ -103,3 +243,49 @@ def test_browse_presenter_derives_calendar_tones_and_storms() -> None:
         "",
     ]
     assert view.calendar_storms == 2
+
+
+def test_pivot_group_preserves_overdue_count_and_earliest_since() -> None:
+    data = _browse_data()
+    group = {
+        "key": "Platform team",
+        "count": 3,
+        "worst_urgency": "failing",
+        "earliest_expiry": 80,
+        "condition": "ok",
+        "monitoring": "failing",
+        "monitoring_failing_count": 2,
+        "monitoring_overdue_count": 2,
+        "monitoring_since": "2026-09-18T06:00:00+00:00",
+        "renewal": "unknown",
+        "delivery": "ok",
+        "chain_trust_problem": False,
+    }
+    view = present_browse(
+        BrowsePageData(
+            **{
+                **data.__dict__,
+                "entries": [],
+                "pivot_groups": [
+                    group,
+                    {
+                        **group,
+                        "key": "Mixed team",
+                        "monitoring_overdue_count": 1,
+                    },
+                ],
+                "pivot_view": "owner",
+            }
+        )
+    )
+
+    pivot = (view.pivot_groups or ())[0]
+    assert pivot.condition_label == "Last seen OK · expires in 80 days"
+    assert pivot.condition_tone == "t-muted"
+    assert pivot.monitoring_label == (
+        "2 of 3 overdue since 2026-09-18 06:00 UTC"
+    )
+    mixed = (view.pivot_groups or ())[1]
+    assert mixed.monitoring_label == (
+        "1 of 3 failing since 2026-09-18 06:00 UTC"
+    )

@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "allows": 0,
+  "allows": 1,
   "undefined_classes": [],
   "color_literals": [
     {
