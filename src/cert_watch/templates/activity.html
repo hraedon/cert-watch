@@ -302,7 +302,7 @@
           {% for r in rows %}
           <tr>
             <td class="tnum">{{ r.ts[:19] | replace('T', ' ') if r.ts else '—' }}</td>
-            <td>{{ r.actor or 'anonymous' }}</td>
+            <td>{{ r.actor_display or r.actor or 'anonymous' }}</td>
             <td>{{ r.action }}</td>
             <td>{{ r.target_type or '' }}{% if r.target_id %} <span class="cw-chip inset">{{ r.target_id[:8] }}{% if r.target_id | length > 8 %}…{% endif %}</span>{% endif %}</td>
             <td class="cw-muted">{{ r.detail or '' }}</td>

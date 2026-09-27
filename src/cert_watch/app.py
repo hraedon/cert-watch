@@ -237,6 +237,20 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
     assert s is not None
     encryption_key = derive_encryption_key(security.signing_key)
 
+    if s.webhook_kind == "generic" and s.webhook_template:
+        from cert_watch.alerting.transports.adapters import (
+            InvalidWebhookTemplateError,
+            validate_generic_webhook_template,
+        )
+
+        try:
+            validate_generic_webhook_template(s.webhook_template)
+        except InvalidWebhookTemplateError:
+            logger.warning(
+                "Generic webhook channel has an invalid JSON template; "
+                "deliveries using this channel will be refused"
+            )
+
     _init_rate_db(s.db_path)
     from cert_watch.siem import configure_exporter
 

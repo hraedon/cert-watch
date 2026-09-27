@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from math import isfinite
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
@@ -23,6 +26,10 @@ class AlertRequest:
     body: bytes
     headers: dict[str, str]
     method: str = "POST"
+
+
+class InvalidWebhookTemplateError(ValueError):
+    """Rendered generic webhook template is not valid for its declared format."""
 
 
 class AlertAdapter(Protocol):
@@ -87,15 +94,141 @@ def _alertname(alert_type: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Generic adapter — preserves existing behaviour exactly
+# Generic adapter
 # ---------------------------------------------------------------------------
+
+
+def _strip_control_characters(value: str) -> str:
+    return "".join(
+        character for character in value
+        if unicodedata.category(character) != "Cc"
+    )
+
+
+def _escape_slack_text(value: str) -> str:
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+_DISCORD_MARKDOWN = re.compile(r"([\\[\]()*_~`>|])")
+_TEAMS_MARKDOWN = re.compile(r"([\\[\]*])")
+
+
+def _escape_discord_text(value: str) -> str:
+    return _DISCORD_MARKDOWN.sub(r"\\\1", value)
+
+
+def _escape_teams_text(value: str) -> str:
+    # Teams documents only bold, italic, lists, and links for Adaptive Card
+    # TextBlock Markdown. Mentions additionally require an msteams.entities
+    # entry, which this adapter never supplies. Break angle-bracket and entity
+    # tokens invisibly, and escape only link/emphasis delimiters. Punctuation
+    # used in hostnames and subjects remains visible verbatim.
+    escaped = (
+        value.replace("&", "&\u200b")
+        .replace("<", "<\u200b")
+        .replace(">", "\u200b>")
+    )
+    return _TEAMS_MARKDOWN.sub(r"\\\1", escaped)
+
+
+_TEMPLATE_VALUES = frozenset(
+    {"alert_type", "cert_id", "message", "threshold_days", "status"}
+)
+_TEMPLATE_PLACEHOLDER = re.compile(
+    r"{{(" + "|".join(sorted(_TEMPLATE_VALUES)) + r")}}"
+)
+# Starts with a non-hex letter so a placeholder completing a "\uXXXX" escape
+# cannot parse by accident.
+_JSON_SAMPLE_MARKER = "zz_cert_watch_template_sample"
+# Placeholders whose value is always a JSON number or null.
+_BARE_TEMPLATE_KEYS = frozenset({"threshold_days"})
+_INVALID_JSON = object()
+
+
+def _strip_template_prefix(template: str) -> str:
+    """Remove every leading BOM and whitespace character."""
+    position = 0
+    while position < len(template):
+        character = template[position]
+        if character != "\ufeff" and not character.isspace():
+            break
+        position += 1
+    return template[position:]
+
+
+def _placeholder_is_in_string(template: str, position: int) -> bool:
+    """Return whether *position* is inside a JSON-style quoted string."""
+    in_string = False
+    escaped = False
+    for character in template[:position]:
+        if escaped:
+            escaped = False
+        elif character == "\\" and in_string:
+            escaped = True
+        elif character == '"':
+            in_string = not in_string
+    return in_string
+
+
+def _template_probe(template: str) -> tuple[str, Any]:
+    """Strip the prefix and parse neutral, non-secret renderings.
+
+    Unquoted placeholders are rendered both as ``0`` and as ``null`` (the two
+    shapes ``{{threshold_days}}`` takes), and the template counts as valid
+    JSON only if both parse, so ``-{{threshold_days}}`` is refused at save
+    rather than failing each send that has no threshold.
+    """
+    template = _strip_template_prefix(template)
+    parsed: Any = _INVALID_JSON
+    for bare in ("0", "null"):
+
+        def neutral(match: re.Match[str], bare: str = bare) -> str:
+            if _placeholder_is_in_string(template, match.start()):
+                return f"{_JSON_SAMPLE_MARKER}_{match.group(1)}"
+            return bare
+
+        rendered = _TEMPLATE_PLACEHOLDER.sub(neutral, template)
+        try:
+            parsed = json.loads(rendered)
+        except json.JSONDecodeError:
+            return template, _INVALID_JSON
+    return template, parsed
+
+
+def validate_generic_webhook_template(template: str) -> bool:
+    """Validate *template* and return whether it is a JSON template.
+
+    Text templates are deliberately accepted. A template is JSON only when it
+    starts with ``{`` and a neutral rendering parses as a JSON object.
+    Malformed object-looking templates are rejected so an operator sees the
+    error while saving Settings.
+    """
+    template, parsed = _template_probe(template)
+    if not template.startswith("{") or template.startswith("{{"):
+        return False
+    if parsed is _INVALID_JSON or not isinstance(parsed, dict):
+        raise InvalidWebhookTemplateError(
+            "Webhook template starts with '{' but is not a valid JSON object "
+            "after placeholder substitution."
+        )
+    for match in _TEMPLATE_PLACEHOLDER.finditer(template):
+        key = match.group(1)
+        if key not in _BARE_TEMPLATE_KEYS and not _placeholder_is_in_string(
+            template, match.start()
+        ):
+            raise InvalidWebhookTemplateError(
+                f"Webhook JSON template placeholder {{{{{key}}}}} must be inside quotes; "
+                "only {{threshold_days}} may appear unquoted."
+            )
+    return True
 
 class GenericAdapter:
     kind = "generic"
 
     def build(self, msg: OutboundMessage, config: WebhookConfig) -> AlertRequest:
         if config.template:
-            payload = config.template
+            template = _strip_template_prefix(config.template)
+            is_json = validate_generic_webhook_template(template)
             values = {
                 "alert_type": msg.severity,
                 "cert_id": msg.cert_id,
@@ -103,11 +236,39 @@ class GenericAdapter:
                 "threshold_days": msg.threshold_days,
                 "status": msg.status,
             }
-            for key in values:
-                value = str(values[key])
-                payload = payload.replace("{{" + key + "}}", value)
+
+            def substitute(match: re.Match[str]) -> str:
+                key = match.group(1)
+                raw_value = values[key]
+                if is_json:
+                    if _placeholder_is_in_string(template, match.start()):
+                        return json.dumps(str(raw_value))[1:-1]
+                    if raw_value is None:
+                        return "null"
+                    if (
+                        isinstance(raw_value, (int, float))
+                        and not isinstance(raw_value, bool)
+                        and isfinite(raw_value)
+                    ):
+                        return json.dumps(raw_value)
+                    raise InvalidWebhookTemplateError(
+                        f"generic webhook JSON placeholder {{{{{key}}}}} is bare, "
+                        "but its value is not a JSON number or null"
+                    )
+                value = _strip_control_characters(str(raw_value))
+                return value
+
+            # One pass over the original template: placeholder-looking text in
+            # a substituted certificate value remains literal.
+            payload = _TEMPLATE_PLACEHOLDER.sub(substitute, template)
             content_type = "text/plain"
-            if payload.lstrip().startswith("{"):
+            if is_json:
+                try:
+                    json.loads(payload)
+                except json.JSONDecodeError as exc:
+                    raise InvalidWebhookTemplateError(
+                        "generic webhook JSON template is invalid after substitution"
+                    ) from exc
                 content_type = "application/json"
         else:
             payload_dict: dict[str, Any] = {
@@ -146,11 +307,17 @@ class DiscordAdapter:
             fields.append({"name": "Cert ID", "value": str(msg.cert_id), "inline": False})
         embed = {
             "title": f"cert-watch: {msg.severity.replace('_', ' ').title()}",
-            "description": msg.body,
+            "description": _escape_discord_text(msg.body),
             "color": color,
             "fields": fields,
         }
-        payload = json.dumps({"username": "cert-watch", "embeds": [embed]})
+        payload = json.dumps(
+            {
+                "username": "cert-watch",
+                "embeds": [embed],
+                "allowed_mentions": {"parse": []},
+            }
+        )
         headers = {**config.headers, "Content-Type": "application/json"}
         return AlertRequest(url=config.url, body=payload.encode("utf-8"), headers=headers)
 
@@ -194,7 +361,7 @@ class TeamsAdapter:
                             },
                             {
                                 "type": "TextBlock",
-                                "text": msg.body,
+                                "text": _escape_teams_text(msg.body),
                                 "wrap": True,
                             },
                         ],
@@ -308,7 +475,7 @@ class SlackAdapter:
         attachment = {
             "color": color,
             "title": f"cert-watch: {msg.severity.replace('_', ' ').title()}",
-            "text": msg.body,
+            "text": _escape_slack_text(msg.body),
             "fields": fields,
             "footer": "cert-watch",
         }

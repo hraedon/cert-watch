@@ -98,6 +98,9 @@ templated), `slack`, `teams`, `discord`, `pagerduty` and `alertmanager`. All
 webhook traffic goes through the same address allowlist as scanning, checked
 at every redirect.
 
+Generic webhooks do not apply Slack, Discord, or Teams markup escaping. Use the
+dedicated channel kind for chat destinations.
+
 Each alert moves through a small set of states, shown in **Activity → Alerts**:
 
 | State | Meaning |
@@ -163,6 +166,7 @@ an Ansible play) can act on it without calling cert-watch back:
 ```json
 {
   "event": "renewal_needed",
+  "event_id": "62f138f6b6dd4c0d94318ab4a46dca1e",
   "hostname": "www.example.com",
   "port": 443,
   "cert_fingerprint": "…",
@@ -179,9 +183,14 @@ an Ansible play) can act on it without calling cert-watch back:
 }
 ```
 
+`event_id` is a unique 32-character hexadecimal id for one webhook emission.
+It stays the same across delivery retries, so receivers can use it as an
+idempotency key, and is independent of the Event stream's database row id.
 `cert_watch_url` is included when `CERT_WATCH_BASE_URL` is set. The event is
 sent at most once per endpoint per day and retried with backoff if the
-destination fails. It goes through
+destination fails. Disabling `renewal_overdue` under **Settings → Event
+streaming** stops that event from being stored or forwarded but does not
+disable this renewal webhook. It goes through
 the address allowlist and never blocks the scan cycle.
 
 ## Event forwarding

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -105,6 +106,7 @@ def build_renewal_payload(
 
     payload: dict[str, Any] = {
         "event": "renewal_needed",
+        "event_id": uuid.uuid4().hex,
         "hostname": signal.hostname,
         "port": effective_port,
         "cert_fingerprint": signal.cert_fingerprint,

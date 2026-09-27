@@ -4,6 +4,21 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- Generic JSON webhook templates now JSON-escape certificate-derived values
+  for one string level. JSON mode requires a `{`-leading template whose neutral
+  rendering is an object; bracketed, placeholder-only and form-looking
+  templates remain plain text. Leading BOMs and whitespace are ignored,
+  substitutions are single-pass, and invalid object-looking templates are
+  refused with a startup warning for existing configuration. Slack, Discord
+  and Teams payloads neutralize untrusted mention and link markup.
+- API keys with an unknown or corrupt scope are now rejected as
+  unauthenticated instead of silently receiving viewer access.
+- Audit events created by API keys now identify the actor as `api_key:<id>`
+  instead of the non-unique key name. The key name remains in event detail and
+  the Activity page shows it alongside a short id.
+
 ### Fixed
 
 - Repeated scans of the same deployed certificate keep the persisted renewal
@@ -12,6 +27,13 @@ All notable changes to cert-watch are documented in this file.
   retention pruning, and history updates or deletes still recompute or
   invalidate the result. Persisted rows now carry a classifier version and
   are refreshed at startup when the classifier changes (#128).
+- Renewal webhooks are sent even when `renewal_overdue` Event stream storage
+  is disabled. Each emission now carries a unique `event_id` that remains
+  stable across its delivery retries. Webhook delivery and Event stream
+  storage use independent 24-hour claims, so a failed event write is retried
+  on later sweeps without sending the webhook again.
+- Non-cert-watch Bearer tokens on HTML pages now fall through to the normal
+  session or login flow; only rejected `cwk_` credentials force a JSON 401.
 
 ### Upgrade notes
 

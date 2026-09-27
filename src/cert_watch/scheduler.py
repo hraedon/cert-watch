@@ -848,7 +848,7 @@ def _check_renewal_overdue(
         return
     try:
         from cert_watch.database import AlertStore
-        from cert_watch.events import Event, emit_event
+        from cert_watch.events import Event, emit_event, load_event_config
         from cert_watch.renewal_analytics import detect_renewal_overdue
 
         store = AlertStore(db_path)
@@ -860,51 +860,73 @@ def _check_renewal_overdue(
             try:
                 signal = detect_renewal_overdue(db_path, hostname, port=port)
                 if signal is not None:
-                    key = f"overdue:{signal.hostname}:{port}:{signal.cert_fingerprint}"
-                    legacy_key = f"overdue:{signal.hostname}:*:{signal.cert_fingerprint}"
+                    firing = (
+                        f"overdue:{signal.hostname}:{port}:"
+                        f"{signal.cert_fingerprint}"
+                    )
+                    legacy_firing = (
+                        f"overdue:{signal.hostname}:*:"
+                        f"{signal.cert_fingerprint}"
+                    )
+                    event_key = f"{firing}:event"
+                    webhook_key = f"{firing}:webhook"
                     current = now()
-                    if not store.rule_firing_due(
-                        key,
+                    event_config = load_event_config(db_path)
+                    event_enabled = (
+                        "renewal_overdue" in event_config.enabled_event_types
+                    )
+                    event_due = event_enabled and store.rule_firing_due(
+                        event_key,
                         now=current,
                         interval_seconds=24 * 60 * 60,
-                        suppression_keys=(legacy_key,),
-                    ):
-                        continue
-                    event_id = emit_event(
-                        Event(
-                            event_type="renewal_overdue",
-                            timestamp=current,
-                            payload={
-                                "hostname": signal.hostname,
-                                "port": port,
-                                "cert_fingerprint": signal.cert_fingerprint,
-                                "days_remaining": signal.days_remaining,
-                                "expected_renewal_at_days": signal.expected_renewal_at_days,
-                                "days_overdue": signal.days_overdue,
-                                "confidence": signal.confidence,
-                            },
-                            source="scheduler",
-                        ),
-                        db_path,
+                        suppression_keys=(firing, legacy_firing),
                     )
-                    if event_id is None:
-                        continue
-                    store.claim_rule_firing(
-                        key,
-                        now=current,
-                        interval_seconds=24 * 60 * 60,
-                        suppression_keys=(legacy_key,),
-                    )
-                    try:
-                        if send_webhook is not None:
+                    if event_due:
+                        event_row_id = emit_event(
+                            Event(
+                                event_type="renewal_overdue",
+                                timestamp=current,
+                                payload={
+                                    "hostname": signal.hostname,
+                                    "port": port,
+                                    "cert_fingerprint": signal.cert_fingerprint,
+                                    "days_remaining": signal.days_remaining,
+                                    "expected_renewal_at_days": (
+                                        signal.expected_renewal_at_days
+                                    ),
+                                    "days_overdue": signal.days_overdue,
+                                    "confidence": signal.confidence,
+                                },
+                                source="scheduler",
+                            ),
+                            db_path,
+                            config=event_config,
+                        )
+                        if event_row_id is not None:
+                            store.claim_rule_firing(
+                                event_key,
+                                now=current,
+                                interval_seconds=24 * 60 * 60,
+                                suppression_keys=(firing, legacy_firing),
+                            )
+                    if send_webhook is not None:
+                        claimed = store.claim_rule_firing(
+                            webhook_key,
+                            now=current,
+                            interval_seconds=24 * 60 * 60,
+                            suppression_keys=(firing, legacy_firing),
+                        )
+                        if not claimed:
+                            continue
+                        try:
                             send_webhook(
                                 signal, hostname, port, db_path, settings=settings,
                             )
-                    except Exception:
-                        logger.exception(
-                            "renewal webhook failed for %s:%s — continuing sweep",
-                            hostname, port,
-                        )
+                        except Exception:
+                            logger.exception(
+                                "renewal webhook failed for %s:%s — continuing sweep",
+                                hostname, port,
+                            )
             except Exception:
                 logger.exception(
                     "renewal overdue check failed for %s:%s — continuing sweep",

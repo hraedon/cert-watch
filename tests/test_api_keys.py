@@ -8,6 +8,7 @@ authenticating via an ``Authorization: Bearer cwk_…`` token.
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ import pytest
 from fastapi import Request
 from fastapi.exceptions import HTTPException
 
+from cert_watch.audit import audit_actor_display, list_audit, record_audit, resolve_actor
 from cert_watch.auth.guards import require_admin, require_auth, write_guard
 from cert_watch.auth.request_context import authenticate_api_key
 from cert_watch.database import init_schema
@@ -273,6 +275,46 @@ async def test_authenticate_api_key_uses_request_security_context(seeded):
     assert authenticate_api_key(request, db) is not None
 
 
+def test_api_key_audit_identity_is_stable_and_not_impersonable(seeded):
+    db, repo = seeded
+    first, first_raw = repo.create_key("shared-name", "write")
+    second, second_raw = repo.create_key("shared-name", "write")
+
+    for raw in (first_raw, second_raw):
+        request = _make_request(db, bearer=raw)
+        assert authenticate_api_key(request, db) is not None
+        record_audit(
+            db,
+            actor=resolve_actor(request),
+            action="host.edit",
+            target_type="host",
+            target_id="host-1",
+        )
+    record_audit(
+        db,
+        actor="shared-name",
+        action="host.edit",
+        target_type="host",
+        target_id="host-1",
+    )
+
+    rows = list_audit(db)
+    assert {row["actor"] for row in rows} == {
+        "shared-name",
+        f"api_key:{first.id}",
+        f"api_key:{second.id}",
+    }
+    key_rows = [row for row in rows if row["actor"].startswith("api_key:")]
+    assert all(
+        json.loads(row["detail"])["api_key_name"] == "shared-name"
+        for row in key_rows
+    )
+    assert {audit_actor_display(row) for row in key_rows} == {
+        f"shared-name (API key {first.id[:8]})",
+        f"shared-name (API key {second.id[:8]})",
+    }
+
+
 @pytest.mark.anyio
 async def test_require_auth_rejects_bad_api_key(seeded):
     db, _ = seeded
@@ -372,6 +414,77 @@ def test_bearer_auth_http_end_to_end(reload_app):
             json={"owner_name": "x"},
         )
         assert allowed.status_code != 403
+
+
+def test_unknown_scope_is_unauthenticated_on_api_and_html_routes(
+    reload_app, caplog,
+):
+    from fastapi.testclient import TestClient
+
+    from cert_watch.auth.local_admin import _scrypt_hash
+    from cert_watch.config import Settings
+
+    app_mod = reload_app(
+        CERT_WATCH_LOCAL_ADMIN_USER="admin",
+        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("pw-for-tests-1"),
+    )
+    db = Settings.from_env().db_path
+    init_schema(db)
+    repo = SqliteApiKeyRepository(db)
+    entry, raw = repo.create_key("corrupt-scope", "read")
+    legacy_hash = hashlib.sha256(raw.encode()).hexdigest()
+    with repo_conn(repo) as conn:
+        conn.execute(
+            "UPDATE api_keys SET scope = 'bogus', key_hash = ? WHERE id = ?",
+            (legacy_hash, entry.id),
+        )
+        conn.commit()
+
+    headers = {"Authorization": f"Bearer {raw}"}
+    with (
+        caplog.at_level("WARNING", logger="cert_watch.auth.request_context"),
+        TestClient(app_mod.app) as client,
+    ):
+        assert client.get("/api/hosts", headers=headers).status_code == 401
+        assert client.get(
+            "/", headers=headers, follow_redirects=False
+        ).status_code == 401
+
+    assert any(entry.id in record.message for record in caplog.records)
+    assert all(raw not in record.message for record in caplog.records)
+    with repo_conn(repo) as conn:
+        row = conn.execute(
+            "SELECT key_hash, last_used_at FROM api_keys WHERE id = ?", (entry.id,)
+        ).fetchone()
+    assert row["key_hash"] == legacy_hash
+    assert row["last_used_at"] is None
+
+
+def test_non_cert_watch_bearer_on_html_page_uses_login_flow(reload_app):
+    from fastapi.testclient import TestClient
+
+    from cert_watch.auth.local_admin import _scrypt_hash
+
+    app_mod = reload_app(
+        CERT_WATCH_LOCAL_ADMIN_USER="admin",
+        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("pw-for-tests-1"),
+    )
+    with TestClient(app_mod.app) as client:
+        response = client.get(
+            "/",
+            headers={"Authorization": "Bearer proxy-issued-token"},
+            follow_redirects=False,
+        )
+        rejected_key = client.get(
+            "/",
+            headers={"Authorization": "Bearer cwk_not-a-real-key"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+    assert rejected_key.status_code == 401
+    assert rejected_key.json() == {"error": "unauthenticated"}
 
 
 def test_api_keys_management_routes(reload_app):

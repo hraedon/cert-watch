@@ -188,6 +188,9 @@ class AuthContext:
     """
 
     username: str
+    # Stable machine-principal identity. API keys use their immutable key id;
+    # human principals leave this empty and retain their username identity.
+    principal_id: str = ""
     roles: list[str] = field(default_factory=list)
     permissions: frozenset[Permission] = frozenset()
     tier: str = ""
@@ -220,6 +223,7 @@ class AuthContext:
         roles: list[str] | None = None,
         scope_tag: str = "",
         email: str = "",
+        principal_id: str = "",
         tag_tiers: dict[str, str] | None = None,
         local_account: bool = False,
     ) -> AuthContext:
@@ -227,6 +231,7 @@ class AuthContext:
         tier = tier if tier in PERMISSION_TIERS else ROLE_VIEWER
         return cls(
             username=username,
+            principal_id=principal_id,
             roles=roles or [tier],
             permissions=permissions_for_tier(tier),
             tier=tier,

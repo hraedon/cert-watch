@@ -41,6 +41,30 @@ rather than the application:
 | `CERT_WATCH_PORT` | `8000` | Port to listen on. Also settable with `--port`. |
 | `CERT_WATCH_RELOAD` | `0` | `1` reloads on code changes. Development only. |
 
+## Generic alert webhook templates
+
+Generic webhook templates support `{{alert_type}}`, `{{cert_id}}`,
+`{{message}}`, `{{threshold_days}}`, and `{{status}}`. Leading Unicode BOMs and
+whitespace are ignored. A template uses JSON mode only when the remaining text
+starts with `{` and a neutral substitution parses as a JSON object. Everything
+else, including bracketed, placeholder-only, and form-looking templates, uses
+`text/plain`. In JSON templates, put string-valued placeholders inside JSON
+string literals. Only `{{threshold_days}}` (a number or `null`) may appear
+unquoted; a JSON template with any other unquoted placeholder is refused when
+saved, and at send time if it came from the environment.
+
+Placeholder values are escaped for exactly one JSON string level. A
+placeholder inside a string that itself contains an encoded JSON document gets
+no second level of escaping, so templates must not embed JSON inside a string;
+build nested payloads as real JSON objects instead. A generic template that
+starts with `{` but fails the neutral parse is rejected when saved and refused
+at delivery. Plain-text template values have control characters removed but
+are not escaped for form encoding or any other structured format. Use a JSON
+template when the receiver needs structure.
+
+Generic webhooks do not apply Slack, Discord, or Teams markup escaping. Use the
+dedicated channel kind when sending to one of those chat systems.
+
 ## Reference
 
 This section is generated from the code by `scripts/gen_config_reference.py`,

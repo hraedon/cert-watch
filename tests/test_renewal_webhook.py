@@ -83,6 +83,8 @@ def test_build_renewal_payload(tmp_path, self_signed_leaf):
     payload = build_renewal_payload(signal, db)
 
     assert payload["event"] == "renewal_needed"
+    assert len(payload["event_id"]) == 32
+    int(payload["event_id"], 16)
     assert payload["hostname"] == "host.example.com"
     assert payload["port"] == 443
     assert payload["cert_fingerprint"] == cert.fingerprint_sha256
@@ -96,6 +98,17 @@ def test_build_renewal_payload(tmp_path, self_signed_leaf):
     assert payload["confidence"] == "low"
     assert "automation_hint" in payload
     assert "cert_watch_url" not in payload
+
+
+def test_build_renewal_payload_uses_distinct_event_ids(tmp_path):
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    signal = _make_signal(hostname="missing.example.com", fingerprint="deadbeef")
+
+    first = build_renewal_payload(signal, db)
+    second = build_renewal_payload(signal, db)
+
+    assert first["event_id"] != second["event_id"]
 
 
 def test_build_renewal_payload_with_base_url(tmp_path, self_signed_leaf):

@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
 
+from cert_watch.alerting.transports.adapters import (
+    InvalidWebhookTemplateError,
+    validate_generic_webhook_template,
+)
 from cert_watch.routes.settings.config import _ALERT_KEYS
 from cert_watch.routes.settings.core import _save_config_section, settings_tab_form
 
@@ -15,6 +21,16 @@ router = APIRouter()
 async def save_alert_config(
     request: Request, _auth: str = Depends(settings_tab_form("alerts")),
 ) -> RedirectResponse:
+    form = await request.form()
+    template = str(form.get("webhook_template") or "")
+    kind = str(form.get("webhook_kind") or "generic")
+    try:
+        if kind == "generic" and template:
+            validate_generic_webhook_template(template)
+    except InvalidWebhookTemplateError as exc:
+        return RedirectResponse(
+            url=f"/settings?tab=alerts&error={quote(str(exc))}", status_code=303
+        )
     # encrypt=True so webhook_headers (a SENSITIVE_SETTING_KEY) is stored
     # encrypted at rest via kv_set_secret. Other alert keys are non-sensitive
     # and pass through kv_set unchanged regardless of this flag.

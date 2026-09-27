@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
-from cert_watch.audit import count_audit, list_audit
+from cert_watch.audit import audit_actor_display, count_audit, list_audit
 from cert_watch.auth.guards import (
     admin_page_guard,
     get_auth_context,
@@ -44,6 +44,8 @@ def audit_page(
         page=page,
         limit=limit,
     )
+    for row in rows:
+        row["actor_display"] = audit_actor_display(row)
     return templates.TemplateResponse(
         request=request,
         name="activity.html",

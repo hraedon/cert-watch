@@ -93,6 +93,35 @@ def test_list_audit_filters(db: Path) -> None:
     assert len(filtered) == 2
 
 
+def test_api_key_actor_filter_accepts_name_short_id_and_full_actor(db: Path) -> None:
+    record_audit(
+        db,
+        actor="api_key:1234abcd5678ef001234abcd5678ef00",
+        action="host.add",
+        target_type="host",
+        target_id="matching",
+        detail={"api_key_name": "deploy-key"},
+    )
+    record_audit(
+        db,
+        actor="api_key:ffffffff5678ef00",
+        action="host.add",
+        target_type="host",
+        target_id="other",
+        detail={"api_key_name": "other-key"},
+    )
+
+    for actor_filter in (
+        "deploy-key",
+        "1234abcd",
+        "1234abcd5678ef001234abcd5678ef00",
+        "api_key:1234abcd5678ef001234abcd5678ef00",
+    ):
+        rows = list_audit(db, actor=actor_filter)
+        assert [row["target_id"] for row in rows] == ["matching"]
+        assert count_audit(db, actor=actor_filter) == 1
+
+
 def test_list_audit_pagination(db: Path) -> None:
     for i in range(12):
         record_audit(

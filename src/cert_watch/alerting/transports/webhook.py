@@ -10,7 +10,10 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 
 from cert_watch.alerting.model import OutboundMessage, SendResult, WebhookConfig
-from cert_watch.alerting.transports.adapters import get_adapter
+from cert_watch.alerting.transports.adapters import (
+    InvalidWebhookTemplateError,
+    get_adapter,
+)
 from cert_watch.alerting.transports.base import _redact_secret
 from cert_watch.http_client import SSRFBlockedError, ssrf_safe_urlopen
 
@@ -133,8 +136,9 @@ def send_webhook(msg: OutboundMessage | Any, config: WebhookConfig | None) -> Se
         else:
             reason = "transport"
             http_status = None
-            reached_transport = not (
-                isinstance(exc, URLError) and isinstance(exc.reason, socket.gaierror)
+            reached_transport = not isinstance(exc, InvalidWebhookTemplateError) and not (
+                isinstance(exc, URLError)
+                and isinstance(exc.reason, socket.gaierror)
             )
         return SendResult(
             "failed",
