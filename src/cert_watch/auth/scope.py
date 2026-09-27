@@ -96,7 +96,7 @@ def write_scope_error(
 
 
 def new_tags_scope_error(auth_ctx: Any, new_tags: str) -> str | None:
-    """Return an error message if *new_tags* are not all within *auth_ctx*'s scope.
+    """Return an error if *new_tags* are not all in writable caller scope.
 
     For scoped users, every submitted tag must be in their scope set.
     Admins, unscoped users and the low-level request helper's missing-context
@@ -110,9 +110,12 @@ def new_tags_scope_error(auth_ctx: Any, new_tags: str) -> str | None:
     from cert_watch.tags import parse_tags
 
     scope_tags = _folded(parse_tags(scope_tag))
+    may_write_tags = getattr(auth_ctx, "may_write_tags", None)
     for tag in parse_tags(new_tags):
         if tag.casefold() not in scope_tags:
             return f"tag '{tag}' is outside your team scope"
+        if callable(may_write_tags) and not may_write_tags({tag}):
+            return f"your access to tag '{tag}' is read-only"
     return None
 
 
@@ -240,8 +243,37 @@ def may_reveal_routing_identities(
 
 
 def ensure_new_tags_in_scope(auth_ctx: Any, new_tags: str) -> None:
-    """Raise :class:`ScopeDeniedError` unless every tag is within scope."""
+    """Raise unless every submitted tag is in the caller's writable scope."""
     require_auth_context(auth_ctx)
     error = new_tags_scope_error(auth_ctx, new_tags)
     if error:
         raise ScopeDeniedError(error)
+
+
+def ensure_tag_update_retains_scope(
+    auth_ctx: Any, effective_tags_after: set[str] | tuple[str, ...] | list[str]
+) -> None:
+    """Keep a scoped writer inside the resource's final effective scope.
+
+    A non-admin scoped caller may not remove the last tag through which they
+    can write the resource.  Besides avoiding a self-lockout, this prevents a
+    write-capable tag editor from handing a resource to a read-only tier.
+    """
+    require_auth_context(auth_ctx)
+    if getattr(auth_ctx, "is_admin", False):
+        return
+    from cert_watch.tags import parse_tags
+
+    scope_tags = parse_tags(getattr(auth_ctx, "scope_tag", "") or "")
+    if not scope_tags:
+        return
+    final = _folded(effective_tags_after)
+    may_write_tags = getattr(auth_ctx, "may_write_tags", None)
+    if any(
+        tag.casefold() in final and (not callable(may_write_tags) or may_write_tags({tag}))
+        for tag in scope_tags
+    ):
+        return
+    raise ScopeDeniedError(
+        "at least one tag in your writable team scope must remain on the resource"
+    )

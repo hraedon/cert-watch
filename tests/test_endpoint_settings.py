@@ -27,28 +27,45 @@ def endpoint(tmp_path):
     init_schema(db)
     repo = SqliteHostRepository(db)
     host_id = repo.add(
-        "endpoint.example.test", 443, threshold_days=14, scan_interval_hours=48,
-        tags="team-a", owner_name="Operations", owner_email="ops@example.test",
-        renewal_method="acme", runbook_url="https://wiki.example.test/renew",
-        notes="Keep these notes", expected_issuers="Legacy CA",
+        "endpoint.example.test",
+        443,
+        threshold_days=14,
+        scan_interval_hours=48,
+        tags="team-a",
+        owner_name="Operations",
+        owner_email="ops@example.test",
+        renewal_method="acme",
+        runbook_url="https://wiki.example.test/renew",
+        notes="Keep these notes",
+        expected_issuers="Legacy CA",
     )
     return db, repo, host_id
 
 
 def _form(**changes):
-    return {"scan_interval_hours": "6", "threshold_days": "21",
-            "renewal_status": "in_progress", **changes}
+    return {
+        "scan_interval_hours": "6",
+        "threshold_days": "21",
+        "renewal_status": "in_progress",
+        **changes,
+    }
 
 
 def _audit(db):
     with _connect(db) as conn:
-        return [dict(row) for row in conn.execute(
-            "SELECT action, target_id, detail FROM audit_log WHERE action = 'host.update_settings'"
-        )]
+        return [
+            dict(row)
+            for row in conn.execute(
+                "SELECT action, target_id, detail FROM audit_log "
+                "WHERE action = 'host.update_settings'"
+            )
+        ]
 
 
 def test_save_endpoint_settings_preserves_other_fields_and_wakes_scheduler(
-    reload_app, endpoint, monkeypatch,
+    reload_app,
+    endpoint,
+    monkeypatch,
 ):
     db, repo, host_id = endpoint
     before = repo.get(host_id)
@@ -62,9 +79,13 @@ def test_save_endpoint_settings_preserves_other_fields_and_wakes_scheduler(
         response = client.post(f"/hosts/{host_id}/settings", data=_form(), follow_redirects=False)
         assert response.status_code == 303
         assert urlsplit(response.headers["location"]).path == f"/certificates/{host_id}"
+        assert urlsplit(response.headers["location"]).fragment == "edit-host"
         page = client.get(response.headers["location"])
     assert repo.get(host_id) == replace(
-        before, scan_interval_hours=6, threshold_days=21, renewal_status="in_progress",
+        before,
+        scan_interval_hours=6,
+        threshold_days=21,
+        renewal_status="in_progress",
     )
     assert wakeups == [True]
     assert 'data-testid="endpoint-settings-saved"' in page.text
@@ -75,9 +96,15 @@ def test_save_endpoint_settings_preserves_other_fields_and_wakes_scheduler(
 def test_blank_numeric_fields_restore_daily_and_automatic_thresholds(reload_app, endpoint):
     _db, repo, host_id = endpoint
     with TestClient(reload_app().app) as client:
-        response = client.post(f"/hosts/{host_id}/settings", data=_form(
-            scan_interval_hours="", threshold_days="", renewal_status="pending",
-        ), follow_redirects=False)
+        response = client.post(
+            f"/hosts/{host_id}/settings",
+            data=_form(
+                scan_interval_hours="",
+                threshold_days="",
+                renewal_status="pending",
+            ),
+            follow_redirects=False,
+        )
     assert response.status_code == 303
     host = repo.get(host_id)
     assert host.scan_interval_hours is None
@@ -92,7 +119,9 @@ def test_settings_writes_succeed_when_scheduler_state_is_absent(reload_app, endp
         scheduler = app.state.scheduler
         del app.state.scheduler
         html = client.post(
-            f"/hosts/{host_id}/settings", data=_form(), follow_redirects=False,
+            f"/hosts/{host_id}/settings",
+            data=_form(),
+            follow_redirects=False,
         )
         api = client.patch(
             f"/api/hosts/{host_id}/settings",
@@ -109,23 +138,34 @@ def test_settings_writes_succeed_when_scheduler_state_is_absent(reload_app, endp
     assert repo.get(host_id).scan_interval_hours == 12
 
 
-@pytest.mark.parametrize("changes", [
-    {"scan_interval_hours": "0"}, {"scan_interval_hours": "-1"},
-    {"scan_interval_hours": "8761"}, {"scan_interval_hours": "1.5"},
-    {"scan_interval_hours": "many"}, {"scan_interval_hours": "9" * 30},
-    {"threshold_days": "0"}, {"threshold_days": "-1"},
-    {"threshold_days": "1.5"}, {"threshold_days": "9223372036854775808"},
-    {"renewal_status": "verified"},
-])
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"scan_interval_hours": "0"},
+        {"scan_interval_hours": "-1"},
+        {"scan_interval_hours": "8761"},
+        {"scan_interval_hours": "1.5"},
+        {"scan_interval_hours": "many"},
+        {"scan_interval_hours": "9" * 30},
+        {"threshold_days": "0"},
+        {"threshold_days": "-1"},
+        {"threshold_days": "1.5"},
+        {"threshold_days": "9223372036854775808"},
+        {"renewal_status": "verified"},
+    ],
+)
 def test_invalid_settings_do_not_partially_save(reload_app, endpoint, changes):
     db, repo, host_id = endpoint
     before = repo.get(host_id)
     with TestClient(reload_app().app) as client:
         response = client.post(
-            f"/hosts/{host_id}/settings", data=_form(**changes), follow_redirects=False,
+            f"/hosts/{host_id}/settings",
+            data=_form(**changes),
+            follow_redirects=False,
         )
         assert response.status_code == 303
         assert "endpoint_error" in parse_qs(urlsplit(response.headers["location"]).query)
+        assert urlsplit(response.headers["location"]).fragment == "edit-host"
         page = client.get(response.headers["location"])
     assert 'data-testid="endpoint-settings-error"' in page.text
     assert repo.get(host_id) == before
@@ -175,9 +215,13 @@ def test_legacy_scan_interval_survives_unchanged_edit(reload_app, endpoint, lega
     with TestClient(reload_app().app) as client:
         page = client.get(f"/certificates/{host_id}")
         assert "Legacy cadence" in page.text
-        response = client.post(f"/hosts/{host_id}/settings", data=_form(
-            scan_interval_hours=str(legacy),
-        ), follow_redirects=False)
+        response = client.post(
+            f"/hosts/{host_id}/settings",
+            data=_form(
+                scan_interval_hours=str(legacy),
+            ),
+            follow_redirects=False,
+        )
     assert response.status_code == 303
     assert "endpoint_saved" in response.headers["location"]
     assert repo.get(host_id).scan_interval_hours == legacy
@@ -186,17 +230,27 @@ def test_legacy_scan_interval_survives_unchanged_edit(reload_app, endpoint, lega
 
 @pytest.mark.parametrize("with_certificate", [False, True])
 def test_endpoint_editor_shows_state_without_claiming_verified_renewal(
-    reload_app, endpoint, with_certificate,
+    reload_app,
+    endpoint,
+    with_certificate,
 ):
     db, _repo, host_id = endpoint
     detail_id = host_id
     if with_certificate:
         now = datetime.now(UTC)
-        detail_id = seed_scanned(db, "endpoint.example.test", 443, Certificate(
-            subject="CN=endpoint.example.test", issuer="CN=Test CA", is_leaf=True,
-            not_before=now - timedelta(days=90), not_after=now + timedelta(days=20),
-            fingerprint_sha256="a" * 64,
-        ))
+        detail_id = seed_scanned(
+            db,
+            "endpoint.example.test",
+            443,
+            Certificate(
+                subject="CN=endpoint.example.test",
+                issuer="CN=Test CA",
+                is_leaf=True,
+                not_before=now - timedelta(days=90),
+                not_after=now + timedelta(days=20),
+                fingerprint_sha256="a" * 64,
+            ),
+        )
     with TestClient(reload_app().app) as client:
         page = client.get(f"/certificates/{detail_id}")
         assert page.status_code == 200
@@ -234,10 +288,14 @@ def _role_client(db, tier, *, scope=""):
     return client
 
 
-@pytest.mark.parametrize("tier,scope,allowed", [
-    ("viewer", "", False), ("operator", "team-b", False),
-    ("operator", "team-a", True),
-])
+@pytest.mark.parametrize(
+    "tier,scope,allowed",
+    [
+        ("viewer", "", False),
+        ("operator", "team-b", False),
+        ("operator", "team-a", True),
+    ],
+)
 def test_endpoint_settings_honor_write_tier_and_host_scope(endpoint, tier, scope, allowed):
     db, repo, host_id = endpoint
     before = repo.get(host_id)
@@ -271,7 +329,8 @@ def test_missing_endpoint_is_not_created(reload_app, endpoint):
     with TestClient(reload_app().app) as client:
         response = client.post(
             "/hosts/00000000-0000-0000-0000-000000000000/settings",
-            data=_form(), follow_redirects=False,
+            data=_form(),
+            follow_redirects=False,
         )
     assert response.status_code == 303
     assert "not" in response.headers["location"]

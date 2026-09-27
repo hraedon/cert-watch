@@ -1,6 +1,13 @@
 /* Certificate detail — on-demand OCSP/CRL endpoint reachability. */
 (function () {
   'use strict';
+  function openFragmentDisclosure() {
+    if (!window.location.hash) return;
+    var target = document.getElementById(window.location.hash.slice(1));
+    if (target && target.tagName === 'DETAILS') target.open = true;
+  }
+  openFragmentDisclosure();
+  window.addEventListener('hashchange', openFragmentDisclosure);
   var btn = document.getElementById('check-revocation');
   if (!btn) return;
   btn.addEventListener('click', function () {

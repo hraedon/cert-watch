@@ -170,6 +170,7 @@ class DetailActionView:
     title: str
     detail: str
     command: str = ""
+    raw_error: str = ""
 
 
 @dataclass(frozen=True)
@@ -561,6 +562,7 @@ def _detail_axes(
     host: Any,
     evidence: ScanEvidence | None,
     days: int,
+    now: datetime,
 ) -> tuple[DetailAxisView, ...]:
     status = model or {}
     condition = str((status.get("condition") or {}).get("state") or "") or None
@@ -572,19 +574,25 @@ def _detail_axes(
 
     if cert is None:
         certificate_axis = DetailAxisView(
-            "Certificate", "No certificate observed",
+            "Certificate",
+            "No certificate observed",
             "A successful scan has not stored certificate evidence yet.",
         )
     else:
         words = _condition_words(days, condition)
         tone = {
-            "expired": "t-expired", "le7": "t-crit", "8to30": "t-warn", "ok": "t-ok",
+            "expired": "t-expired",
+            "le7": "t-crit",
+            "8to30": "t-warn",
+            "ok": "t-ok",
         }.get(condition or "", "t-muted")
-        detail = (
-            f"Issued {cert.not_before:%Y-%m-%d} · expires {cert.not_after:%Y-%m-%d}."
-        )
+        detail = f"Issued {cert.not_before:%Y-%m-%d} · expires {cert.not_after:%Y-%m-%d}."
         if monitoring not in {"current", "not_monitored"}:
-            words = f"Last seen {words.lower()}"
+            words = (
+                f"Last seen OK · expires in {days} day{'s' if days != 1 else ''}"
+                if condition == "ok"
+                else f"Last seen {words.lower()}"
+            )
             tone = "t-muted"
             last_seen = evidence.last_success if evidence else None
             detail = (
@@ -596,7 +604,8 @@ def _detail_axes(
 
     if monitoring == "not_monitored":
         monitoring_axis = DetailAxisView(
-            "Monitoring", "Not monitored",
+            "Monitoring",
+            "Not monitored",
             "Uploaded certificate evidence does not have an endpoint or scan cadence.",
         )
     elif monitoring == "current":
@@ -608,20 +617,22 @@ def _detail_axes(
         since = monitoring_data.get("since")
         cause = str(monitoring_data.get("cause") or "No current successful observation.")
         if evidence and evidence.next_attempt_at:
-            cause += f" Automatic retry eligible {_when(evidence.next_attempt_at)}."
+            retry = evidence.next_attempt_at
+            if retry.tzinfo is None:
+                retry = retry.replace(tzinfo=UTC)
+            cause += (
+                f" Automatic retry eligible {_when(retry)}."
+                if retry > now
+                else " Automatic retry is due now."
+            )
         value = f"Failing since {_when(since)}"
-        if (
-            evidence
-            and evidence.state == "overdue"
-            and evidence.attempt_status != "failure"
-        ):
+        if evidence and evidence.state == "overdue" and evidence.attempt_status != "failure":
             value = f"Scan overdue since {_when(evidence.due_at)}"
-        monitoring_axis = DetailAxisView(
-            "Monitoring", value, cause, "t-warn"
-        )
+        monitoring_axis = DetailAxisView("Monitoring", value, cause, "t-warn")
     else:
         monitoring_axis = DetailAxisView(
-            "Monitoring", "Never scanned",
+            "Monitoring",
+            "Never scanned",
             "No successful certificate observation is recorded.",
         )
 
@@ -643,9 +654,13 @@ def _detail_axes(
     }.get(renewal, "No renewal method or reliable renewal pattern is recorded.")
     renewal_axis = DetailAxisView("Renewal", renewal_value, renewal_detail, renewal_tone)
 
+    failed_delivery = any(
+        isinstance(channel, dict) and channel.get("last_outcome") == "failed"
+        for channel in delivery_data.get("channels") or []
+    )
     delivery_value, delivery_tone = {
         "ok": ("Delivery ready", "t-ok"),
-        "failing": ("Delivery failing", "t-crit"),
+        "failing": ("Delivery failing", "t-crit" if failed_delivery else "t-warn"),
         "unrouted": ("No specific route", "t-warn"),
     }.get(delivery, (delivery.replace("_", " ").title(), "t-muted"))
     channels = delivery_data.get("channels") or []
@@ -668,48 +683,151 @@ def _detail_axes(
 
 
 def _detail_actions(
-    *, view_status: dict[str, Any] | None, hostname: str, port: int,
-    days: int, runbook_url: str, chain_guidance: ChainGuidance | None,
+    *,
+    view_status: dict[str, Any] | None,
+    hostname: str,
+    port: int,
+    days: int,
+    runbook_url: str,
+    chain_guidance: ChainGuidance | None,
+    may_write: bool,
+    has_host: bool,
+    uploaded: bool,
 ) -> tuple[DetailActionView, ...]:
     status = view_status or {}
     monitoring = status.get("monitoring") or {}
     condition = (status.get("condition") or {}).get("state")
     delivery = status.get("delivery") or {}
     actions: list[DetailActionView] = []
-    if monitoring.get("state") == "failing":
+    if monitoring.get("state") == "failing" and monitoring.get("raw_error"):
         cause = str(monitoring.get("cause") or "The endpoint has no current observation.")
-        actions.append(DetailActionView(
-            f"Check the service on {hostname}:{port}.",
-            cause,
-            f"openssl s_client -connect {hostname}:{port} -servername {hostname}",
-        ))
+        actions.append(
+            DetailActionView(
+                (
+                    f"Check the service on {hostname}:{port}."
+                    if may_write
+                    else (
+                        "Ask an administrator or the certificate's owner to check "
+                        f"{hostname}:{port}."
+                    )
+                ),
+                cause,
+                (
+                    f"openssl s_client -connect {hostname}:{port} -servername {hostname}"
+                    if may_write
+                    else ""
+                ),
+                str(monitoring.get("raw_error") or ""),
+            )
+        )
+        if may_write:
+            actions.append(
+                DetailActionView(
+                    "Press Scan now once it is fixed.",
+                    "A successful scan will replace the stale certificate evidence.",
+                )
+            )
+    elif monitoring.get("state") == "failing":
+        actions.append(
+            DetailActionView(
+                (
+                    "Run the overdue scan and check the scheduler."
+                    if may_write
+                    else (
+                        "Ask an administrator or the certificate's owner to check "
+                        "the overdue scan."
+                    )
+                ),
+                "The scheduled scan is overdue; no failed connection attempt is recorded.",
+            )
+        )
     if condition in {"expired", "le7", "8to30"}:
         timing = "now" if condition == "expired" else ("today" if condition == "le7" else "soon")
         detail = _condition_words(days, str(condition)) + "."
         if runbook_url:
             detail += f" Follow the runbook: {runbook_url}"
-        actions.append(DetailActionView(f"Renew the certificate {timing}.", detail))
+        actions.append(
+            DetailActionView(
+                (
+                    f"Renew the certificate {timing}."
+                    if may_write
+                    else f"Ask the certificate's owner to renew it {timing}."
+                ),
+                detail,
+            )
+        )
     if bool(status.get("chain_trust_problem")) and chain_guidance:
-        actions.append(DetailActionView(chain_guidance.title + ".", chain_guidance.remediation))
-    if not delivery.get("recipients") and not delivery.get("matching_groups"):
-        actions.append(DetailActionView(
-            "Assign an owner or alert group.",
-            "No certificate-specific recipient route matches this certificate.",
-        ))
+        actions.append(
+            DetailActionView(
+                (
+                    chain_guidance.title + "."
+                    if may_write
+                    else "Ask an administrator to review the certificate chain."
+                ),
+                chain_guidance.remediation,
+            )
+        )
+    if delivery.get("state") == "unrouted":
+        actions.append(
+            DetailActionView(
+                (
+                    "Assign an owner or alert group."
+                    if has_host and may_write
+                    else (
+                        "Ask an administrator or the certificate's owner to add an alert route."
+                        if has_host
+                        else (
+                            "Add an alert group for this uploaded certificate."
+                            if may_write and uploaded
+                            else (
+                                "Ask an administrator to add an alert group for this "
+                                "uploaded certificate."
+                            )
+                        )
+                    )
+                ),
+                "No owner, matching alert group, global email recipient, or global "
+                "webhook routes alerts.",
+            )
+        )
     for channel in delivery.get("channels") or []:
         if not isinstance(channel, dict):
             continue
         name = str(channel.get("channel") or "delivery channel")
         if channel.get("recipients") and not channel.get("configured") and name == "smtp":
-            actions.append(DetailActionView(
-                "Configure email delivery.",
-                "Recipients are resolved, but SMTP and the From address are not configured.",
-            ))
-        if channel.get("last_outcome") in {"failed", "partial", "unknown"}:
-            actions.append(DetailActionView(
-                f"Check {name.replace(':', ' ')} delivery.",
-                f"The latest attempt failed at {_when(channel.get('last_attempt_at'))}.",
-            ))
+            actions.append(
+                DetailActionView(
+                    (
+                        "Configure email delivery."
+                        if may_write
+                        else "Ask an administrator to configure email delivery."
+                    ),
+                    "Recipients are resolved, but SMTP and the From address are not configured.",
+                )
+            )
+        outcome = channel.get("last_outcome")
+        if outcome in {"failed", "partial", "unknown"}:
+            display = (
+                "Email"
+                if name == "smtp"
+                else ("Slack webhook" if name == "webhook:slack" else "Webhook")
+            )
+            outcome_words = {
+                "failed": "failed",
+                "partial": "was only partially delivered",
+                "unknown": "has an unknown outcome",
+            }[str(outcome)]
+            actions.append(
+                DetailActionView(
+                    (
+                        f"Check {display} delivery."
+                        if may_write
+                        else f"Ask an administrator to check {display} delivery."
+                    ),
+                    f"The latest attempt {outcome_words} at "
+                    f"{_when(channel.get('last_attempt_at'))}.",
+                )
+            )
     return tuple(actions)
 
 
@@ -724,30 +842,32 @@ def _delivery_routes(
         raw_channel = str(channel.get("channel") or "")
         via = "Email" if raw_channel == "smtp" else "Webhook"
         recipients = [str(value) for value in channel.get("recipients") or []]
-        if reveal and recipients:
+        if reveal and recipients and not raw_channel.startswith("webhook:"):
             labels = recipients
         elif raw_channel == "smtp":
-            labels = [
-                f"{len(recipients)} recipient{'s' if len(recipients) != 1 else ''}"
-            ]
+            labels = [f"{len(recipients)} recipient{'s' if len(recipients) != 1 else ''}"]
         elif recipients:
-            labels = [
-                f"{len(recipients)} routed group{'s' if len(recipients) != 1 else ''}"
-            ]
+            labels = [f"{len(recipients)} matched alert group{'s' if len(recipients) != 1 else ''}"]
         else:
             labels = ["Global webhook"]
         configured = bool(channel.get("configured"))
         outcome = channel.get("last_outcome")
         if not configured:
             state, tone, detail = "Not configured", "t-warn", f"{via} is not configured."
-        elif outcome in {"failed", "partial", "unknown"}:
-            state, tone = "Failing", "t-crit"
+        elif outcome == "failed":
+            state, tone = "Failed", "t-crit"
             detail = f"Latest delivery failed at {_when(channel.get('last_attempt_at'))}."
+        elif outcome == "partial":
+            state, tone = "Partially delivered", "t-warn"
+            detail = f"Latest delivery was partial at {_when(channel.get('last_attempt_at'))}."
+        elif outcome == "unknown":
+            state, tone = "Outcome unknown", "t-warn"
+            detail = (
+                f"Latest delivery outcome is unknown at {_when(channel.get('last_attempt_at'))}."
+            )
         elif channel.get("can_deliver"):
             state, tone = (
-                ("Last delivery worked", "t-ok")
-                if outcome == "accepted"
-                else ("Ready", "t-ok")
+                ("Last delivery worked", "t-ok") if outcome == "accepted" else ("Ready", "t-ok")
             )
             detail = "The channel is configured and has a route."
         else:
@@ -760,15 +880,33 @@ def _delivery_routes(
             for group in groups
         )
     elif groups:
-        rows.append(DeliveryRouteView(
-            f"{len(groups)} matching group{'s' if len(groups) != 1 else ''}",
-            "Alert group", "Matched", "Group identities are hidden for read-only access.",
-        ))
+        rows.append(
+            DeliveryRouteView(
+                f"{len(groups)} matching group{'s' if len(groups) != 1 else ''}",
+                "Alert group",
+                "Matched",
+                "Group identities are hidden for read-only access.",
+            )
+        )
     if not groups:
-        rows.append(DeliveryRouteView(
-            "No matching alert group", "Alert group", "Routing gap",
-            "Assign an owner or add a group whose tags match.", "t-warn",
-        ))
+        rows.append(
+            DeliveryRouteView(
+                "Alert groups matched by tag: none",
+                "Alert groups",
+                "None",
+                "No alert group matches the effective tags.",
+            )
+        )
+    if delivery.get("state") == "unrouted":
+        rows.append(
+            DeliveryRouteView(
+                "No owner, alert group, or global route",
+                "Routing",
+                "Routing gap",
+                "Assign an owner or add a matching or global alert route.",
+                "t-warn",
+            )
+        )
     return tuple(rows)
 
 
@@ -802,6 +940,7 @@ def present_certificate_detail(
             host=host,
             evidence=data.scan_evidence,
             days=0,
+            now=current,
         )
         return CertificateDetailView(
             cert=None,
@@ -873,10 +1012,11 @@ def present_certificate_detail(
                 days=0,
                 runbook_url=host.runbook_url or "",
                 chain_guidance=None,
+                may_write=settings_writable,
+                has_host=True,
+                uploaded=False,
             ),
-            delivery_routes=_delivery_routes(
-                data.status, reveal=reveal_delivery_identities
-            ),
+            delivery_routes=_delivery_routes(data.status, reveal=reveal_delivery_identities),
             reveal_delivery_identities=reveal_delivery_identities,
         )
 
@@ -911,6 +1051,7 @@ def present_certificate_detail(
         host=data.host,
         evidence=data.scan_evidence,
         days=technical.days_remaining,
+        now=current,
     )
     return CertificateDetailView(
         cert=CertificateView(
@@ -1009,9 +1150,10 @@ def present_certificate_detail(
             days=technical.days_remaining,
             runbook_url=data.host.runbook_url if data.host else "",
             chain_guidance=guidance,
+            may_write=settings_writable,
+            has_host=data.host is not None,
+            uploaded=data.cert.source == "uploaded",
         ),
-        delivery_routes=_delivery_routes(
-            data.status, reveal=reveal_delivery_identities
-        ),
+        delivery_routes=_delivery_routes(data.status, reveal=reveal_delivery_identities),
         reveal_delivery_identities=reveal_delivery_identities,
     )

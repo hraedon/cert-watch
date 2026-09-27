@@ -14,7 +14,7 @@ CASES = {
     "failing": ("Failing since", "Last seen", "Check the service"),
     "overdue": ("Scan overdue", "Last seen", "overdue"),
     "never": ("Never scanned", "No certificate observed", "Assign an owner"),
-    "uploaded": ("Not monitored", "Expires in", "Assign an owner"),
+    "uploaded": ("Not monitored", "Expires in", "Add an alert group"),
     "chain": ("Current", "Expires in", "chain"),
     "routing_gap": ("Current", "Expires in", "Assign an owner"),
 }
@@ -46,26 +46,27 @@ def test_detail_a_renders_each_real_state_without_mobile_overflow(
 
     if case == "failing":
         expect(page.get_by_test_id("scan-failure-panel")).to_be_visible()
-        expect(page.get_by_test_id("scan-failure-error")).to_contain_text(
-            "Connection refused"
-        )
+        expect(page.get_by_test_id("scan-failure-error")).to_contain_text("Connection refused")
         expect(axes.locator(".cw-detail-axis").first).to_have_class("cw-detail-axis")
-        assert "t-ok" not in axes.locator(".cw-detail-axis-value").first.get_attribute(
-            "class"
-        )
+        assert "t-ok" not in axes.locator(".cw-detail-axis-value").first.get_attribute("class")
     if case == "uploaded":
         expect(page.get_by_text("Uploaded", exact=True)).to_be_visible()
-        expect(page.get_by_test_id("edit-host")).to_have_count(0)
+        expect(page.get_by_test_id("edit-host")).to_be_visible()
         expect(page.get_by_test_id("cert-scan-btn")).to_have_count(0)
     if case == "routing_gap":
         expect(page.get_by_test_id("owner-routing-panel")).to_contain_text(
-            "No matching alert group"
+            "Alert groups matched by tag: none"
         )
+        expect(page.get_by_test_id("owner-routing-panel")).to_contain_text("Routing gap")
 
     if case not in {"never"}:
         facts = page.get_by_test_id("certificate-facts")
         expect(facts).to_be_visible()
+        expect(facts.locator("summary")).to_contain_text("Key:")
+        expect(facts.locator("summary")).to_contain_text("name")
         assert facts.evaluate("el => !el.open")
+    if case in {"failing", "overdue"}:
+        expect(axes).to_contain_text("Last seen OK · expires in")
     history = page.get_by_test_id("history-disclosure")
     expect(history).to_be_visible()
     assert history.evaluate("el => !el.open")
@@ -83,14 +84,12 @@ def test_detail_a_edit_host_round_trips_every_control(
     page.get_by_label("Owner email", exact=True).fill("edge@example.test")
     page.get_by_label("Slack channel", exact=True).fill("#edge-certs")
     page.get_by_label("Renewal method", exact=True).select_option("cert-manager")
-    page.get_by_label("Runbook URL", exact=True).fill(
-        "https://runbooks.example.test/edge-tls"
-    )
+    page.get_by_label("Runbook URL", exact=True).fill("https://runbooks.example.test/edge-tls")
     page.get_by_label("Scan interval (hours)", exact=True).fill("12")
     page.get_by_label("Alert threshold (days)", exact=True).fill("30")
-    page.get_by_label(
-        "Renewal status reported by operator", exact=True
-    ).select_option("in_progress")
+    page.get_by_label("Renewal status reported by operator", exact=True).select_option(
+        "in_progress"
+    )
     page.get_by_label("Tags", exact=True).fill("detail-team, edge")
     page.get_by_label("Notes", exact=True).fill("Renew through the edge runbook.")
     page.get_by_test_id("save-host").click()
@@ -98,25 +97,71 @@ def test_detail_a_edit_host_round_trips_every_control(
 
     page.get_by_test_id("edit-host").click()
     expect(page.get_by_label("Owner name", exact=True)).to_have_value("Edge Operations")
-    expect(page.get_by_label("Owner email", exact=True)).to_have_value(
-        "edge@example.test"
-    )
+    expect(page.get_by_label("Owner email", exact=True)).to_have_value("edge@example.test")
     expect(page.get_by_label("Slack channel", exact=True)).to_have_value("#edge-certs")
-    expect(page.get_by_label("Renewal method", exact=True)).to_have_value(
-        "cert-manager"
-    )
+    expect(page.get_by_label("Renewal method", exact=True)).to_have_value("cert-manager")
     expect(page.get_by_label("Runbook URL", exact=True)).to_have_value(
         "https://runbooks.example.test/edge-tls"
     )
     expect(page.get_by_label("Scan interval (hours)", exact=True)).to_have_value("12")
     expect(page.get_by_label("Alert threshold (days)", exact=True)).to_have_value("30")
-    expect(
-        page.get_by_label("Renewal status reported by operator", exact=True)
-    ).to_have_value("in_progress")
-    expect(page.get_by_label("Tags", exact=True)).to_have_value("detail-team,edge")
-    expect(page.get_by_label("Notes", exact=True)).to_have_value(
-        "Renew through the edge runbook."
+    expect(page.get_by_label("Renewal status reported by operator", exact=True)).to_have_value(
+        "in_progress"
     )
+    expect(page.get_by_label("Tags", exact=True)).to_have_value("detail-team,edge")
+    expect(page.get_by_label("Notes", exact=True)).to_have_value("Renew through the edge runbook.")
+
+    # Leave the session-scoped estate unchanged for the other state cases.
+    page.get_by_label("Owner name", exact=True).fill("")
+    page.get_by_label("Owner email", exact=True).fill("")
+    page.get_by_label("Slack channel", exact=True).fill("")
+    page.get_by_label("Renewal method", exact=True).select_option("manual")
+    page.get_by_label("Runbook URL", exact=True).fill("")
+    page.get_by_label("Scan interval (hours)", exact=True).fill("")
+    page.get_by_label("Alert threshold (days)", exact=True).fill("")
+    page.get_by_label("Renewal status reported by operator", exact=True).select_option("pending")
+    page.get_by_label("Tags", exact=True).fill("detail-team")
+    page.get_by_label("Notes", exact=True).fill("")
+    page.get_by_test_id("save-host").click()
+    expect(page.get_by_test_id("endpoint-settings-saved")).to_be_visible()
+
+
+@pytest.mark.parametrize("width,height", [(1440, 900), (390, 844)])
+def test_detail_a_open_editor_uses_full_width_without_clipping(
+    page: Page,
+    detail_estate_server: tuple[str, dict[str, str]],
+    width: int,
+    height: int,
+) -> None:
+    base, ids = detail_estate_server
+    page.set_viewport_size({"width": width, "height": height})
+    page.goto(f"{base}/certificates/{ids['never']}")
+    page.get_by_test_id("edit-host").click()
+
+    heading = page.get_by_test_id("owner-routing-panel").locator("h2")
+    notes = page.get_by_test_id("notes-editor")
+    expect(heading).to_be_visible()
+    expect(notes).to_be_visible()
+    assert heading.evaluate("el => el.getBoundingClientRect().width") >= 160
+    assert notes.evaluate("el => el.scrollHeight <= el.clientHeight + 1")
+    assert notes.evaluate(
+        "el => getComputedStyle(el.closest('.cw-editor-body')).overflowY === 'visible'"
+    )
+    assert page.evaluate("document.documentElement.scrollWidth === window.innerWidth")
+
+
+@pytest.mark.parametrize("fragment", ["certificate-facts", "history", "edit-host"])
+def test_detail_a_fragment_opens_target_disclosure(
+    page: Page,
+    detail_estate_server: tuple[str, dict[str, str]],
+    fragment: str,
+) -> None:
+    base, ids = detail_estate_server
+    page.goto(f"{base}/certificates/{ids['current']}#{fragment}")
+
+    disclosure = page.locator(f"#{fragment}")
+    expect(disclosure).to_be_visible()
+    assert disclosure.evaluate("el => el.open")
 
 
 def test_detail_a_uses_only_the_five_type_scale_sizes(

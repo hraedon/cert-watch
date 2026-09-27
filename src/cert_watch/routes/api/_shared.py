@@ -81,14 +81,14 @@ def status_for_api(model: dict[str, Any], *, reveal_delivery_details: bool) -> d
     raw = model.get("delivery")
     if not isinstance(raw, dict):
         return result
-    result["delivery"] = delivery_for_api(
-        raw, reveal_details=reveal_delivery_details
-    )
+    result["delivery"] = delivery_for_api(raw, reveal_details=reveal_delivery_details)
     return result
 
 
 def status_api_row(
-    row: dict[str, Any], *, reveal_delivery_details: bool = False,
+    row: dict[str, Any],
+    *,
+    reveal_delivery_details: bool = False,
     request: Request | None = None,
 ) -> dict[str, Any]:
     """Copy a dashboard row with an honest compatibility status token."""
@@ -101,9 +101,15 @@ def status_api_row(
         else reveal_delivery_details
     )
     if isinstance(row.get("status"), dict):
-        result["status"] = status_for_api(
-            row["status"], reveal_delivery_details=reveal
-        )
+        result["status"] = status_for_api(row["status"], reveal_delivery_details=reveal)
+    if not reveal:
+        # Contact addresses and channel handles identify alert recipients just
+        # as directly as the expanded routing model does. Preserve the
+        # response shape while withholding those values from read-only users.
+        if "owner_email" in result:
+            result["owner_email"] = ""
+        if "owner_slack" in result:
+            result["owner_slack"] = ""
     if row.get("hosts"):
         result["hosts"] = [
             status_api_row(
@@ -242,7 +248,11 @@ def tags_from_json_body(raw: bytes) -> str:
 
 
 def _pagination_links(
-    request: Request, path: str, page: int, limit: int, total: int,
+    request: Request,
+    path: str,
+    page: int,
+    limit: int,
+    total: int,
 ) -> dict[str, str | None]:
     """Build HATEOAS pagination links for a JSON API response."""
     pages = (total + limit - 1) // limit if limit else 0

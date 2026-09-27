@@ -34,6 +34,12 @@ SCOPED_OPERATOR = AuthContext.from_tier(
     "otto", tier="viewer", scope_tag="A", tag_tiers={"A": "operator"}
 )
 SCOPED_VIEWER = AuthContext.from_tier("vera", tier="viewer", scope_tag="A")
+MIXED_TIER = AuthContext.from_tier(
+    "morgan",
+    tier="viewer",
+    scope_tag="A,B",
+    tag_tiers={"A": "operator", "B": "viewer"},
+)
 
 
 @pytest.fixture
@@ -48,8 +54,10 @@ def estate(tmp_path: Path) -> dict[str, object]:
         db, source="scanned", hostname="b.example.test", port=443
     ).add(
         Certificate(
-            subject="CN=b.example.test", issuer="CN=CA",
-            not_before=now - timedelta(days=1), not_after=now + timedelta(days=30),
+            subject="CN=b.example.test",
+            issuer="CN=CA",
+            not_before=now - timedelta(days=1),
+            not_after=now + timedelta(days=30),
         )
     )
     return {"db": db, "in": in_scope, "out": out_of_scope, "cert_b": cert_b}
@@ -99,18 +107,66 @@ def test_new_tags_outside_scope_are_refused(estate, kind):
         now = datetime.now(UTC)
         target = SqliteCertificateRepository(
             estate["db"], source="scanned", hostname="a.example.test", port=443
-        ).add(Certificate(
-            subject="CN=a", issuer="CN=CA",
-            not_before=now - timedelta(days=1), not_after=now + timedelta(days=30),
-        ))
+        ).add(
+            Certificate(
+                subject="CN=a",
+                issuer="CN=CA",
+                not_before=now - timedelta(days=1),
+                not_after=now + timedelta(days=30),
+            )
+        )
     with pytest.raises(ScopeDeniedError, match="tag 'B' is outside your team scope"):
         _call(kind, estate["db"], target, SCOPED_OPERATOR, value="A,B")
+
+
+@pytest.mark.parametrize("new_tags", ["A,B", "B"])
+def test_legacy_host_tag_write_refuses_read_only_tier_tags(estate, new_tags):
+    with pytest.raises(ScopeDeniedError, match=r"tag 'B'.*read-only"):
+        update_host_tags(
+            estate["db"],
+            estate["in"],
+            new_tags,
+            auth=MIXED_TIER,
+            actor="morgan",
+            source_ip=None,
+        )
+    assert SqliteHostRepository(estate["db"]).get(estate["in"]).tags == "A"
+
+
+def test_legacy_host_tag_write_cannot_remove_last_writable_scope_tag(estate):
+    with pytest.raises(ScopeDeniedError, match="must remain"):
+        update_host_tags(
+            estate["db"],
+            estate["in"],
+            "",
+            auth=MIXED_TIER,
+            actor="morgan",
+            source_ip=None,
+        )
+    assert SqliteHostRepository(estate["db"]).get(estate["in"]).tags == "A"
+
+
+def test_legacy_certificate_tag_write_cannot_leave_only_inherited_read_scope(estate):
+    db = estate["db"]
+    cert_id = estate["cert_b"]
+    SqliteCertificateRepository(db).set_tags(cert_id, "A")
+    with pytest.raises(ScopeDeniedError, match="must remain"):
+        update_certificate_tags(
+            db,
+            cert_id,
+            "",
+            auth=MIXED_TIER,
+            actor="morgan",
+            source_ip=None,
+        )
+    assert SqliteCertificateRepository(db).get_tags(cert_id) == "A"
 
 
 @pytest.mark.parametrize("kind", ["notes", "host_tags", "ownership"])
 def test_deferred_input_is_not_evaluated_for_a_refused_caller(estate, kind):
     """A JSON adapter hands its body parser over; an out-of-scope caller is
     refused before the body is judged (the old route order: 403 before 400)."""
+
     def parser():
         raise AssertionError("parsed input from a caller outside the target's scope")
 
@@ -139,14 +195,22 @@ def test_ownership_through_a_certificate_is_scoped_by_its_effective_tags(estate)
     SqliteCertificateRepository(db).set_tags(estate["cert_b"], "A")
     target = resolve_host_ownership_target(db, estate["cert_b"], auth=SCOPED_OPERATOR)
     update_host_ownership(
-        db, target, HostOwnershipUpdate(owner_name="Ops"),
-        auth=SCOPED_OPERATOR, actor="t", source_ip=None,
+        db,
+        target,
+        HostOwnershipUpdate(owner_name="Ops"),
+        auth=SCOPED_OPERATOR,
+        actor="t",
+        source_ip=None,
     )
     # ...but the same host by its own id is not.
     with pytest.raises(ScopeDeniedError):
         update_host_ownership(
-            db, estate["out"], HostOwnershipUpdate(owner_name="Ops"),
-            auth=SCOPED_OPERATOR, actor="t", source_ip=None,
+            db,
+            estate["out"],
+            HostOwnershipUpdate(owner_name="Ops"),
+            auth=SCOPED_OPERATOR,
+            actor="t",
+            source_ip=None,
         )
 
 
@@ -208,8 +272,10 @@ def test_trust_anchor_services_refuse_non_admin(estate, kind: str) -> None:
     now = datetime.now(UTC)
     anchor_id = anchors.add(
         Certificate(
-            subject="CN=Existing Root", issuer="CN=Existing Root",
-            not_before=now - timedelta(days=1), not_after=now + timedelta(days=365),
+            subject="CN=Existing Root",
+            issuer="CN=Existing Root",
+            not_before=now - timedelta(days=1),
+            not_after=now + timedelta(days=365),
         )
     )
     kw = {"auth": SCOPED_OPERATOR, "actor": "otto", "source_ip": None}

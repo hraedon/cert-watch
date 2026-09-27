@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import JSONResponse
@@ -18,7 +18,7 @@ from cert_watch.auth.guards import (
     write_guard,
 )
 from cert_watch.auth.scope import ScopeDeniedError
-from cert_watch.database import SqliteHostRepository, list_dashboard_page
+from cert_watch.database import HostEntry, SqliteHostRepository, list_dashboard_page
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth
 from cert_watch.routes._scoped import (
     scope_read_denied,
@@ -104,8 +104,16 @@ class HostSettingsBody(BaseModel):
 
 
 _HOST_EDIT_FIELDS = {
-    "owner_name", "owner_email", "owner_slack", "renewal_method", "runbook_url",
-    "scan_interval_hours", "threshold_days", "renewal_status", "notes", "tags",
+    "owner_name",
+    "owner_email",
+    "owner_slack",
+    "renewal_method",
+    "runbook_url",
+    "scan_interval_hours",
+    "threshold_days",
+    "renewal_status",
+    "notes",
+    "tags",
 }
 
 
@@ -134,9 +142,7 @@ def _service_error(exc: Exception, *, not_found: bool = False) -> JSONResponse:
 
 
 @router.post("/api/hosts")
-async def api_create_host(
-    request: Request, _auth: str = Depends(json_write_guard)
-) -> JSONResponse:
+async def api_create_host(request: Request, _auth: str = Depends(json_write_guard)) -> JSONResponse:
     # Once framework parsing and guards complete, both adapters charge the
     # shared budget before application validation, so malformed attempts count.
     if _action_rate_limited(request, "add_host", 20, 60):
@@ -223,9 +229,7 @@ async def api_scan_all_hosts(
         )
     except ScopeDeniedError as exc:
         return _service_error(exc)
-    return JSONResponse(
-        content={"scanned": scanned, "failures": failures, "refused": refused}
-    )
+    return JSONResponse(content={"scanned": scanned, "failures": failures, "refused": refused})
 
 
 @router.get("/api/hosts")
@@ -267,32 +271,27 @@ def api_list_hosts(
     repo = SqliteHostRepository(db)
     page_hosts = [(repo.get(str(row["host_id"])), row) for row in rows]
 
+    def host_json(h: HostEntry, row: dict[str, Any]) -> dict[str, Any]:
+        reveal = delivery_details_allowed(request, effective_tags=parse_tags(row.get("tags", "")))
+        return {
+            "id": h.id,
+            "hostname": h.hostname,
+            "port": h.port,
+            "tags": h.tags,
+            "scan_interval_hours": h.scan_interval_hours,
+            "owner_name": h.owner_name,
+            "owner_email": h.owner_email if reveal else "",
+            "owner_slack": h.owner_slack if reveal else "",
+            "renewal_status": h.renewal_status,
+            "notes": h.notes,
+            "expected_issuers": h.expected_issuers,
+            "added_at": h.added_at.isoformat(),
+            "status": status_for_api(row["status"], reveal_delivery_details=reveal),
+        }
+
     return JSONResponse(
         content={
-            "hosts": [
-                {
-                    "id": h.id,
-                    "hostname": h.hostname,
-                    "port": h.port,
-                    "tags": h.tags,
-                    "scan_interval_hours": h.scan_interval_hours,
-                    "owner_name": h.owner_name,
-                    "owner_email": h.owner_email,
-                    "owner_slack": h.owner_slack,
-                    "renewal_status": h.renewal_status,
-                    "notes": h.notes,
-                    "expected_issuers": h.expected_issuers,
-                    "added_at": h.added_at.isoformat(),
-                    "status": status_for_api(
-                        row["status"],
-                        reveal_delivery_details=delivery_details_allowed(
-                            request, effective_tags=parse_tags(row.get("tags", ""))
-                        ),
-                    ),
-                }
-                for h, row in page_hosts
-                if h is not None
-            ],
+            "hosts": [host_json(h, row) for h, row in page_hosts if h is not None],
             "pagination": {
                 "page": page,
                 "limit": limit,
@@ -430,9 +429,7 @@ async def api_update_host_settings(
         updated = update_host_settings(
             _db_path(request),
             host_id,
-            HostSettingsUpdate(
-                body.scan_interval_hours, body.threshold_days, body.renewal_status
-            ),
+            HostSettingsUpdate(body.scan_interval_hours, body.threshold_days, body.renewal_status),
             auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),

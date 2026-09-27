@@ -9,7 +9,7 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch.alerting import WebhookConfig
 from cert_watch.audit import resolve_actor, resolve_source_ip
@@ -210,7 +210,7 @@ def endpoint_settings_writable(request: Request, db: str | Path, host_id: str) -
     )
 
 
-@router.post("/hosts/{resource_id}/edit")
+@router.post("/hosts/{resource_id}/edit", response_model=None)
 async def edit_host_detail(
     request: Request,
     resource_id: IdParam,
@@ -225,13 +225,25 @@ async def edit_host_detail(
     notes: str = Form(""),
     tags: str = Form(""),
     _auth: str = Depends(write_form_guard),
-) -> RedirectResponse:
+) -> HTMLResponse | RedirectResponse:
     """Save the detail page's one Edit host form in one transaction."""
     if not check_rate_limit(f"host_edit:{_extract_client_ip(request)}", 30, 60):
         return RedirectResponse(
             url=f"/certificates/{resource_id}?error={quote('rate limited: too many requests')}",
             status_code=303,
         )
+    submitted = {
+        "owner_name": owner_name,
+        "owner_email": owner_email,
+        "owner_slack": owner_slack,
+        "renewal_method": renewal_method,
+        "runbook_url": runbook_url,
+        "scan_interval_hours": scan_interval_hours,
+        "threshold_days": threshold_days,
+        "renewal_status": renewal_status,
+        "notes": notes,
+        "tags": tags,
+    }
     try:
         edit_host(
             _db_path(request),
@@ -266,13 +278,32 @@ async def edit_host_detail(
         HostValidationError,
         ResourceMetadataValidationError,
     ) as exc:
-        return RedirectResponse(
-            url=f"/certificates/{resource_id}?error={quote(str(exc))}&edit=1",
-            status_code=303,
+        message = str(exc)
+        if isinstance(exc, HostOwnershipValidationError):
+            field = exc.field
+        elif message.startswith("Scan interval"):
+            field = "scan_interval_hours"
+        elif message.startswith("Alert threshold"):
+            field = "threshold_days"
+        elif "renewal status" in message:
+            field = "renewal_status"
+        elif "notes" in message:
+            field = "notes"
+        elif "tag" in message:
+            field = "tags"
+        else:
+            field = "form"
+        from cert_watch.routes.certificates import _render_certificate_detail
+
+        return _render_certificate_detail(
+            request,
+            resource_id,
+            edit_values=submitted,
+            edit_errors={field: message},
+            edit_error=message,
+            status_code=400,
         )
-    return RedirectResponse(
-        url=f"/certificates/{resource_id}?host_saved=1", status_code=303
-    )
+    return RedirectResponse(url=f"/certificates/{resource_id}?host_saved=1", status_code=303)
 
 
 @router.post("/hosts/{host_id}/owner")
@@ -319,7 +350,8 @@ async def update_host_owner(
     except HostOwnershipValidationError as exc:
         message = "invalid renewal method" if exc.field == "renewal_method" else str(exc)
         return RedirectResponse(
-            url=f"/certificates/{host_id}?error={quote(message)}", status_code=303,
+            url=f"/certificates/{host_id}?error={quote(message)}",
+            status_code=303,
         )
     return RedirectResponse(url=f"/certificates/{host_id}", status_code=303)
 
@@ -358,7 +390,7 @@ async def update_host_settings(
 
     def invalid(message: str) -> RedirectResponse:
         return RedirectResponse(
-            url=f"{back}?endpoint_error={quote(message)}#endpoint-settings",
+            url=f"{back}?endpoint_error={quote(message)}#edit-host",
             status_code=303,
         )
 
@@ -393,7 +425,7 @@ async def update_host_settings(
         return invalid(str(exc))
     except ManagedHostNotFoundError:
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
-    return RedirectResponse(url=f"{back}?endpoint_saved=1#endpoint-settings", status_code=303)
+    return RedirectResponse(url=f"{back}?endpoint_saved=1#edit-host", status_code=303)
 
 
 @router.post("/hosts")
@@ -443,9 +475,7 @@ async def add_host(
         if created.refused:
             warning = "Host added; its follow-up scan was refused after access changed."
             query += f"&warning={quote(warning)}"
-        return RedirectResponse(
-            url=f"/certificates/{created.host_ids[0]}?{query}", status_code=303
-        )
+        return RedirectResponse(url=f"/certificates/{created.host_ids[0]}?{query}", status_code=303)
     notice = f"Added {len(created.host_ids)} endpoints for {hostname.strip()}"
     if created.scanned:
         notice += f"; {created.scanned} scanned successfully"
@@ -636,12 +666,8 @@ async def scan_all_hosts(
             _scan_fn=_scan_and_store,
         )
     except ScopeDeniedError as exc:
-        return RedirectResponse(
-            url=f"/scan-history?error={quote(str(exc))}", status_code=303
-        )
-    logger.info(
-        "scan_all: %d scanned, %d failures, %d refused", scanned, failures, refused
-    )
+        return RedirectResponse(url=f"/scan-history?error={quote(str(exc))}", status_code=303)
+    logger.info("scan_all: %d scanned, %d failures, %d refused", scanned, failures, refused)
     if refused == 0:
         return RedirectResponse(url="/scan-history", status_code=303)
     summary = f"Scan complete: {scanned} succeeded, {failures} failed, {refused} refused."

@@ -102,151 +102,190 @@
                                         <code class="cw-detail-command"
                                               {% if monitoring == 'failing' and loop.first %}data-testid="scan-failure-next-step"{% endif %}>{{ action.command }}</code>
                                     {% endif %}
+                                    {% if action.raw_error %}
+                                        <details class="cw-disclose" data-testid="scan-failure-panel">
+                                            <summary class="cw-note t-warn">
+                                                Raw error from the latest scan attempt
+                                                {% if scan_at_label %}· {{ scan_at_label }}{% endif %}
+                                            </summary>
+                                            <code class="cw-detail-command" data-testid="scan-failure-error">{{ action.raw_error }}</code>
+                                        </details>
+                                    {% endif %}
                                 </li>
                             {% endfor %}
                         </ol>
-                        {% if scan_failed and scan_error %}
-                            <details class="cw-disclose" data-testid="scan-failure-panel">
-                                <summary class="cw-note t-warn">
-                                    Scan failed · raw error from the latest attempt
-                                    {% if scan_at_label %}· {{ scan_at_label }}{% endif %}
-                                </summary>
-                                <code class="cw-detail-command" data-testid="scan-failure-error">{{ scan_error }}</code>
-                            </details>
-                        {% endif %}
                     </div>
                 </section>
             {% endif %}
             <section class="cw-panel" data-testid="owner-routing-panel">
                 <div class="cw-panel-head">
                     <h2>Owner &amp; who gets alerted</h2>
-                    {% if may_write and host_info %}
-                        <details class="cw-editor" {% if edit_open or endpoint_error %}open{% endif %}>
-                            <summary class="cw-btn ghost sm" data-testid="edit-host">{{ icons.svg_icon('edit', 13) }}Edit host</summary>
-                            <div class="cw-editor-body cw-detail-editor">
-                                <form method="post" action="/hosts/{{ cert_id }}/edit" class="cw-form">
-                                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                                    <div class="cw-form-grid">
-                                        <div class="cw-field">
-                                            <label class="cw-label" for="host-owner-name">Owner name</label>
-                                            <input id="host-owner-name"
-                                                   name="owner_name"
-                                                   class="cw-input"
-                                                   value="{{ host_info.owner_name or '' }}">
-                                        </div>
-                                        <div class="cw-field">
-                                            <label class="cw-label" for="host-owner-email">Owner email</label>
-                                            <input id="host-owner-email"
-                                                   name="owner_email"
-                                                   type="email"
-                                                   class="cw-input"
-                                                   value="{{ host_info.owner_email or '' }}">
-                                        </div>
-                                        <div class="cw-field">
-                                            <label class="cw-label" for="host-owner-slack">Slack channel</label>
-                                            <input id="host-owner-slack"
-                                                   name="owner_slack"
-                                                   class="cw-input"
-                                                   value="{{ host_info.owner_slack or '' }}">
-                                        </div>
-                                        <div class="cw-field">
-                                            <label class="cw-label" for="host-renewal-method">Renewal method</label>
-                                            <select id="host-renewal-method" name="renewal_method" class="cw-select">
-                                                <option value="" {% if not host_info.renewal_method %}selected{% endif %}>Unknown</option>
-                                                <option value="acme"
-                                                        {% if host_info.renewal_method == 'acme' %}selected{% endif %}>ACME</option>
-                                                <option value="cert-manager"
-                                                        {% if host_info.renewal_method == 'cert-manager' %}selected{% endif %}>cert-manager</option>
-                                                <option value="manual"
-                                                        {% if host_info.renewal_method == 'manual' %}selected{% endif %}>Manual</option>
-                                            </select>
-                                        </div>
-                                        <div class="cw-field wide">
-                                            <label class="cw-label" for="host-runbook-url">Runbook URL</label>
-                                            <input id="host-runbook-url"
-                                                   name="runbook_url"
-                                                   type="url"
-                                                   class="cw-input"
-                                                   value="{{ host_info.runbook_url or '' }}">
-                                        </div>
-                                        <div class="cw-field">
-                                            <label class="cw-label" for="endpoint-scan-interval">Scan interval (hours)</label>
-                                            <input id="endpoint-scan-interval"
-                                                   name="scan_interval_hours"
-                                                   type="number"
-                                                   step="1"
-                                                   {% if not host_info.legacy_interval %}min="1" max="8760"{% endif %}
-                                                   class="cw-input"
-                                                   value="{{ host_info.scan_interval_hours if host_info.scan_interval_hours is not none else '' }}"
-                                                   placeholder="Daily schedule">
-                                            {% if host_info.legacy_interval %}
-                                                <p class="cw-hint">Legacy cadence — keep this value unchanged or replace it with 1–8760 hours.</p>
-                                            {% endif %}
-                                        </div>
-                                        <div class="cw-field">
-                                            <label class="cw-label" for="endpoint-threshold">Alert threshold (days)</label>
-                                            <input id="endpoint-threshold"
-                                                   name="threshold_days"
-                                                   type="number"
-                                                   min="1"
-                                                   step="1"
-                                                   class="cw-input"
-                                                   value="{{ host_info.threshold_days if host_info.threshold_days is not none else '' }}"
-                                                   placeholder="Automatic">
-                                        </div>
-                                        <div class="cw-field wide">
-                                            <label class="cw-label" for="endpoint-renewal-status">Renewal status reported by operator</label>
-                                            <select id="endpoint-renewal-status" name="renewal_status" class="cw-select">
-                                                <option value="pending"
-                                                        {% if host_info.renewal_status == 'pending' %}selected{% endif %}>No completion reported</option>
-                                                <option value="in_progress"
-                                                        {% if host_info.renewal_status == 'in_progress' %}selected{% endif %}>In progress — operator reported</option>
-                                            </select>
-                                            <p class="cw-hint" id="endpoint-renewal-help">Operator-reported progress is not proof of renewal; it never suppresses expiry or expired alerts. A later scan confirms the replacement certificate.</p>
-                                        </div>
-                                        <div class="cw-field wide">
-                                            <label class="cw-label" for="host-tags">Tags</label>
-                                            <input id="host-tags"
-                                                   name="tags"
-                                                   class="cw-input"
-                                                   value="{{ cert_tags | join(", ") if cert else host_info.tags }}"
-                                                   list="cw-all-tags">
-                                            <datalist id="cw-all-tags">
-                                                {% for tag in all_tags %}<option value="{{ tag }}"></option>{% endfor %}
-                                            </datalist>
-                                            <p class="cw-hint">
-                                                {% if cert %}
-                                                    Edits this certificate’s own tags; inherited host tags remain visible.
-                                                {% else %}
-                                                    Tags apply to this endpoint.
-                                                {% endif %}
-                                                Tags control scope, routing and grouping.
-                                            </p>
-                                        </div>
-                                        <div class="cw-field wide">
-                                            <label class="cw-label" for="host-notes">Notes</label>
-                                            <textarea id="host-notes"
-                                                      name="notes"
-                                                      class="cw-textarea"
-                                                      rows="5"
-                                                      maxlength="10000"
-                                                      data-testid="notes-editor">{{ host_info.notes }}</textarea>
-                                        </div>
-                                    </div>
-                                    <div class="cw-form-foot">
-                                        <button type="submit" class="cw-btn primary sm" data-testid="save-host">Save host</button>
-                                    </div>
-                                </form>
-                            </div>
-                        </details>
-                    {% endif %}
                 </div>
+                {% if may_edit_host and host_info %}
+                    <details id="edit-host"
+                             class="cw-editor"
+                             {% if edit_open or endpoint_error %}open{% endif %}>
+                        <summary class="cw-btn ghost sm" data-testid="edit-host">{{ icons.svg_icon('edit', 13) }}Edit host</summary>
+                        <div class="cw-editor-body cw-detail-editor">
+                            {% if endpoint_error %}
+                                <p class="cw-note t-crit"
+                                   role="alert"
+                                   data-testid="endpoint-settings-error">{{ 'Could not save host. Fix the highlighted field.' if edit_errors else endpoint_error }}</p>
+                            {% endif %}
+                            <form method="post" action="/hosts/{{ cert_id }}/edit" class="cw-form">
+                                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                                <div class="cw-form-grid">
+                                    <div class="cw-field">
+                                        <label class="cw-label" for="host-owner-name">Owner name</label>
+                                        <input id="host-owner-name"
+                                               name="owner_name"
+                                               class="cw-input"
+                                               value="{{ edit_values.get('owner_name', host_info.owner_name or '') }}">
+                                    </div>
+                                    <div class="cw-field">
+                                        <label class="cw-label" for="host-owner-email">Owner email</label>
+                                        <input id="host-owner-email"
+                                               name="owner_email"
+                                               type="email"
+                                               class="cw-input"
+                                               {% if edit_errors.owner_email %}aria-invalid="true"{% endif %}
+                                               value="{{ edit_values.get('owner_email', host_info.owner_email or '') }}">
+                                        {% if edit_errors.owner_email %}<p class="cw-hint t-crit">{{ edit_errors.owner_email }}</p>{% endif %}
+                                    </div>
+                                    <div class="cw-field">
+                                        <label class="cw-label" for="host-owner-slack">Slack channel</label>
+                                        <input id="host-owner-slack"
+                                               name="owner_slack"
+                                               class="cw-input"
+                                               value="{{ edit_values.get('owner_slack', host_info.owner_slack or '') }}">
+                                    </div>
+                                    <div class="cw-field">
+                                        <label class="cw-label" for="host-renewal-method">Renewal method</label>
+                                        <select id="host-renewal-method" name="renewal_method" class="cw-select">
+                                            {% set submitted_method = edit_values.get('renewal_method', host_info.renewal_method) %}
+                                            <option value="" {% if not submitted_method %}selected{% endif %}>Unknown</option>
+                                            <option value="acme" {% if submitted_method == 'acme' %}selected{% endif %}>ACME</option>
+                                            <option value="cert-manager"
+                                                    {% if submitted_method == 'cert-manager' %}selected{% endif %}>cert-manager</option>
+                                            <option value="manual"
+                                                    {% if submitted_method == 'manual' %}selected{% endif %}>Manual</option>
+                                        </select>
+                                    </div>
+                                    <div class="cw-field wide">
+                                        <label class="cw-label" for="host-runbook-url">Runbook URL</label>
+                                        <input id="host-runbook-url"
+                                               name="runbook_url"
+                                               type="url"
+                                               class="cw-input"
+                                               {% if edit_errors.runbook_url %}aria-invalid="true"{% endif %}
+                                               value="{{ edit_values.get('runbook_url', host_info.runbook_url or '') }}">
+                                        {% if edit_errors.runbook_url %}<p class="cw-hint t-crit">{{ edit_errors.runbook_url }}</p>{% endif %}
+                                    </div>
+                                    <div class="cw-field">
+                                        <label class="cw-label" for="endpoint-scan-interval">Scan interval (hours)</label>
+                                        <input id="endpoint-scan-interval"
+                                               name="scan_interval_hours"
+                                               type="number"
+                                               step="1"
+                                               {% if not host_info.legacy_interval %}min="1" max="8760"{% endif %}
+                                               class="cw-input"
+                                               {% if edit_errors.scan_interval_hours %}aria-invalid="true"{% endif %}
+                                               value="{{ edit_values.get('scan_interval_hours', host_info.scan_interval_hours if host_info.scan_interval_hours is not none else '') }}"
+                                               placeholder="Daily schedule">
+                                        {% if edit_errors.scan_interval_hours %}<p class="cw-hint t-crit">{{ edit_errors.scan_interval_hours }}</p>{% endif %}
+                                        {% if host_info.legacy_interval %}
+                                            <p class="cw-hint">Legacy cadence — keep this value unchanged or replace it with 1–8760 hours.</p>
+                                        {% endif %}
+                                    </div>
+                                    <div class="cw-field">
+                                        <label class="cw-label" for="endpoint-threshold">Alert threshold (days)</label>
+                                        <input id="endpoint-threshold"
+                                               name="threshold_days"
+                                               type="number"
+                                               min="1"
+                                               step="1"
+                                               class="cw-input"
+                                               {% if edit_errors.threshold_days %}aria-invalid="true"{% endif %}
+                                               value="{{ edit_values.get('threshold_days', host_info.threshold_days if host_info.threshold_days is not none else '') }}"
+                                               placeholder="Automatic">
+                                        {% if edit_errors.threshold_days %}<p class="cw-hint t-crit">{{ edit_errors.threshold_days }}</p>{% endif %}
+                                    </div>
+                                    <div class="cw-field wide">
+                                        <label class="cw-label" for="endpoint-renewal-status">Renewal status reported by operator</label>
+                                        <select id="endpoint-renewal-status" name="renewal_status" class="cw-select">
+                                            {% set submitted_status = edit_values.get('renewal_status', host_info.renewal_status) %}
+                                            <option value="pending"
+                                                    {% if submitted_status == 'pending' %}selected{% endif %}>No completion reported</option>
+                                            <option value="in_progress"
+                                                    {% if submitted_status == 'in_progress' %}selected{% endif %}>In progress — operator reported</option>
+                                        </select>
+                                        <p class="cw-hint" id="endpoint-renewal-help">Operator-reported progress is not proof of renewal; it never suppresses expiry or expired alerts. A later scan confirms the replacement certificate.</p>
+                                    </div>
+                                    <div class="cw-field wide">
+                                        <label class="cw-label" for="host-tags">Tags</label>
+                                        <input id="host-tags"
+                                               name="tags"
+                                               class="cw-input"
+                                               {% if edit_errors.tags %}aria-invalid="true"{% endif %}
+                                               value="{{ edit_values.get('tags', cert_tags | join(", ") if cert else host_info.tags) }}"
+                                               list="cw-all-tags">
+                                        {% if edit_errors.tags %}
+                                            <p class="cw-hint t-crit">{{ edit_errors.tags }}</p>
+                                        {% endif %}
+                                        <datalist id="cw-all-tags">
+                                            {% for tag in all_tags %}<option value="{{ tag }}"></option>{% endfor %}
+                                        </datalist>
+                                        <p class="cw-hint">
+                                            {% if cert %}
+                                                Edits this certificate’s own tags; inherited host tags remain visible.
+                                            {% else %}
+                                                Tags apply to this endpoint.
+                                            {% endif %}
+                                            Tags control scope, routing and grouping.
+                                        </p>
+                                    </div>
+                                    <div class="cw-field wide">
+                                        <label class="cw-label" for="host-notes">Notes</label>
+                                        <textarea id="host-notes"
+                                                  name="notes"
+                                                  class="cw-textarea"
+                                                  rows="5"
+                                                  maxlength="10000"
+                                                  {% if edit_errors.notes %}aria-invalid="true"{% endif %}
+                                                  data-testid="notes-editor">{{ edit_values.get('notes', host_info.notes) }}</textarea>
+                                        {% if edit_errors.notes %}<p class="cw-hint t-crit">{{ edit_errors.notes }}</p>{% endif %}
+                                    </div>
+                                </div>
+                                <div class="cw-form-foot">
+                                    <button type="submit" class="cw-btn primary sm" data-testid="save-host">Save host</button>
+                                </div>
+                            </form>
+                        </div>
+                    </details>
+                {% elif may_write and cert and not host_info %}
+                    <details id="edit-host" class="cw-editor" {% if edit_open %}open{% endif %}>
+                        <summary class="cw-btn ghost sm" data-testid="edit-host">{{ icons.svg_icon('edit', 13) }}Edit certificate</summary>
+                        <div class="cw-editor-body cw-detail-editor">
+                            <form method="post"
+                                  action="/certificates/{{ cert_id }}/tags"
+                                  class="cw-form">
+                                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                                <div class="cw-field">
+                                    <label class="cw-label" for="certificate-tags">Certificate tags</label>
+                                    <input id="certificate-tags"
+                                           class="cw-input"
+                                           name="tags"
+                                           value="{{ cert_tags | join(", ") }}">
+                                    <p class="cw-hint">Tags control scope, routing and grouping.</p>
+                                </div>
+                                <div class="cw-form-foot">
+                                    <button class="cw-btn primary sm" type="submit">Save certificate</button>
+                                </div>
+                            </form>
+                        </div>
+                    </details>
+                {% endif %}
                 <div class="cw-panel-body">
-                    {% if endpoint_error or (error and edit_open) %}
-                        <p class="cw-note t-crit"
-                           role="alert"
-                           data-testid="endpoint-settings-error">{{ endpoint_error or error }}</p>
-                    {% endif %}
                     <dl class="cw-detail-owner">
                         <div>
                             <dt>Owner</dt>
@@ -311,9 +350,7 @@
                                 <dt>Renewal method</dt>
                                 <dd>
                                     {{ renewal_method_label or 'Unknown' }}
-                                    {% if renewal_method_indicator %}
-                                        <div class="cw-sub">{{ renewal_method_indicator }}</div>
-                                    {% endif %}
+                                    {% if renewal_method_indicator %}<div class="cw-sub">{{ renewal_method_indicator }}</div>{% endif %}
                                 </dd>
                             </div>
                             <div>
@@ -343,7 +380,6 @@
                                 </dd>
                             </div>
                         </dl>
-                        <p class="cw-hint">operational notes for this host</p>
                     {% endif %}
                 </div>
             </section>
@@ -351,7 +387,7 @@
                 <section class="cw-panel cw-detail-disclosures">
                     <details id="certificate-facts" data-testid="certificate-facts">
                         <summary>
-                            <span><b>Certificate facts</b><span class="cw-sub">{{ chain_guidance.title }} · {{ key_type }} · {{ cert.san_dns_names | length }} name{{ '' if cert.san_dns_names | length == 1 else 's' }}
+                            <span><b>Certificate facts</b><span class="cw-sub">{{ chain_guidance.title }} · Key: {{ key_type }} · {{ cert.san_dns_names | length }} name{{ '' if cert.san_dns_names | length == 1 else 's' }}
                                 {% if posture %}· posture {{ posture.grade }}{% endif %}
                             </span></span>
                         </summary>
@@ -441,24 +477,6 @@
                                         <div id="revocation-results" class="cw-findings cw-hidden"></div>
                                         <p class="cw-hint">Checks OCSP/CRL endpoint reachability; this does not determine whether this certificate is revoked.</p>
                                     {% endif %}
-                                </section>
-                            {% endif %}
-                            {% if not host_info and may_write %}
-                                <section>
-                                    <h3>Tags</h3>
-                                    <form method="post"
-                                          action="/certificates/{{ cert_id }}/tags"
-                                          class="cw-form">
-                                        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                                        <label class="cw-label" for="certificate-tags">Certificate tags</label>
-                                        <input id="certificate-tags"
-                                               class="cw-input"
-                                               name="tags"
-                                               value="{{ cert_tags | join(", ") }}">
-                                        <div class="cw-form-foot">
-                                            <button class="cw-btn primary sm" type="submit">Save tags</button>
-                                        </div>
-                                    </form>
                                 </section>
                             {% endif %}
                         </div>
@@ -555,8 +573,4 @@
         </div>
     </div>
 {% endblock %}
-{% block scripts %}
-    {% if cert and may_write and posture %}
-        <script src="/static/js/detail.js" nonce="{{ request.state.csp_nonce }}"></script>
-    {% endif %}
-{% endblock %}
+{% block scripts %}<script src="/static/js/detail.js" nonce="{{ request.state.csp_nonce }}"></script>{% endblock %}

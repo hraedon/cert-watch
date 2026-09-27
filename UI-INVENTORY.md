@@ -36,7 +36,7 @@ endpoint-specific monitoring state.
 | Concept | Column | Editing control today | Write endpoint | Single owner (proposed) |
 |---|---|---|---|---|
 | ~~Notes & procedures~~ | **REMOVED** — `certificates.notes` merged by migration 0031 (deprecated column retained for unmatched notes) | — | `POST /certificates/{id}/notes` and `PATCH /api/certificates/{id}/notes` **removed** | Host-scoped notes won (V1, implemented 2026-08-30) |
-| Own tags | `certificates.tags` | The one **Edit host** form on certificate detail; inherited host tags remain read-only and shown `(host)` | `POST /hosts/{resource_id}/edit` and `PUT /api/hosts/{resource_id}` use `services.host_edit.edit_host`; legacy tag-only adapters remain callable | Detail A's combined editor |
+| Own tags | `certificates.tags` | The top-level **Edit** disclosure on certificate detail; scanned certificates use the combined **Edit host** form, while uploaded certificates use **Edit certificate** because they have no host. Inherited host tags remain read-only and shown `(host)` | `POST /hosts/{resource_id}/edit` and `PUT /api/hosts/{resource_id}` use `services.host_edit.edit_host`; upload-only and legacy tag-only adapters remain callable | Detail A's top-level editor |
 | Lifecycle (create/delete) | row | Add drawer: upload tab `dashboard.html:377`; delete `certificate_detail.html:72` | `POST /upload` + `POST /api/certificates/upload`; `POST /certificates/{id}/delete` + `DELETE /api/certificates/{id}` use `services.certificate_management` | HTML and JSON are equal adapters |
 
 ## Host (`hosts` table)
@@ -120,6 +120,11 @@ endpoint-specific monitoring state.
   notes. `POST /hosts/{resource_id}/edit` and
   `PUT /api/hosts/{resource_id}` share one atomic service and retain scope,
   CSRF, renewed-id refusal and in-transaction scope recheck guarantees. The
+  service authorizes host fields against the host and certificate tags against
+  the certificate; a combined edit requires both. Submitted tags must be in
+  write-tier scope, and scoped writers cannot remove their last writable tag.
+  Uploaded certificates expose their tag editor under the same top-level Edit
+  location, labelled **Edit certificate** because no host exists. The
   field-specific endpoints remain compatible API surfaces, but no longer own
   separate controls on detail.
 

@@ -5,9 +5,13 @@ from datetime import UTC, datetime, timedelta
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import Alert, HostEntry, LatestScanRecord
 from cert_watch.presenters.certificate_detail import (
+    _delivery_routes,
+    _detail_actions,
+    _detail_axes,
     present_certificate_detail,
     present_certificate_technical_details,
 )
+from cert_watch.scan_freshness import ScanEvidence
 from cert_watch.services.certificate_detail import (
     PendingHostDetailData,
     StoredCertificateDetailData,
@@ -50,7 +54,8 @@ def test_presenter_degrades_unparseable_crypto_and_surfaces_chain_issue() -> Non
 
 
 def test_presenter_labels_and_grades_a_real_certificate_chain(
-    chain_pem_file, chain_triplet,
+    chain_pem_file,
+    chain_triplet,
 ) -> None:
     uploaded = upload_certificate(chain_pem_file)
     assert isinstance(uploaded, UploadedEntry)
@@ -270,17 +275,193 @@ def test_detail_delivery_failure_shows_time_but_hides_identity_for_readers() -> 
         reveal_delivery_identities=True,
     )
 
-    assert reader.delivery_routes[0].recipient == "1 routed group"
-    assert "Network on-call" not in {
-        route.recipient for route in reader.delivery_routes
-    }
-    assert writer.delivery_routes[0].recipient == "Network on-call"
-    assert writer.delivery_routes[0].status == "Failing"
-    assert writer.delivery_routes[0].detail == (
-        "Latest delivery failed at 2026-09-22 08:30 UTC."
-    )
+    assert reader.delivery_routes[0].recipient == "1 matched alert group"
+    assert "Network on-call" not in {route.recipient for route in reader.delivery_routes}
+    assert writer.delivery_routes[0].recipient == "1 matched alert group"
+    assert [r.recipient for r in writer.delivery_routes].count("Network on-call") == 1
+    assert writer.delivery_routes[0].status == "Failed"
+    assert writer.delivery_routes[0].detail == ("Latest delivery failed at 2026-09-22 08:30 UTC.")
     assert any(
-        action.title == "Check webhook generic delivery."
-        and "2026-09-22 08:30 UTC" in action.detail
+        action.title == "Check Webhook delivery." and "2026-09-22 08:30 UTC" in action.detail
         for action in writer.actions
     )
+
+
+def test_detail_actions_are_role_aware_and_keep_scan_error_with_scan_step() -> None:
+    status = {
+        "monitoring": {
+            "state": "failing",
+            "cause": "The endpoint refused the connection.",
+            "raw_error": "[Errno 111] Connection refused",
+        },
+        "condition": {"state": "le7"},
+        "delivery": {
+            "state": "failing",
+            "channels": [
+                {
+                    "channel": "smtp",
+                    "recipients": ["owner@example.test"],
+                    "configured": False,
+                    "last_outcome": "partial",
+                    "last_attempt_at": "2026-09-22T08:30:00+00:00",
+                }
+            ],
+        },
+    }
+
+    writer = _detail_actions(
+        view_status=status,
+        hostname="vpn.example.test",
+        port=443,
+        days=5,
+        runbook_url="",
+        chain_guidance=None,
+        may_write=True,
+        has_host=True,
+        uploaded=False,
+    )
+    reader = _detail_actions(
+        view_status=status,
+        hostname="vpn.example.test",
+        port=443,
+        days=5,
+        runbook_url="",
+        chain_guidance=None,
+        may_write=False,
+        has_host=True,
+        uploaded=False,
+    )
+
+    assert writer[0].raw_error == "[Errno 111] Connection refused"
+    assert writer[0].command.startswith("openssl s_client")
+    assert any(action.title == "Press Scan now once it is fixed." for action in writer)
+    assert all(not action.command for action in reader)
+    assert all(
+        action.title.startswith(("Ask an administrator", "Ask the certificate's owner"))
+        for action in reader
+    )
+    assert any("partially delivered" in action.detail for action in writer)
+    assert all("latest attempt failed" not in action.detail.lower() for action in writer)
+
+
+def test_overdue_scan_is_not_described_as_a_connection_failure() -> None:
+    now = datetime(2026, 9, 22, 12, tzinfo=UTC)
+    evidence = ScanEvidence(
+        host_id="host-1",
+        last_success=now - timedelta(days=2),
+        last_attempt=now - timedelta(days=2),
+        attempt_status="success",
+        due_at=now - timedelta(days=1),
+        next_attempt_at=now - timedelta(hours=1),
+        state="overdue",
+    )
+    status = {
+        "monitoring": {
+            "state": "failing",
+            "cause": "The scheduled scan is overdue.",
+        },
+        "condition": {"state": "ok"},
+        "renewal": {"state": "manual"},
+        "delivery": {"state": "ok", "channels": []},
+    }
+
+    axes = _detail_axes(
+        model=status,
+        cert=None,
+        host=_host(),
+        evidence=evidence,
+        days=0,
+        now=now,
+    )
+    actions = _detail_actions(
+        view_status=status,
+        hostname="vpn.example.test",
+        port=443,
+        days=0,
+        runbook_url="",
+        chain_guidance=None,
+        may_write=True,
+        has_host=True,
+        uploaded=False,
+    )
+
+    assert axes[1].value.startswith("Scan overdue since")
+    assert "Automatic retry is due now" in axes[1].detail
+    assert actions[0].title == "Run the overdue scan and check the scheduler."
+    assert all(not action.command for action in actions)
+
+
+def test_uploaded_certificate_routing_action_never_suggests_an_owner() -> None:
+    writer = _detail_actions(
+        view_status={"delivery": {"state": "unrouted"}},
+        hostname="",
+        port=0,
+        days=60,
+        runbook_url="",
+        chain_guidance=None,
+        may_write=True,
+        has_host=False,
+        uploaded=True,
+    )
+    reader = _detail_actions(
+        view_status={"delivery": {"state": "unrouted"}},
+        hostname="",
+        port=0,
+        days=60,
+        runbook_url="",
+        chain_guidance=None,
+        may_write=False,
+        has_host=False,
+        uploaded=True,
+    )
+
+    assert writer[0].title == "Add an alert group for this uploaded certificate."
+    assert reader[0].title == (
+        "Ask an administrator to add an alert group for this uploaded certificate."
+    )
+    assert all("owner" not in action.title.lower() for action in (*writer, *reader))
+
+
+def test_unconfigured_delivery_is_warning_and_nonfinal_outcomes_are_honest() -> None:
+    model = {
+        "condition": {"state": None},
+        "monitoring": {"state": "never_scanned"},
+        "renewal": {"state": "unknown"},
+        "delivery": {
+            "state": "failing",
+            "matching_groups": ["Operations"],
+            "channels": [
+                {
+                    "channel": "smtp",
+                    "recipients": ["owner@example.test"],
+                    "configured": False,
+                    "can_deliver": False,
+                    "last_outcome": None,
+                    "last_attempt_at": None,
+                },
+                {
+                    "channel": "webhook:generic",
+                    "recipients": ["Operations"],
+                    "configured": True,
+                    "can_deliver": False,
+                    "last_outcome": "unknown",
+                    "last_attempt_at": "2026-09-22T08:30:00+00:00",
+                },
+            ],
+        },
+    }
+
+    axes = _detail_axes(
+        model=model,
+        cert=None,
+        host=_host(),
+        evidence=None,
+        days=0,
+        now=datetime(2026, 9, 22, 12, tzinfo=UTC),
+    )
+    routes = _delivery_routes(model, reveal=True)
+
+    assert axes[-1].tone == "t-warn"
+    assert any(route.status == "Outcome unknown" for route in routes)
+    assert all("failed" not in route.detail.lower() for route in routes)
+    assert [route.recipient for route in routes].count("Operations") == 1

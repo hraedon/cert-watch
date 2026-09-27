@@ -178,7 +178,7 @@ class TestScopeGatesCasefold:
     def test_new_tags_case_insensitive(self):
         from cert_watch.routes._scoped import scope_new_tags_denied
 
-        req = _scoped_request("Payments")
+        req = _scoped_request("Payments", {"Payments": "operator"})
         assert scope_new_tags_denied(req, "PAYMENTS") is None
         assert scope_new_tags_denied(req, "payments,hr") is not None
 

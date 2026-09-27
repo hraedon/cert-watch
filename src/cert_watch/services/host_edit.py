@@ -10,6 +10,7 @@ from typing import Any
 from cert_watch.audit import export_audit, record_audit
 from cert_watch.auth.scope import (
     ensure_new_tags_in_scope,
+    ensure_tag_update_retains_scope,
     ensure_write_scope,
     ensure_write_scope_on,
     require_auth_context,
@@ -39,6 +40,7 @@ from cert_watch.services.resource_metadata import (
     ResourceMetadataValidationError,
     normalize_tags,
 )
+from cert_watch.tags import parse_tags
 
 
 @dataclass(frozen=True)
@@ -78,15 +80,19 @@ def _optional_positive_int(value: Any, *, field: str) -> int | None:
 
 def _validate(update: HostEditUpdate, current: HostEntry) -> tuple[int | None, int | None, str]:
     for field in (
-        "owner_name", "owner_email", "owner_slack", "renewal_method",
-        "runbook_url", "renewal_status", "notes", "tags",
+        "owner_name",
+        "owner_email",
+        "owner_slack",
+        "renewal_method",
+        "runbook_url",
+        "renewal_status",
+        "notes",
+        "tags",
     ):
         if not isinstance(getattr(update, field), str):
             raise ResourceMetadataValidationError(f"{field} must be a string")
     if update.owner_email and not is_safe_email_address(update.owner_email):
-        raise HostOwnershipValidationError(
-            "owner_email", f"invalid email: {update.owner_email}"
-        )
+        raise HostOwnershipValidationError("owner_email", f"invalid email: {update.owner_email}")
     if update.renewal_method not in VALID_RENEWAL_METHODS:
         raise HostOwnershipValidationError("renewal_method", "invalid renewal method")
     if update.renewal_status not in VALID_RENEWAL_STATUSES:
@@ -97,9 +103,7 @@ def _validate(update: HostEditUpdate, current: HostEntry) -> tuple[int | None, i
     if len(update.notes) > MAX_NOTES_LENGTH:
         raise ResourceMetadataValidationError("notes too long (max 10000)")
 
-    interval = _optional_positive_int(
-        update.scan_interval_hours, field="Scan interval"
-    )
+    interval = _optional_positive_int(update.scan_interval_hours, field="Scan interval")
     threshold = _optional_positive_int(update.threshold_days, field="Alert threshold")
     if interval != current.scan_interval_hours and scan_interval_out_of_range(interval):
         raise HostValidationError(
@@ -138,20 +142,39 @@ def edit_host(
     with get_write_lock():
         if named_cert:
             refuse_if_superseded(db_path, named_cert, auth=auth, hidden=hidden)
-        ensure_write_scope(auth, db_path, **target.scope_target())
+        # Every field except certificate tags belongs to the host.  A route
+        # addressed by certificate id must therefore pass the host boundary,
+        # and its tag write must independently pass the certificate boundary.
+        ensure_write_scope(auth, db_path, host_id=target.host_id)
+        if named_cert:
+            ensure_write_scope(auth, db_path, cert_id=named_cert)
         current = SqliteHostRepository(db_path).get(target.host_id)
         if current is None:
             raise HostNotFoundError("host not found")
         resolved = update() if callable(update) else update
         interval, threshold, normalized_tags = _validate(resolved, current)
         ensure_new_tags_in_scope(auth, normalized_tags)
+        final_effective_tags = parse_tags(normalized_tags)
+        if named_cert:
+            final_effective_tags.extend(parse_tags(current.tags))
+        ensure_tag_update_retains_scope(auth, final_effective_tags)
 
         conn = _connect(db_path)
         try:
             begin_immediate(conn)
             if named_cert:
                 ensure_not_superseded(conn, named_cert, auth=auth, hidden=hidden)
-            ensure_write_scope_on(conn, auth, **target.scope_target())
+            ensure_write_scope_on(conn, auth, host_id=target.host_id)
+            if named_cert:
+                ensure_write_scope_on(conn, auth, cert_id=named_cert)
+            ensure_new_tags_in_scope(auth, normalized_tags)
+            host_tags = conn.execute(
+                "SELECT tags FROM hosts WHERE id = ?", (target.host_id,)
+            ).fetchone()
+            final_effective_tags = parse_tags(normalized_tags)
+            if named_cert and host_tags is not None:
+                final_effective_tags.extend(parse_tags(host_tags["tags"]))
+            ensure_tag_update_retains_scope(auth, final_effective_tags)
             cursor = conn.execute(
                 "UPDATE hosts SET owner_name = ?, owner_email = ?, owner_slack = ?, "
                 "renewal_method = ?, runbook_url = ?, scan_interval_hours = ?, "
@@ -159,11 +182,17 @@ def edit_host(
                 + (", tags = ?" if not named_cert else "")
                 + " WHERE id = ?",
                 (
-                    resolved.owner_name.strip(), resolved.owner_email.strip(),
-                    resolved.owner_slack.strip(), resolved.renewal_method,
-                    resolved.runbook_url.strip(), interval, threshold,
-                    resolved.renewal_status, resolved.notes,
-                    *((normalized_tags,) if not named_cert else ()), target.host_id,
+                    resolved.owner_name.strip(),
+                    resolved.owner_email.strip(),
+                    resolved.owner_slack.strip(),
+                    resolved.renewal_method,
+                    resolved.runbook_url.strip(),
+                    interval,
+                    threshold,
+                    resolved.renewal_status,
+                    resolved.notes,
+                    *((normalized_tags,) if not named_cert else ()),
+                    target.host_id,
                 ),
             )
             if cursor.rowcount == 0:
@@ -200,8 +229,6 @@ def edit_host(
             conn.rollback()
             raise
     export_audit(event)
-    from cert_watch.tags import parse_tags
-
     return HostEditResult(
         updated,
         tuple(parse_tags(normalized_tags)),

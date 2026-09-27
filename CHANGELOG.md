@@ -36,6 +36,16 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Detail pages keep the Edit host disclosure full-width at desktop and mobile,
+  preserve submitted values beside field errors, open disclosures addressed by
+  URL fragments, and give viewers role-appropriate next steps. Pending hosts
+  now resolve owner, tag-group and global alert routes exactly like scanned
+  endpoints; unmatched groups are informational unless no route exists.
+- Combined host edits authorize host fields and certificate tags against their
+  separate resources, including the transactional recheck. Tag changes require
+  write-tier access to every submitted tag and cannot remove the last tag that
+  keeps a scoped writer in scope. Read-only APIs and exports redact owner email
+  and channel handles while retaining the owner's display name.
 - Accessibility (#126 S2): every page has a `<main>` landmark, every form
   field has an associated label, empty action-column headers are named for
   screen readers, and secondary text no longer uses `--text-3`, which failed
