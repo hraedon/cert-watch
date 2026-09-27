@@ -137,7 +137,9 @@ _TEMPLATE_VALUES = frozenset(
 _TEMPLATE_PLACEHOLDER = re.compile(
     r"{{(" + "|".join(sorted(_TEMPLATE_VALUES)) + r")}}"
 )
-_JSON_SAMPLE_MARKER = "cert_watch_template_sample"
+# Starts with a non-hex letter so a placeholder completing a "\uXXXX" escape
+# cannot parse by accident.
+_JSON_SAMPLE_MARKER = "zz_cert_watch_template_sample"
 # Placeholders whose value is always a JSON number or null.
 _BARE_TEMPLATE_KEYS = frozenset({"threshold_days"})
 _INVALID_JSON = object()
@@ -169,19 +171,28 @@ def _placeholder_is_in_string(template: str, position: int) -> bool:
 
 
 def _template_probe(template: str) -> tuple[str, Any]:
-    """Strip the prefix and parse a neutral, non-secret rendering."""
+    """Strip the prefix and parse neutral, non-secret renderings.
+
+    Unquoted placeholders are rendered both as ``0`` and as ``null`` (the two
+    shapes ``{{threshold_days}}`` takes), and the template counts as valid
+    JSON only if both parse, so ``-{{threshold_days}}`` is refused at save
+    rather than failing each send that has no threshold.
+    """
     template = _strip_template_prefix(template)
+    parsed: Any = _INVALID_JSON
+    for bare in ("0", "null"):
 
-    def neutral(match: re.Match[str]) -> str:
-        if _placeholder_is_in_string(template, match.start()):
-            return f"{_JSON_SAMPLE_MARKER}_{match.group(1)}"
-        return "0"
+        def neutral(match: re.Match[str], bare: str = bare) -> str:
+            if _placeholder_is_in_string(template, match.start()):
+                return f"{_JSON_SAMPLE_MARKER}_{match.group(1)}"
+            return bare
 
-    rendered = _TEMPLATE_PLACEHOLDER.sub(neutral, template)
-    try:
-        return template, json.loads(rendered)
-    except json.JSONDecodeError:
-        return template, _INVALID_JSON
+        rendered = _TEMPLATE_PLACEHOLDER.sub(neutral, template)
+        try:
+            parsed = json.loads(rendered)
+        except json.JSONDecodeError:
+            return template, _INVALID_JSON
+    return template, parsed
 
 
 def validate_generic_webhook_template(template: str) -> bool:

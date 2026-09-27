@@ -243,7 +243,7 @@
       template: '{"routing_key": "YOUR_ROUTING_KEY", "event_action": "trigger", "payload": {"summary": "Certificate alert: {{subject}} ({{host}}) expires in {{days_remaining}} days", "severity": "warning", "source": "cert-watch"}}'
     },
     alertmanager: {
-      kind: 'generic',
+      kind: 'alertmanager',
       url: '',
       template: '[{"labels": {"alertname": "CertificateExpiry", "host": "{{host}}", "subject": "{{subject}}"}, "annotations": {"summary": "Certificate expires in {{days_remaining}} days", "grade": "{{grade}}"}}]'
     }

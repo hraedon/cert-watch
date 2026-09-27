@@ -262,6 +262,9 @@ def test_save_alert_config_accepts_valid_text_and_json_templates(
         '{"text":"{{message}}"',
         '{not-json}',
         '{"text": {{message}}}',
+        '{"days": -{{threshold_days}}}',
+        '{"days": {{threshold_days}}e5}',
+        '{"text": "\\u00{{threshold_days}}"}',
     ],
 )
 def test_save_alert_config_rejects_unsafe_json_template(reload_app, template):
