@@ -17,7 +17,7 @@ import logging
 import multiprocessing
 import sqlite3
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -1747,3 +1747,67 @@ def test_migration_0040_dates_a_zero_attempt_give_up_to_the_upgrade(tmp_path: Pa
     assert rows["attempted"] == "2026-01-02T03:04:05+00:00"
     assert rows["still-pending"] is None
     assert datetime.fromisoformat(rows["gave-up-just-now"]) >= before
+
+
+def test_migration_0044_versions_and_refreshes_existing_0043_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real 0043 cache row is recomputed and stamped during the upgrade."""
+    import cert_watch.migrations.registry  # noqa: F401 — registers migrations
+    from cert_watch.migrations import runner
+    from cert_watch.renewal_analytics import CLASSIFIER_VERSION
+
+    db = tmp_path / "upgrade-0043.sqlite3"
+    migrations = runner.get_migrations()
+    through_0042 = [migration for migration in migrations if migration[0] <= "0042"]
+    through_0043 = [migration for migration in migrations if migration[0] <= "0043"]
+
+    monkeypatch.setattr(runner, "_MIGRATIONS", through_0042)
+    assert runner.run_pending_migrations(db, backup=False)[-1] == "0042"
+    first_seen = datetime(2026, 1, 1, tzinfo=UTC)
+    with sqlite3.connect(str(db)) as conn:
+        for index in range(3):
+            issued_at = first_seen + timedelta(days=index * 60)
+            conn.execute(
+                """INSERT INTO cert_history
+                   (id, hostname, port, fingerprint_sha256, issuer,
+                    not_before, not_after, scanned_at)
+                   VALUES (?, 'upgrade-0044.example.test', 443, ?,
+                           'CN=R3, O=Let''s Encrypt', ?, ?, ?)""",
+                (
+                    f"history-{index}",
+                    f"fp-{index}",
+                    issued_at.isoformat(),
+                    (issued_at + timedelta(days=90)).isoformat(),
+                    issued_at.isoformat(),
+                ),
+            )
+        conn.commit()
+
+    monkeypatch.setattr(runner, "_MIGRATIONS", through_0043)
+    assert runner.run_pending_migrations(db, backup=False) == ["0043"]
+    with sqlite3.connect(str(db)) as conn:
+        assert conn.execute(
+            "SELECT classification FROM endpoint_renewal_analytics"
+        ).fetchone() == ("likely-automated",)
+        conn.execute(
+            "UPDATE endpoint_renewal_analytics SET classification = 'manual'"
+        )
+        conn.commit()
+
+    monkeypatch.setattr(runner, "_MIGRATIONS", migrations)
+    assert runner.run_pending_migrations(db, backup=False) == ["0044"]
+    with sqlite3.connect(str(db)) as conn:
+        row = conn.execute(
+            """SELECT classification, classifier_version, deployment_count,
+                      basis_history_count
+               FROM endpoint_renewal_analytics"""
+        ).fetchone()
+        triggers = {
+            trigger[0]
+            for trigger in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+            )
+        }
+    assert row == ("likely-automated", CLASSIFIER_VERSION, 3, 3)
+    assert "invalidate_renewal_analytics_replace" in triggers

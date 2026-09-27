@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import statistics
 from dataclasses import dataclass
@@ -13,13 +14,16 @@ from typing import Any
 from cert_watch.database.connection import _connect, _parse_iso
 from cert_watch.database.schema import init_schema
 
+logger = logging.getLogger("cert_watch.renewal_analytics")
+
 ACME_ISSUER_FRAGMENTS = ("let's encrypt", "zerossl", "buypass", "acme")
 
 # Persisted classifications are data derived by the functions pinned in
 # test_renewal_classifier_version_matches_logic.  Change both values whenever
 # that logic changes so startup can replace rows produced by older code.
 CLASSIFIER_VERSION = 1
-CLASSIFIER_SOURCE_HASH = "6c2f358374a76b0db333bd973f1835008865cb097a817426c35bf38ef09e305e"
+CLASSIFIER_SOURCE_HASH = "ea9c792b592a84d08879fe8b688acd4d4eb5cedc75ac8f4b7f09e54b4021afcd"
+_STALE_REFRESH_BATCH_SIZE = 100
 
 
 @dataclass
@@ -353,7 +357,8 @@ def refresh_endpoint_analytics_if_needed(
 
 
 def refresh_stale_classifier_rows(db_path: str | Path) -> int:
-    """Refresh version-mismatched cache rows before the process serves reads."""
+    """Refresh version-mismatched rows in bounded, fault-isolated batches."""
+    refreshed = 0
     with _connect(db_path) as conn:
         endpoints = conn.execute(
             """SELECT hostname, port FROM endpoint_renewal_analytics
@@ -361,10 +366,33 @@ def refresh_stale_classifier_rows(db_path: str | Path) -> int:
                ORDER BY hostname, port""",
             (CLASSIFIER_VERSION,),
         ).fetchall()
-        for hostname, port in endpoints:
-            refresh_endpoint_analytics(conn, str(hostname), int(port))
-        conn.commit()
-    return len(endpoints)
+        for batch_start in range(0, len(endpoints), _STALE_REFRESH_BATCH_SIZE):
+            batch = endpoints[batch_start : batch_start + _STALE_REFRESH_BATCH_SIZE]
+            for hostname, port in batch:
+                endpoint_hostname = str(hostname)
+                endpoint_port = int(port)
+                conn.execute("SAVEPOINT refresh_classifier_endpoint")
+                try:
+                    refresh_endpoint_analytics(
+                        conn, endpoint_hostname, endpoint_port
+                    )
+                except Exception as exc:
+                    conn.execute("ROLLBACK TO refresh_classifier_endpoint")
+                    conn.execute("RELEASE refresh_classifier_endpoint")
+                    logger.warning(
+                        "renewal classifier refresh failed for endpoint %s:%d (%s)",
+                        endpoint_hostname,
+                        endpoint_port,
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
+                else:
+                    conn.execute("RELEASE refresh_classifier_endpoint")
+                    refreshed += 1
+            # Release SQLite's write lock between batches. A failed endpoint
+            # stays version-mismatched and therefore remains hidden from reads.
+            conn.commit()
+    return refreshed
 
 
 def compute_host_analytics(
