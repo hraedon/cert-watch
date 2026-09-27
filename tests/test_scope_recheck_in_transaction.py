@@ -257,6 +257,27 @@ def test_host_settings(tmp_path, monkeypatch):
     assert (host.scan_interval_hours, host.threshold_days) == (None, None)
 
 
+def test_expected_issuers(tmp_path, monkeypatch):
+    from cert_watch.services.host_management import update_expected_issuers
+
+    db, host_id, _cert_id = _estate(tmp_path)
+    moved: list = []
+    _move_after_check(monkeypatch, "cert_watch.services.host_management", db, host_id, moved)
+    auth = AuthContext.from_tier("team-a-operator", tier="operator", scope_tag="team-a")
+    with pytest.raises(PermissionError, match="outside your team scope"):
+        update_expected_issuers(
+            db,
+            host_id,
+            "Example CA",
+            auth=auth,
+            actor="team-a-operator",
+            source_ip=None,
+        )
+    assert moved == ["moved"]
+    host = SqliteHostRepository(db).get(host_id)
+    assert host is not None and host.expected_issuers == ""
+
+
 def test_host_delete(tmp_path, monkeypatch):
     db, host_id, _cert_id = _estate(tmp_path)
     moved: list = []

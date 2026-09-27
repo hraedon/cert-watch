@@ -9,10 +9,12 @@ from typing import Any
 
 from cert_watch.audit import export_audit, record_audit
 from cert_watch.auth.scope import (
+    ScopeDeniedError,
     ensure_new_tags_in_scope,
     ensure_tag_update_retains_scope,
     ensure_write_scope,
     ensure_write_scope_on,
+    new_tags_scope_error,
     require_auth_context,
     unknown_target_scope_error,
 )
@@ -38,7 +40,7 @@ from cert_watch.services.resource_metadata import (
     ResourceMetadataValidationError,
     normalize_tags,
 )
-from cert_watch.tags import parse_tags
+from cert_watch.tags import format_tags, parse_tags
 
 
 @dataclass(frozen=True)
@@ -118,6 +120,31 @@ def _validate(
     return ownership, interval, threshold, normalize_tags(update.tags)
 
 
+def _authorize_tag_transition(auth: Any, current: str, submitted: str) -> str:
+    """Allow foreign tags only when the edit leaves them logically untouched."""
+    current_tags = parse_tags(current)
+    submitted_tags = parse_tags(submitted)
+    current_by_key = {tag.casefold(): tag for tag in current_tags}
+    submitted_by_key = {tag.casefold(): tag for tag in submitted_tags}
+    protected = {
+        tag.casefold(): tag
+        for tag in current_tags
+        if new_tags_scope_error(auth, tag) is not None
+    }
+    for key, tag in protected.items():
+        if key not in submitted_by_key:
+            raise ScopeDeniedError(
+                f"tag '{tag}' is outside your writable scope and cannot be removed"
+            )
+        # Preserve the stored spelling of a tag the caller cannot modify.
+        submitted_by_key[key] = tag
+    additions = [
+        tag for tag in submitted_tags if tag.casefold() not in current_by_key
+    ]
+    ensure_new_tags_in_scope(auth, format_tags(additions))
+    return format_tags(submitted_by_key.values())
+
+
 def edit_host(
     db_path: str | Path,
     resource_id: str,
@@ -155,7 +182,19 @@ def edit_host(
             raise HostNotFoundError("host not found")
         resolved = update() if callable(update) else update
         ownership, interval, threshold, normalized_tags = _validate(resolved, current)
-        ensure_new_tags_in_scope(auth, normalized_tags)
+        if named_cert:
+            with _connect(db_path) as read_conn:
+                row = read_conn.execute(
+                    "SELECT tags FROM certificates WHERE id = ?", (named_cert,)
+                ).fetchone()
+            if row is None:
+                raise HostNotFoundError("certificate not found")
+            current_resource_tags = row["tags"]
+        else:
+            current_resource_tags = current.tags
+        normalized_tags = _authorize_tag_transition(
+            auth, current_resource_tags, normalized_tags
+        )
         final_effective_tags = parse_tags(normalized_tags)
         if named_cert:
             final_effective_tags.extend(parse_tags(current.tags))
@@ -169,7 +208,21 @@ def edit_host(
             ensure_write_scope_on(conn, auth, host_id=target.host_id)
             if named_cert:
                 ensure_write_scope_on(conn, auth, cert_id=named_cert)
-            ensure_new_tags_in_scope(auth, normalized_tags)
+            if named_cert:
+                resource_tags = conn.execute(
+                    "SELECT tags FROM certificates WHERE id = ?", (named_cert,)
+                ).fetchone()
+            else:
+                resource_tags = conn.execute(
+                    "SELECT tags FROM hosts WHERE id = ?", (target.host_id,)
+                ).fetchone()
+            if resource_tags is None:
+                raise HostNotFoundError(
+                    "certificate not found" if named_cert else "host not found"
+                )
+            normalized_tags = _authorize_tag_transition(
+                auth, resource_tags["tags"], normalized_tags
+            )
             host_tags = conn.execute(
                 "SELECT tags FROM hosts WHERE id = ?", (target.host_id,)
             ).fetchone()

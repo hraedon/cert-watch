@@ -40,6 +40,9 @@ are hidden from read-only callers; read [UPGRADING.md](UPGRADING.md) first.
   the writable ones. A scoped writer cannot remove the last tag through which
   they can write the resource, which would otherwise hand it to a read-only
   tier (#126 S4).
+- *Edit host* now permits a scoped writer to save a certificate that already
+  carries another team's tag, while preserving that tag. The writer still
+  cannot add or remove tags outside their writable scope (#138).
 
 ### Added
 

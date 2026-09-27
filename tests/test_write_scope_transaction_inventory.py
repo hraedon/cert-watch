@@ -120,6 +120,12 @@ _target(
     "POST /hosts/{host_id}/settings", "PATCH /api/hosts/{host_id}/settings",
 )
 _target(
+    _Contract(host_management.update_expected_issuers,
+              host_management.update_expected_issuers,
+              '"UPDATE hosts SET expected_issuers'),
+    "POST /hosts/{host_id}/expected-issuers", "PUT /api/hosts/{host_id}/issuers",
+)
+_target(
     _Contract(
         host_management.delete_host,
         host_management.delete_host,
@@ -183,6 +189,11 @@ _route_service(
     host_management.update_host_settings,
     "POST /hosts/{host_id}/settings",
     "PATCH /api/hosts/{host_id}/settings",
+)
+_route_service(
+    host_management.update_expected_issuers,
+    "POST /hosts/{host_id}/expected-issuers",
+    "PUT /api/hosts/{host_id}/issuers",
 )
 _route_service(
     host_management.delete_host,
@@ -506,7 +517,8 @@ def test_route_scope_classes_have_the_expected_guard_tier() -> None:
     for key in _ADMIN_ONLY:
         guards = _mutation_guards(routes[key])
         assert guards and all(guard.level == "admin" for guard in guards), key
-    for key in set(_TARGET_CONTRACTS) | set(_SET_BASED) | set(_NEW_RESOURCE):
+    scoped = (set(_TARGET_CONTRACTS) - _ADMIN_ONLY) | set(_SET_BASED) | set(_NEW_RESOURCE)
+    for key in scoped:
         assert all(guard.level != "admin" for guard in _mutation_guards(routes[key])), key
 
 
