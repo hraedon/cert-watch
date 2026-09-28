@@ -23,7 +23,22 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
-## Upgrading from 1.1.0
+## Upgrading from 1.1.1 (unreleased)
+
+### Migration 0045
+
+Migration **0045** adds an explicit binding and bound-tag list to API keys.
+Every existing `read`, `write` and `admin` key is assigned `binding='all'`, so
+its access does not change. New `renewal-report` keys must deliberately choose
+all endpoints or at least one host tag.
+
+Renewal-report key hashes use a format older binaries do not recognize, so an
+older cert-watch rejects those credentials. Database rollback is not
+supported: stop cert-watch and restore the pre-migration backup before
+starting an older binary. Do not point an older binary at the migrated
+database.
+
+## Upgrading from 1.1.0 to 1.1.1
 
 API-key audit actors now use the stable `api_key:<id>` format instead of the
 key's display name. The display name is retained as `api_key_name` in the
@@ -42,8 +57,9 @@ and are not escaped for structured formats such as form encoding.
 
 After this version, a generic webhook template that starts with `{` after
 leading BOMs and whitespace but is not valid JSON after neutral substitution
-is refused when saved and at send time. This is the only delivery behaviour
-change for existing templates; startup logs a warning naming the generic
+is refused when saved and at send time, as is a JSON template with any
+unquoted placeholder other than `{{threshold_days}}`. This is the only
+delivery behaviour change for existing templates; startup logs a warning naming the generic
 channel when an environment-provided or previously saved template would be
 refused.
 
@@ -60,19 +76,6 @@ cached classification when it cannot add classifier evidence. New fingerprint
 periods, out-of-order observations, a later observation that supplies missing
 certificate validity, retention pruning, and every history update or delete
 still invalidate or recompute the affected endpoint.
-
-### Migration 0045
-
-Migration **0045** adds an explicit binding and bound-tag list to API keys.
-Every existing `read`, `write` and `admin` key is assigned `binding='all'`, so
-its access does not change. New `renewal-report` keys must deliberately choose
-all endpoints or at least one host tag.
-
-Renewal-report key hashes use a format older binaries do not recognize, so an
-older cert-watch rejects those credentials. Database rollback is not
-supported: stop cert-watch and restore the pre-migration backup before
-starting an older binary. Do not point an older binary at the migrated
-database.
 
 ## Upgrading from 1.0.4 to 1.1.0
 
