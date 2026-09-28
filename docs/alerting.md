@@ -12,6 +12,7 @@ step.
 | **Expiry warning** | A certificate crosses an expiry threshold (see below). | Once per threshold. The next threshold is a new alert. |
 | **Expired** | A certificate has expired. | Once. |
 | **Renewal stalled** | A certificate is inside its renewal window (`CERT_WATCH_RENEWAL_WINDOW_DAYS`, 30 by default) and no successor has appeared. | Once per certificate, paused during the first live renewal-attempt lease for that served certificate. The weekly renewal digest is the reminder. |
+| **Renewal not deployed** | Renewal automation reported success, but a qualifying stored scan still sees the previous certificate or a different certificate than the reported fingerprint. | Once per renewal attempt. It closes when a later scan verifies the successor or the endpoint is deleted. |
 | **Policy violation** | A scan finds a critical or warning finding from the posture policy, such as SHA-1, short keys or an old TLS version. | Once while the violation persists. If it clears and comes back, again. |
 | **Drift** | A scan sees a high-severity change: a new issuer, a smaller key, a signature downgrade to SHA-1, a TLS version downgrade, or a posture-grade drop. Turn off with `CERT_WATCH_DRIFT_ALERTS=0`. | Each drift is its own alert. |
 
@@ -23,6 +24,28 @@ condition and the automation-facing `renewal_needed` webhook; the overdue event
 is still recorded. It never suppresses expiry warnings or expired alerts.
 Repeated starts do not extend or re-grant the lease. Renewal completion is
 established by observing a successor certificate, not by an operator report.
+
+### Renewal verification
+
+A `succeeded` report queues one immediate scan. That scan can verify a fast
+deployment, but an unchanged result does not count toward an alert until the
+configured grace period has elapsed (`CERT_WATCH_RENEWAL_VERIFY_GRACE_MINUTES`,
+5 minutes by default, range 5–15). Later checks use the expiry of the leaf that
+was serving when the attempt opened:
+
+| Previous certificate has left | Verification checks | Alert after |
+|---|---|---|
+| 14 days or more | Standard scan or 24 hours, whichever is sooner | First successful unchanged check at or after 24 hours |
+| 3–14 days | Every 6 hours or the standard scan, whichever is sooner | First successful unchanged check at or after 12 hours |
+| Less than 3 days, or expiry unknown | At the grace boundary, then hourly | First qualifying unchanged check |
+| Expired | At the grace boundary, then every 15 minutes | First qualifying unchanged check |
+
+A failed network scan or database store is not verification evidence. It sets
+the attempt's blocked timestamp, leaves the state and alert unchanged, and
+reschedules using the same band. A certificate different from both the
+baseline and a supplied `new_fingerprint` is a mismatch and raises the same
+warning on the newly scanned leaf. The report's free-form message, tool and
+correlation identifier are never copied into the alert or its delivery.
 
 ### Expiry thresholds
 

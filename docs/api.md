@@ -26,11 +26,13 @@ retained certificate history when migration 0046 backfills older lineage.
 No match returns 404. More than one in-binding match returns 409 without naming
 the endpoints. Uploaded certificates cannot be targeted.
 
-`outcome` is required and is `started`, `failed` or `succeeded`. S2 accepts
-`started` and `failed`; until deployment verification ships, `succeeded`
-returns `503 {"error":"renewal verification is not available yet"}` and
-stores nothing. It still counts against both request-rate limits, so a 429 can
-mask that 503 after a caller exhausts either budget. Optional fields are:
+`outcome` is required and is `started`, `failed` or `succeeded`. A successful
+report moves an open, failed or newly created attempt to `verifying`, ends any
+stall-suppression lease, and queues an immediate normal scan of the monitored
+endpoint. The request never scans inline. If already-stored scan evidence
+matches `new_fingerprint`, the response can be `verified` immediately. A
+success claim alone never closes a renewal-failed condition; only stored scan
+evidence does. Optional fields are:
 
 | Field | Contract |
 |---|---|

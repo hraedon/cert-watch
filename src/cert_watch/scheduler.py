@@ -128,13 +128,20 @@ def _host_scan_deadlines(
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT h.hostname, h.port, h.scan_interval_hours,
+            SELECT h.id AS host_id,h.hostname, h.port, h.scan_interval_hours,
                    MAX(CASE WHEN sh.status = 'success' THEN sh.scanned_at END) as last_scan,
-                   MAX(sh.scanned_at) as last_attempt
+                   MAX(sh.scanned_at) as last_attempt,
+                   a.next_check_at,
+                   claim.claim_expires_at
             FROM hosts h
             LEFT JOIN scan_history sh
                 ON sh.hostname = h.hostname AND sh.port = h.port
-            GROUP BY h.hostname, h.port
+            LEFT JOIN renewal_attempts a
+                ON a.host_id=h.id AND a.is_current=1
+                  AND a.state IN ('verifying','not_deployed')
+            LEFT JOIN host_scan_claims claim ON claim.host_id=h.id
+            GROUP BY h.id,h.hostname,h.port,h.scan_interval_hours,
+                     a.next_check_at,claim.claim_expires_at
             """
         ).fetchall()
 
@@ -185,6 +192,18 @@ def _host_scan_deadlines(
                 deadline = cadence_due_at(last, None, hour, minute)
         if attempt is not None and (last is None or attempt > last):
             deadline = max(deadline, attempt + timedelta(seconds=FAST_RETRY_INTERVAL))
+        verification = (
+            timestamp(r["next_check_at"], r["hostname"], "renewal verification")
+            if r["next_check_at"] else None
+        )
+        if verification is not None:
+            deadline = min(deadline, verification)
+        claim_expires = (
+            timestamp(r["claim_expires_at"], r["hostname"], "scan claim")
+            if r["claim_expires_at"] else None
+        )
+        if claim_expires is not None and claim_expires > now:
+            deadline = max(deadline, claim_expires)
         deadlines.append((r["hostname"], r["port"], deadline, attempt is None))
     return deadlines
 
@@ -199,6 +218,74 @@ def get_hosts_due_for_scan(
         (host, port) for host, port, deadline, _ in _host_scan_deadlines(db_path, hour, minute, now)
         if deadline <= now
     ]
+
+
+SCAN_CLAIM_MINUTES = 15
+
+
+def claim_hosts_due_for_scan(
+    db_path: str | Path,
+    *,
+    owner: str,
+    hour: int = 6,
+    minute: int = 0,
+    now: datetime | None = None,
+) -> list[tuple[str, int]]:
+    """Claim due endpoint scans atomically across scheduler processes."""
+    from cert_watch.database import _connect, get_write_lock
+    from cert_watch.database.connection import begin_immediate
+
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    due = get_hosts_due_for_scan(db_path, hour=hour, minute=minute, now=current)
+    if not due:
+        return []
+    claimed: list[tuple[str, int]] = []
+    expires = (current + timedelta(minutes=SCAN_CLAIM_MINUTES)).isoformat()
+    with get_write_lock():
+        conn = _connect(db_path)
+        try:
+            begin_immediate(conn)
+            for hostname, port in due:
+                row = conn.execute(
+                    "SELECT id FROM hosts WHERE hostname=? AND port=?",
+                    (hostname, port),
+                ).fetchone()
+                if row is None:
+                    continue
+                cursor = conn.execute(
+                    """INSERT INTO host_scan_claims
+                       (host_id,claimed_by,claimed_at,claim_expires_at)
+                       VALUES (?,?,?,?)
+                       ON CONFLICT(host_id) DO UPDATE SET
+                           claimed_by=excluded.claimed_by,
+                           claimed_at=excluded.claimed_at,
+                           claim_expires_at=excluded.claim_expires_at
+                       WHERE host_scan_claims.claim_expires_at<=excluded.claimed_at""",
+                    (row["id"], owner, current.isoformat(), expires),
+                )
+                if cursor.rowcount == 1:
+                    claimed.append((hostname, port))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return claimed
+
+
+def release_host_scan_claim(
+    db_path: str | Path, hostname: str, port: int, *, owner: str
+) -> None:
+    from cert_watch.database import _connect, get_write_lock
+
+    with get_write_lock(), _connect(db_path) as conn:
+        conn.execute(
+            """DELETE FROM host_scan_claims
+               WHERE claimed_by=? AND host_id=(
+                   SELECT id FROM hosts WHERE hostname=? AND port=?
+               )""",
+            (owner, hostname, port),
+        )
+        conn.commit()
 
 
 def _seconds_until_next_scan(
@@ -673,6 +760,8 @@ def _run_scan_now(
     settings: Any = None,
     now: Callable[[], datetime] = _utc_now,
     renewal_check: Callable[..., None],
+    scan_succeeded: Callable[[str, int, object, datetime], None] | None = None,
+    scan_failed: Callable[[str, int, datetime], None] | None = None,
     scan_recorded: Callable[[datetime], None] | None = None,
 ) -> dict[str, int]:
     """
@@ -700,6 +789,7 @@ def _run_scan_now(
         return entry_id
 
     for hostname, port in hosts:
+        started_at = now()
         try:
             result = scan_fn(hostname, port)
         except Exception as exc:  # AC-05: isolate this host from the remaining batch.
@@ -719,6 +809,8 @@ def _run_scan_now(
                         "could not record scan failure for %s:%s",
                         hostname, port, exc_info=True,
                     )
+            if scan_failed is not None:
+                scan_failed(hostname, port, started_at)
             continue
 
         # Treat a result with `error_message` attribute as a ScanError.
@@ -756,6 +848,8 @@ def _run_scan_now(
                     )
                 except Exception:  # Best-effort event emission must not stop the scan loop.
                     logger.debug("scan_failed event suppressed", exc_info=True)
+            if scan_failed is not None:
+                scan_failed(hostname, port, started_at)
             continue
 
         scanned += 1
@@ -786,6 +880,8 @@ def _run_scan_now(
                             "could not record scan failure for %s:%s",
                             hostname, port, exc_info=True,
                         )
+                if scan_failed is not None:
+                    scan_failed(hostname, port, started_at)
                 continue
             # WI-142 defense in depth: store_scanned's contract is "return a
             # non-empty leaf id on success, raise on failure." The empty-
@@ -815,6 +911,8 @@ def _run_scan_now(
                             "could not record scan failure for %s:%s",
                             hostname, port, exc_info=True,
                         )
+                if scan_failed is not None:
+                    scan_failed(hostname, port, started_at)
                 continue
         if db_path is not None:
             _record(
@@ -825,6 +923,8 @@ def _run_scan_now(
                     scanned_at=now(),
                 ),
             )
+        if scan_succeeded is not None:
+            scan_succeeded(hostname, port, result, started_at)
 
     renewal_check(db_path, hosts, settings=settings)
 

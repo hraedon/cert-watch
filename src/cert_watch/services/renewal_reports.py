@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from cert_watch.audit import export_audit, record_audit
 from cert_watch.auth.guards import renewal_report_binding
@@ -35,10 +35,6 @@ class RenewalReportNotFoundError(RenewalReportServiceError):
 
 
 class RenewalReportConflictError(RenewalReportServiceError):
-    pass
-
-
-class RenewalReportUnavailableError(RenewalReportServiceError):
     pass
 
 
@@ -403,6 +399,106 @@ def _current_leaf(conn: sqlite3.Connection, host_id: str) -> tuple[str | None, s
     )
 
 
+def _evaluate_succeeded_on(
+    conn: sqlite3.Connection,
+    attempt_id: str,
+    baseline_fingerprint: str | None,
+    *,
+    received: datetime,
+    settings: Settings,
+) -> str:
+    from cert_watch.renewal_verification import evaluate_evidence_on
+
+    current_attempt = conn.execute(
+        "SELECT * FROM renewal_attempts WHERE attempt_id=?", (attempt_id,)
+    ).fetchone()
+    assert current_attempt is not None
+    return evaluate_evidence_on(
+        conn,
+        current_attempt,
+        baseline_fingerprint,
+        started_at=received,
+        settings=settings,
+        count_check=False,
+    ).state
+
+
+def _store_idempotency_on(
+    conn: sqlite3.Connection,
+    *,
+    source: str,
+    key: str | None,
+    host_id: str,
+    body_sha256: str,
+    response_body: str,
+    received_at: str,
+) -> None:
+    if key:
+        conn.execute(
+            """INSERT INTO renewal_idempotency
+               (source,key,host_id,body_sha256,response_status,response_body,created_at)
+               VALUES (?,?,?,?,202,?,?)""",
+            (source, key, host_id, body_sha256, response_body, received_at),
+        )
+
+
+def _record_report_audit(
+    db_path: str | Path,
+    conn: sqlite3.Connection,
+    report: RenewalReportInput,
+    *,
+    actor: str,
+    host_id: str,
+    source_ip: str | None,
+) -> dict[str, Any] | None:
+    message = report.message or ""
+    return record_audit(
+        db_path,
+        actor=actor,
+        action="renewal_report.create",
+        target_type="host",
+        target_id=host_id,
+        detail={
+            "outcome": report.outcome,
+            "tool": report.tool,
+            "correlation_id": report.correlation_id,
+            "message_len": len(message),
+            "message_sha256": hashlib.sha256(message.encode()).hexdigest(),
+        },
+        source_ip=source_ip,
+        conn=conn,
+    )
+
+
+def _expire_current_attempt_on(
+    conn: sqlite3.Connection,
+    host_id: str,
+    attempt: sqlite3.Row | None,
+    *,
+    received: datetime,
+) -> sqlite3.Row | None:
+    if (
+        attempt is not None
+        and attempt["state"] == "open"
+        and not renewal_attempt_is_live(
+            str(attempt["state"]), attempt["lease_expires_at"], now=received
+        )
+    ):
+        conn.execute(
+            "UPDATE renewal_attempts SET state='abandoned',"
+            "suppresses_stalled=0,closed_reason='lease_expired' WHERE attempt_id=?",
+            (attempt["attempt_id"],),
+        )
+        return cast(
+            sqlite3.Row | None,
+            conn.execute(
+                "SELECT * FROM renewal_attempts WHERE host_id=? AND is_current=1",
+                (host_id,),
+            ).fetchone(),
+        )
+    return attempt
+
+
 def create_report(
     db_path: str | Path,
     settings: Settings,
@@ -421,8 +517,6 @@ def create_report(
     Returns ``(result, replayed)``. Target resolution is advisory; host
     existence and binding are checked again after ``BEGIN IMMEDIATE``.
     """
-    if report.outcome == "succeeded":
-        raise RenewalReportUnavailableError("renewal verification is not available yet")
     received = (now or datetime.now(UTC)).astimezone(UTC)
     received_at = received.isoformat()
     source = _source(auth)
@@ -476,26 +570,17 @@ def create_report(
                 "SELECT * FROM renewal_attempts WHERE host_id=? AND is_current=1",
                 (target.host_id,),
             ).fetchone()
-            if (
-                attempt is not None
-                and attempt["state"] == "open"
-                and not renewal_attempt_is_live(
-                    str(attempt["state"]), attempt["lease_expires_at"], now=received
-                )
-            ):
-                conn.execute(
-                    "UPDATE renewal_attempts SET state='abandoned',"
-                    "suppresses_stalled=0,closed_reason='lease_expired' WHERE attempt_id=?",
-                    (attempt["attempt_id"],),
-                )
-                attempt = conn.execute(
-                    "SELECT * FROM renewal_attempts WHERE host_id=? AND is_current=1",
-                    (target.host_id,),
-                ).fetchone()
+            attempt = _expire_current_attempt_on(
+                conn, target.host_id, attempt, received=received
+            )
 
             new_attempt = attempt is None
             effect = "applied"
-            state = "open" if report.outcome == "started" else "failed"
+            state = {
+                "started": "open",
+                "failed": "failed",
+                "succeeded": "verifying",
+            }[report.outcome]
             attempt_id = uuid.uuid4().hex
             correlation_owner = None
             if report.correlation_id:
@@ -542,11 +627,20 @@ def create_report(
                 elif current_state == "open":
                     if report.outcome == "started":
                         state, effect = "open", "duplicate"
+                    elif report.outcome == "succeeded":
+                        state, effect = "verifying", "applied"
                     else:
                         state, effect = "failed", "applied"
                 elif current_state in ("verifying", "not_deployed"):
                     if report.outcome == "failed":
                         state, effect = "failed", "applied"
+                    elif report.outcome == "succeeded":
+                        state = current_state
+                        effect = (
+                            "applied"
+                            if report.new_fingerprint and not attempt["new_fingerprint"]
+                            else "no_change"
+                        )
                     else:
                         state, effect, new_attempt = (
                             current_state,
@@ -555,10 +649,17 @@ def create_report(
                         )
                 elif current_state == "failed" and report.outcome == "failed":
                     state, effect = "failed", "no_change"
+                elif current_state == "failed" and report.outcome == "succeeded":
+                    state, effect = "verifying", "applied"
                 elif (
                     current_state == "verified"
-                    and report.outcome == "failed"
-                    and attempt["baseline_fingerprint"] == baseline_fingerprint
+                    and (
+                        report.outcome == "succeeded"
+                        or (
+                            report.outcome == "failed"
+                            and attempt["baseline_fingerprint"] == baseline_fingerprint
+                        )
+                    )
                 ):
                     state, effect, new_attempt = "verified", "ignored_late", False
                 elif report.outcome == "started" and same_correlation:
@@ -619,7 +720,7 @@ def create_report(
                         baseline_not_after,new_fingerprint,lease_expires_at,
                         suppresses_stalled,received_at,next_check_at,closed_reason,
                         baseline_lease_claimed)
-                       VALUES (?,?,1,?,?,?,?,?,?,?,?,?,NULL,?,?)""",
+                       VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         attempt_id,
                         target.host_id,
@@ -628,11 +729,12 @@ def create_report(
                         seq,
                         baseline_fingerprint,
                         baseline_not_after,
-                        None,
+                        report.new_fingerprint if state == "verifying" else None,
                         lease,
                         suppresses,
                         received_at,
-                        None if state == "open" else "reported_failed",
+                        received_at if state == "verifying" else None,
+                        None if state in {"open", "verifying"} else "reported_failed",
                         claims_baseline,
                     ),
                 )
@@ -641,6 +743,23 @@ def create_report(
                     "UPDATE renewal_attempts SET state='failed',suppresses_stalled=0,"
                     "closed_reason='reported_failed' WHERE attempt_id=?",
                     (attempt_id,),
+                )
+            elif report.outcome == "succeeded" and effect in {"applied", "no_change"}:
+                conn.execute(
+                    """UPDATE renewal_attempts SET state=?,suppresses_stalled=0,
+                              new_fingerprint=COALESCE(new_fingerprint,?),
+                              next_check_at=COALESCE(next_check_at,?)
+                       WHERE attempt_id=?""",
+                    (state, report.new_fingerprint, received_at, attempt_id),
+                )
+
+            if report.outcome == "succeeded" and effect != "ignored_late":
+                state = _evaluate_succeeded_on(
+                    conn,
+                    attempt_id,
+                    baseline_fingerprint,
+                    received=received,
+                    settings=settings,
                 )
 
             _cache_renewal_status(conn, target.host_id, now=received)
@@ -657,39 +776,17 @@ def create_report(
 
             result = RenewalReportResult(report_id, attempt_id, state, effect)
             response_body = json.dumps(result.__dict__, separators=(",", ":"), sort_keys=True)
-            if idempotency_key:
-                conn.execute(
-                    """INSERT INTO renewal_idempotency
-                       (source,key,host_id,body_sha256,response_status,response_body,created_at)
-                       VALUES (?,?,?,?,202,?,?)""",
-                    (
-                        source,
-                        idempotency_key,
-                        target.host_id,
-                        body_sha256,
-                        response_body,
-                        received_at,
-                    ),
-                )
-            message = report.message or ""
+            _store_idempotency_on(
+                conn, source=source, key=idempotency_key, host_id=target.host_id,
+                body_sha256=body_sha256, response_body=response_body,
+                received_at=received_at,
+            )
             # Audit detail is the deliberate admin-only exception to report
             # field confinement: tool and correlation aid incident tracing,
             # while free-form message content remains hash-and-length only.
-            audit_event = record_audit(
-                db_path,
-                actor=actor,
-                action="renewal_report.create",
-                target_type="host",
-                target_id=target.host_id,
-                detail={
-                    "outcome": report.outcome,
-                    "tool": report.tool,
-                    "correlation_id": report.correlation_id,
-                    "message_len": len(message),
-                    "message_sha256": hashlib.sha256(message.encode()).hexdigest(),
-                },
+            audit_event = _record_report_audit(
+                db_path, conn, report, actor=actor, host_id=target.host_id,
                 source_ip=source_ip,
-                conn=conn,
             )
             conn.commit()
         except Exception:

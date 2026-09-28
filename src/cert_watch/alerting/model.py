@@ -13,6 +13,17 @@ if TYPE_CHECKING:
 
 LEAF_THRESHOLDS = (14, 7, 3, 1)
 
+# Verification of a reported renewal follows the urgency of the certificate
+# that was serving when the attempt opened. Keep this scale beside the expiry
+# thresholds so the two policies remain legible together.
+RENEWAL_VERIFY_EARLY_DAYS = 14
+RENEWAL_VERIFY_URGENT_DAYS = 3
+RENEWAL_VERIFY_EARLY_CHECK_HOURS = 24
+RENEWAL_VERIFY_MID_CHECK_HOURS = 6
+RENEWAL_VERIFY_MID_RAISE_HOURS = 12
+RENEWAL_VERIFY_URGENT_CHECK_HOURS = 1
+RENEWAL_VERIFY_EXPIRED_CHECK_MINUTES = 15
+
 CHAIN_THRESHOLDS = (30, 14, 7)
 # In digest mode, per-certificate alerts at or below this many days to expiry
 # still fire individually (the final-countdown "3/2/1" alerts); the routine
@@ -81,6 +92,7 @@ class OutboundMessage:
     threshold_days: int | None = None
     status: str = "pending"
     trigger_cert_id: str | None = None
+    incident_key: str = ""
     recipients: tuple[str, ...] = ()
     global_recipients: tuple[str, ...] = ()
     queued_recipients: tuple[str, ...] = ()
@@ -105,6 +117,7 @@ class OutboundMessage:
             threshold_days=alert.threshold_days,
             status=alert.status,
             trigger_cert_id=alert.trigger_cert_id,
+            incident_key=alert.dedupe_key or "",
             recipients=recipients,
             global_recipients=global_recipients,
             queued_recipients=(

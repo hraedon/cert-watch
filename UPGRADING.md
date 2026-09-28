@@ -63,6 +63,16 @@ certificate shows work as in progress but does not stop those notices because
 the migration used that leaf's one stall-suppressing lease. A new certificate,
 or the lease lapsing followed by an actual renewal, stops them.
 
+### Migration 0048
+
+Migration **0048** adds verification counters and timestamps to renewal
+attempts and a short-lived endpoint scan-claim table. Existing attempts keep
+their current state. New successful reports are verified by normal stored
+scans; the request path performs no network I/O. Configure the grace before an
+unchanged scan can raise `renewal_not_deployed` with
+`renewal_verify_grace_minutes` (5 minutes by default, accepted range 5–15).
+Rollback requires restoring the pre-migration backup.
+
 ## Upgrading from 1.1.0 to 1.1.1
 
 API-key audit actors now use the stable `api_key:<id>` format instead of the

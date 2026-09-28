@@ -19,7 +19,6 @@ from cert_watch.services.renewal_reports import (
     RenewalReportConflictError,
     RenewalReportInput,
     RenewalReportNotFoundError,
-    RenewalReportUnavailableError,
     create_report,
     expire_renewal_leases,
     list_reports,
@@ -92,17 +91,16 @@ def _create(estate, outcome="started", *, auth=None, now=NOW, **kwargs):
     )
 
 
-# The S2 subset of Opus table B. Rows needing verification or the S3 manual
-# compatibility path remain explicit unavailable rows rather than disappearing
-# from the executable design record.
+# The report-driven subset of Opus table B. Scan-driven rows live in the S4
+# verification tests; the S3 manual compatibility path remains explicit.
 NORMATIVE_TRANSITIONS = (
     (1, "none", "started", "open", "applied"),
     (2, "open", "started", "open", "duplicate"),
     (3, "open", "lease_lapses", "abandoned", "timer"),
     (4, "none", "failed", "failed", "applied"),
     (5, "failed", "failed", "failed", "no_change"),
-    (6, "any", "succeeded", "unavailable", "503"),
-    (7, "verifying", "succeeded", "unavailable", "503"),
+    (6, "any", "succeeded", "verifying", "applied"),
+    (7, "verifying", "succeeded", "verifying", "no_change"),
     (8, "verifying", "failed", "failed", "applied"),
     (15, "live", "cancelled", "unavailable", "S3-manual"),
     (16, "open", "occurred_at_before_failed", "failed", "received-order"),
@@ -146,13 +144,8 @@ def test_normative_transition_table_drives_s2_reducer(
             with _connect(estate[0]) as conn:
                 conn.execute("UPDATE renewal_attempts SET state='verifying'")
                 conn.commit()
-        response = client.post(
-            "/api/renewal-reports",
-            headers=headers,
-            json={"hostname": HOST, "port": 443, "outcome": "succeeded"},
-        )
-        assert response.status_code == 503
-        observed = ("unavailable", "503")
+        result, _ = _create(estate, "succeeded")
+        observed = (result.state, result.effect)
     elif row == 8:
         _create(estate)
         with _connect(estate[0]) as conn:
@@ -561,24 +554,37 @@ def test_idempotency_rows_for_hidden_and_deleted_hosts_are_both_replaced(estate,
     ]
 
 
-def test_service_rejects_succeeded_without_storing(estate):
+def test_service_accepts_succeeded_and_schedules_verification(estate):
     auth = _auth("key-a", "prod")
     target = resolve_target(estate[0], auth, hostname=HOST, port=443)
-    with pytest.raises(RenewalReportUnavailableError, match="verification is not available"):
-        create_report(
-            estate[0],
-            estate[5],
-            target,
-            _report("succeeded"),
-            auth=auth,
-            actor="api_key:key-a",
-            source_ip=None,
-            idempotency_key=None,
-            body_sha256="succeeded",
-            now=NOW,
-        )
+    result, replayed = create_report(
+        estate[0], estate[5], target, _report("succeeded"), auth=auth,
+        actor="api_key:key-a", source_ip=None, idempotency_key=None,
+        body_sha256="succeeded", now=NOW,
+    )
+    assert replayed is False
+    assert (result.state, result.effect) == ("verifying", "applied")
     with _connect(estate[0]) as conn:
-        assert conn.execute("SELECT count(*) FROM renewal_reports").fetchone()[0] == 0
+        row = conn.execute(
+            "SELECT state,next_check_at FROM renewal_attempts WHERE attempt_id=?",
+            (result.attempt_id,),
+        ).fetchone()
+    assert tuple(row) == ("verifying", NOW.isoformat())
+
+
+def test_succeeded_after_verified_is_stored_late_without_reopening(estate):
+    first, _ = _create(estate, "succeeded")
+    with _connect(estate[0]) as conn:
+        conn.execute(
+            "UPDATE renewal_attempts SET state='verified',next_check_at=NULL "
+            "WHERE attempt_id=?",
+            (first.attempt_id,),
+        )
+        conn.commit()
+    late, _ = _create(estate, "succeeded", now=NOW + timedelta(minutes=1))
+    assert (late.attempt_id, late.state, late.effect) == (
+        first.attempt_id, "verified", "ignored_late"
+    )
 
 
 def test_binding_is_rechecked_before_replay(estate):
@@ -1140,34 +1146,34 @@ def test_route_preserves_strict_json_rejections(report_client, raw):
     assert response.status_code == 422
 
 
-def test_succeeded_is_unavailable_and_stores_nothing(report_client):
+def test_succeeded_is_accepted_and_stored(report_client):
     client, headers, db = report_client
     response = client.post(
         "/api/renewal-reports",
         headers=headers,
         json={"hostname": HOST, "port": 443, "outcome": "succeeded"},
     )
-    assert response.status_code == 503
-    assert response.json() == {"error": "renewal verification is not available yet"}
+    assert response.status_code == 202
+    assert response.json()["state"] == "verifying"
     with _connect(db) as conn:
-        assert conn.execute("SELECT count(*) FROM renewal_reports").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM renewal_reports").fetchone()[0] == 1
 
 
-def test_succeeded_does_not_reserve_idempotency_key(report_client):
+def test_succeeded_reserves_idempotency_key(report_client):
     client, headers, _db = report_client
     keyed = {**headers, "Idempotency-Key": "deploy-7"}
-    unavailable = client.post(
+    accepted = client.post(
         "/api/renewal-reports",
         headers=keyed,
         json={"hostname": HOST, "port": 443, "outcome": "succeeded"},
     )
-    accepted = client.post(
+    conflict = client.post(
         "/api/renewal-reports",
         headers=keyed,
         json={"hostname": HOST, "port": 443, "outcome": "started"},
     )
-    assert unavailable.status_code == 503
     assert accepted.status_code == 202
+    assert conflict.status_code == 409
 
 
 def test_idempotency_hashes_the_canonical_validated_body(report_client):

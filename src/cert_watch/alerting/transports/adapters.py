@@ -40,7 +40,10 @@ class AlertAdapter(Protocol):
 def _status_color(alert_type: str) -> int:
     if alert_type == "expired":
         return 0xCC0000
-    if alert_type in ("expiry_warning", "drift", "renewal_stalled", "policy_violation"):
+    if alert_type in (
+        "expiry_warning", "drift", "renewal_stalled", "renewal_not_deployed",
+        "policy_violation",
+    ):
         return 0xE0A800
     return 0x808080
 
@@ -48,7 +51,9 @@ def _status_color(alert_type: str) -> int:
 def _status_urgency(alert_type: str) -> str:
     if alert_type == "expired":
         return "attention"
-    if alert_type in ("expiry_warning", "renewal_stalled", "policy_violation"):
+    if alert_type in (
+        "expiry_warning", "renewal_stalled", "renewal_not_deployed", "policy_violation"
+    ):
         return "warning"
     return "default"
 
@@ -60,7 +65,7 @@ def _pd_severity(alert_type: str, threshold_days: int | None) -> str:
         if threshold_days is not None and threshold_days <= 3:
             return "error"
         return "warning"
-    if alert_type == "renewal_stalled":
+    if alert_type in ("renewal_stalled", "renewal_not_deployed"):
         return "warning"
     if alert_type == "policy_violation":
         return "warning"
@@ -84,6 +89,7 @@ _ALERT_NAMES = {
     "expiry_warning": "CertExpiry",
     "drift": "CertDrift",
     "renewal_stalled": "CertRenewalStalled",
+    "renewal_not_deployed": "CertRenewalNotDeployed",
     "scan_failure": "CertScanFailure",
     "policy_violation": "CertPolicyViolation",
 }
@@ -386,10 +392,8 @@ class PagerDutyAdapter:
 
     def build(self, msg: OutboundMessage, config: WebhookConfig) -> AlertRequest:
         severity = _pd_severity(msg.severity, msg.threshold_days)
-        dedup_key = _pd_dedup_key(
-            msg.trigger_cert_id or msg.cert_id,
-            msg.severity,
-            msg.threshold_days,
+        dedup_key = msg.incident_key or _pd_dedup_key(
+            msg.trigger_cert_id or msg.cert_id, msg.severity, msg.threshold_days,
         )
         summary = msg.body
         if len(summary) > 1024:
@@ -425,8 +429,9 @@ class PagerDutyAdapter:
         hostname: str = "",
         subject: str = "",
         alert_created_at: datetime | None = None,
+        incident_key: str = "",
     ) -> AlertRequest:
-        dedup_key = _pd_dedup_key(cert_id, alert_type, threshold_days)
+        dedup_key = incident_key or _pd_dedup_key(cert_id, alert_type, threshold_days)
         if not summary:
             summary = f"cert-watch: certificate {cert_id} renewed, {alert_type} resolved"
         if len(summary) > 1024:
@@ -455,7 +460,7 @@ class PagerDutyAdapter:
 def _slack_color(alert_type: str) -> str:
     if alert_type == "expired":
         return "danger"
-    if alert_type in ("expiry_warning", "renewal_stalled"):
+    if alert_type in ("expiry_warning", "renewal_stalled", "renewal_not_deployed"):
         return "warning"
     return "good"
 
@@ -489,14 +494,17 @@ class AlertmanagerAdapter:
 
     def build(self, msg: OutboundMessage, config: WebhookConfig) -> AlertRequest:
         now = datetime.now(UTC).isoformat()
+        labels = {
+            "alertname": _alertname(msg.severity),
+            "host": msg.hostname or str(msg.cert_id),
+            "cert_subject": msg.cert_subject or str(msg.cert_id),
+            "urgency": msg.severity,
+        }
+        if msg.incident_key:
+            labels["cert_watch_dedupe_key"] = msg.incident_key
         alert_entry = {
             "status": "firing",
-            "labels": {
-                "alertname": _alertname(msg.severity),
-                "host": msg.hostname or str(msg.cert_id),
-                "cert_subject": msg.cert_subject or str(msg.cert_id),
-                "urgency": msg.severity,
-            },
+            "labels": labels,
             "annotations": {
                 "summary": msg.body,
                 "expires": str(msg.threshold_days) if msg.threshold_days is not None else "",
@@ -519,6 +527,7 @@ class AlertmanagerAdapter:
         hostname: str = "",
         subject: str = "",
         alert_created_at: datetime | None = None,
+        incident_key: str = "",
     ) -> AlertRequest:
         if not summary:
             summary = f"cert-watch: certificate {cert_id} renewed, {alert_type} resolved"
@@ -528,14 +537,17 @@ class AlertmanagerAdapter:
         else:
             starts_at = (now - timedelta(milliseconds=1)).isoformat()
         ends_at = now.isoformat()
+        labels = {
+            "alertname": _alertname(alert_type),
+            "host": hostname or str(cert_id),
+            "cert_subject": subject or str(cert_id),
+            "urgency": alert_type,
+        }
+        if incident_key:
+            labels["cert_watch_dedupe_key"] = incident_key
         alert_entry = {
             "status": "resolved",
-            "labels": {
-                "alertname": _alertname(alert_type),
-                "host": hostname or str(cert_id),
-                "cert_subject": subject or str(cert_id),
-                "urgency": alert_type,
-            },
+            "labels": labels,
             "annotations": {
                 "summary": summary,
                 "expires": str(threshold_days) if threshold_days is not None else "",

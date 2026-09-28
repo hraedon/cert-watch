@@ -50,6 +50,7 @@ FIELD_DOCS: dict[str, tuple[str, str]] = {
     "sched_min": ("Scheduling and retention", "Minute of the daily scan."),
     "renewal_window_days": ("Scheduling and retention", "A certificate this close to expiry with no successor raises a *renewal stalled* alert. `0` disables it."),
     "renewal_report_lease_hours": ("Scheduling and retention", "Hours a newly opened renewal report attempt remains active. Repeated reports never extend the stored lease."),
+    "renewal_verify_grace_minutes": ("Scheduling and retention", "Minutes after a successful renewal report before an unchanged scan can raise a renewal-not-deployed alert (5–15)."),
     "history_retention_days": ("Scheduling and retention", "Days of per-scan certificate history to keep. `0` keeps it forever."),
     "alert_retention_days": ("Scheduling and retention", "Days of delivered alerts to keep; undelivered ones are kept four times as long. `0` keeps them forever."),
     "audit_retention_days": ("Scheduling and retention", "Days of audit log to keep. `0` keeps it forever."),

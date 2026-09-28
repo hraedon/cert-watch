@@ -150,6 +150,48 @@ def _record_scan_failure(
             logger.warning("deferred scan-failure webhook submit failed", exc_info=True)
 
 
+def _record_verification_blocked(
+    db_path: str | Path,
+    hostname: str,
+    port: int,
+    *,
+    started_at: datetime,
+    settings: Settings,
+) -> None:
+    try:
+        from cert_watch.renewal_verification import mark_verification_blocked
+
+        mark_verification_blocked(
+            db_path, hostname, port, started_at=started_at, settings=settings
+        )
+    except Exception:
+        logger.exception("could not defer renewal verification for %s:%d", hostname, port)
+
+
+def _record_verification_success(
+    db_path: str | Path,
+    hostname: str,
+    port: int,
+    fingerprint: str,
+    *,
+    started_at: datetime,
+    settings: Settings,
+) -> None:
+    try:
+        from cert_watch.renewal_verification import evaluate_after_scan
+
+        evaluate_after_scan(
+            db_path,
+            hostname,
+            port,
+            fingerprint,
+            started_at=started_at,
+            settings=settings,
+        )
+    except Exception:
+        logger.exception("renewal verification failed for %s:%d", hostname, port)
+
+
 def _scoped_tags(auth: Any, tags: str) -> str:
     scope = writable_scope_tags(auth)
     return format_tags(merge_tags(tags, ",".join(scope or ())))
@@ -210,6 +252,7 @@ async def _scan_and_store(
     scope_guard: Callable[[Any], None] | None = None,
     _store_error_types: tuple[type[BaseException], ...] = (Exception,),
 ) -> ScanResult:
+    started_at = datetime.now(UTC)
     result = await scan_host_async(
         hostname,
         port,
@@ -233,6 +276,9 @@ async def _scan_and_store(
             source=source,
             scope_guard=scope_guard,
         )
+        _record_verification_blocked(
+            db_path, hostname, port, started_at=started_at, settings=settings
+        )
         return ScanResult("scan_error", result.error_message)
     try:
         leaf_id = await store_scanned_async(
@@ -254,6 +300,9 @@ async def _scan_and_store(
             db_path,
             ScanHistory(hostname=hostname, port=port, status="failure", error_message=message),
         )
+        _record_verification_blocked(
+            db_path, hostname, port, started_at=started_at, settings=settings
+        )
         return ScanResult("store_error", message)
     if not leaf_id:
         message = "store failed: transaction rolled back"
@@ -261,8 +310,19 @@ async def _scan_and_store(
             db_path,
             ScanHistory(hostname=hostname, port=port, status="failure", error_message=message),
         )
+        _record_verification_blocked(
+            db_path, hostname, port, started_at=started_at, settings=settings
+        )
         return ScanResult("store_error", message)
     record_scan_history(db_path, ScanHistory(hostname=hostname, port=port, status="success"))
+    _record_verification_success(
+        db_path,
+        hostname,
+        port,
+        result.leaf.fingerprint_sha256,
+        started_at=started_at,
+        settings=settings,
+    )
     return ScanResult("success")
 
 

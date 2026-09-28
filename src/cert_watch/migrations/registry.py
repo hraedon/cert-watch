@@ -202,6 +202,15 @@ from cert_watch.migrations.m0047_renewal_status_leases import (
 from cert_watch.migrations.m0047_renewal_status_leases import (
     upgrade as renewal_status_leases_upgrade,
 )
+from cert_watch.migrations.m0048_renewal_verification import (
+    DESCRIPTION as renewal_verification_description,
+)
+from cert_watch.migrations.m0048_renewal_verification import (
+    MIGRATION_ID as renewal_verification_id,
+)
+from cert_watch.migrations.m0048_renewal_verification import (
+    upgrade as renewal_verification_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -361,4 +370,9 @@ runner.register(
     renewal_status_leases_id,
     renewal_status_leases_description,
     renewal_status_leases_upgrade,
+)
+runner.register(
+    renewal_verification_id,
+    renewal_verification_description,
+    renewal_verification_upgrade,
 )

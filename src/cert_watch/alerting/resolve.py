@@ -40,12 +40,12 @@ def resolve_webhook_for_renewed_cert(
         cert_alerts = alert_repo.list_for_cert(old_cert_id)
     else:
         cert_alerts = pending_alerts
-    seen: set[tuple[str, int | None]] = set()
+    seen: set[str] = set()
     resolved = 0
     for alert in cert_alerts:
         if alert.status != "sent":
             continue
-        key = (alert.alert_type, alert.threshold_days)
+        key = alert.dedupe_key or f"{alert.alert_type}:{alert.threshold_days}"
         if key in seen:
             continue
         seen.add(key)
@@ -60,6 +60,7 @@ def resolve_webhook_for_renewed_cert(
             hostname=alert.hostname,
             subject=alert.subject,
             alert_created_at=alert.created_at,
+            incident_key=alert.dedupe_key or "",
         ):
             resolved += 1
     return resolved

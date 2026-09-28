@@ -168,6 +168,7 @@ def send_webhook_resolve(
     hostname: str = "",
     subject: str = "",
     alert_created_at: datetime | None = None,
+    incident_key: str = "",
 ) -> bool:
     """Send a resolve event through the appropriate adapter.
 
@@ -188,6 +189,7 @@ def send_webhook_resolve(
             cert_id, alert_type, threshold_days, config,
             summary=summary, hostname=hostname, subject=subject,
             alert_created_at=alert_created_at,
+            incident_key=incident_key,
         )
         resp = ssrf_safe_urlopen(
             req.url,

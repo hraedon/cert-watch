@@ -97,6 +97,10 @@ FIELD_SPECS: dict[str, FieldSpec] = {
         ("CERT_WATCH_RENEWAL_REPORT_LEASE_HOURS",),
         "renewal_report_lease_hours", "int", 24, 1, 168, "reject",
     ),
+    "renewal_verify_grace_minutes": FieldSpec(
+        ("CERT_WATCH_RENEWAL_VERIFY_GRACE_MINUTES",),
+        "renewal_verify_grace_minutes", "int", 5, 5, 15, "reject",
+    ),
     "check_revocation": FieldSpec(
         ("CERT_WATCH_CHECK_REVOCATION",), "check_revocation", "bool", False
     ),

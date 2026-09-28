@@ -140,6 +140,10 @@ def test_expiry_digest_runs_each_alert_cycle_and_lets_claims_dedupe(
         "cert_watch.alerting.rules.renewal.evaluate_renewal_window", MagicMock()
     )
     monkeypatch.setattr(
+        "cert_watch.alerting.rules.renewal_reports.evaluate_renewal_report_alerts",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
         "cert_watch.alerting.dispatch.process_pending",
         MagicMock(
             side_effect=lambda *args, **kwargs: {
@@ -178,6 +182,10 @@ def test_all_digest_kinds_share_the_alert_cycle_deadline(monkeypatch, tmp_path):
     monkeypatch.setattr("cert_watch.alerting.rules.expiry.evaluate_all_certs", MagicMock())
     monkeypatch.setattr(
         "cert_watch.alerting.rules.renewal.evaluate_renewal_window", MagicMock()
+    )
+    monkeypatch.setattr(
+        "cert_watch.alerting.rules.renewal_reports.evaluate_renewal_report_alerts",
+        MagicMock(),
     )
 
     def process(*args, **kwargs):
