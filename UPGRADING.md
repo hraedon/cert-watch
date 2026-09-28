@@ -61,6 +61,19 @@ periods, out-of-order observations, a later observation that supplies missing
 certificate validity, retention pruning, and every history update or delete
 still invalidate or recompute the affected endpoint.
 
+### Migration 0045
+
+Migration **0045** adds an explicit binding and bound-tag list to API keys.
+Every existing `read`, `write` and `admin` key is assigned `binding='all'`, so
+its access does not change. New `renewal-report` keys must deliberately choose
+all endpoints or at least one host tag.
+
+Renewal-report key hashes use a format older binaries do not recognize, so an
+older cert-watch rejects those credentials. Database rollback is not
+supported: stop cert-watch and restore the pre-migration backup before
+starting an older binary. Do not point an older binary at the migrated
+database.
+
 ## Upgrading from 1.0.4 to 1.1.0
 
 1.1.0 describes every endpoint with four separate facts -- certificate

@@ -16,6 +16,7 @@ Scopes map onto the Plan 035 RBAC roles:
 - ``read``  → viewer  (cert:read)
 - ``write`` → operator (cert:read, cert:write)
 - ``admin`` → admin    (all permissions, incl. settings:admin)
+- ``renewal-report`` → report submission/readback only (no RBAC permissions)
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import hmac
 import logging
 import os
 import secrets
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -33,10 +35,15 @@ from pathlib import Path
 
 from cert_watch.database.connection import _connect
 from cert_watch.security import SecurityContext
+from cert_watch.tags import format_tags, parse_tags
 
 logger = logging.getLogger("cert_watch.database.api_keys")
 
-VALID_SCOPES = ("read", "write", "admin")
+VALID_SCOPES = ("read", "write", "admin", "renewal-report")
+VALID_BINDINGS = ("all", "tags")
+RENEWAL_REPORT_SCOPE = "renewal-report"
+MAX_RENEWAL_REPORT_TAG_LENGTH = 64
+MAX_RENEWAL_REPORT_TAGS = 20
 
 # Raw tokens are prefixed so they are recognisable in logs/configs and so a
 # bearer token can be told apart from other Authorization schemes at a glance.
@@ -44,6 +51,10 @@ _TOKEN_PREFIX = "cwk_"
 
 # Prefix for peppered HMAC hashes (new format).
 _HMAC_PREFIX = "hmac:"
+
+# Deliberately unknown to the 1.1.x verifier. A downgraded binary therefore
+# cannot reinterpret a renewal-report key as a more powerful legacy scope.
+_RENEWAL_REPORT_HMAC_PREFIX = "rr-hmac:"
 
 # The pepper used by releases before API-key hashing was wired to the
 # application SecurityContext. It remains a verification-only fallback so
@@ -58,6 +69,8 @@ class ApiKeyEntry:
     id: str
     name: str
     scope: str
+    binding: str
+    bound_tags: tuple[str, ...]
     created_at: datetime
     last_used_at: datetime | None = None
     revoked: bool = False
@@ -70,6 +83,8 @@ class ApiKeyAuth:
     id: str
     name: str
     scope: str
+    binding: str
+    bound_tags: tuple[str, ...]
 
 
 @lru_cache(maxsize=16)
@@ -95,7 +110,9 @@ def _get_pepper() -> bytes:
     return _pepper_from_env_source(source, os.environ[source])
 
 
-def hash_token(raw_token: str, *, pepper: bytes | None = None) -> str:
+def hash_token(
+    raw_token: str, *, pepper: bytes | None = None, prefix: str = _HMAC_PREFIX
+) -> str:
     """Return the peppered HMAC-SHA256 of a raw token (what we store and look up by).
 
     Uses HMAC-SHA256 with a server-side pepper so a DB-only leak cannot
@@ -105,7 +122,7 @@ def hash_token(raw_token: str, *, pepper: bytes | None = None) -> str:
     if pepper is None:
         pepper = _get_pepper()
     mac = hmac.new(pepper, raw_token.encode("utf-8"), hashlib.sha256).hexdigest()
-    return f"{_HMAC_PREFIX}{mac}"
+    return f"{prefix}{mac}"
 
 
 def _hash_token_legacy(raw_token: str) -> str:
@@ -116,6 +133,26 @@ def _hash_token_legacy(raw_token: str) -> str:
 def generate_token() -> str:
     """Generate a new opaque raw token."""
     return _TOKEN_PREFIX + secrets.token_urlsafe(32)
+
+
+def _validate_renewal_report_tags(tags: list[str] | tuple[str, ...]) -> None:
+    if len(tags) > MAX_RENEWAL_REPORT_TAGS:
+        raise ValueError(
+            f"renewal-report keys may bind at most {MAX_RENEWAL_REPORT_TAGS} tags"
+        )
+    for tag in tags:
+        normalized = unicodedata.normalize("NFKC", tag).strip()
+        visible = any(
+            not char.isspace() and unicodedata.category(char) not in {"Cc", "Cf", "Cs"}
+            for char in normalized
+        )
+        if not visible:
+            raise ValueError("renewal-report tags must contain visible characters")
+        if len(normalized) > MAX_RENEWAL_REPORT_TAG_LENGTH:
+            raise ValueError(
+                "renewal-report tags may contain at most "
+                f"{MAX_RENEWAL_REPORT_TAG_LENGTH} characters"
+            )
 
 
 class SqliteApiKeyRepository:
@@ -142,35 +179,98 @@ class SqliteApiKeyRepository:
             candidate = hash_token(raw_token, pepper=pepper)
             if candidate not in candidates:
                 candidates.append(candidate)
+            report_candidate = hash_token(
+                raw_token, pepper=pepper, prefix=_RENEWAL_REPORT_HMAC_PREFIX
+            )
+            if report_candidate not in candidates:
+                candidates.append(report_candidate)
         candidates.append(_hash_token_legacy(raw_token))
         return candidates
 
-    def create_key(self, name: str, scope: str) -> tuple[ApiKeyEntry, str]:
+    def _renewal_report_candidate_hashes(self, raw_token: str) -> list[str]:
+        """Return only hashes from the downgrade-safe report-key family."""
+        peppers = (self._pepper, _get_pepper(), _LEGACY_DEFAULT_PEPPER)
+        candidates: list[str] = []
+        for pepper in peppers:
+            candidate = hash_token(
+                raw_token, pepper=pepper, prefix=_RENEWAL_REPORT_HMAC_PREFIX
+            )
+            if candidate not in candidates:
+                candidates.append(candidate)
+        return candidates
+
+    def create_key(
+        self,
+        name: str,
+        scope: str,
+        *,
+        binding: str | None = None,
+        bound_tags: str | None = None,
+    ) -> tuple[ApiKeyEntry, str]:
         """Create a key. Returns (stored entry, raw token shown once)."""
         if scope not in VALID_SCOPES:
             raise ValueError(f"scope must be one of {VALID_SCOPES}")
         if not name or not name.strip():
             raise ValueError("name is required")
+        tags = parse_tags(bound_tags)
+        if scope == RENEWAL_REPORT_SCOPE:
+            if binding not in VALID_BINDINGS:
+                raise ValueError("renewal-report keys require an explicit binding")
+            if binding == "tags" and not tags:
+                raise ValueError("tag-bound renewal-report keys require at least one tag")
+            if binding == "all" and tags:
+                raise ValueError("all-bound renewal-report keys cannot include tags")
+            _validate_renewal_report_tags(tags)
+        else:
+            if binding not in (None, "", "all") or tags:
+                raise ValueError(f"{scope} keys must use binding='all'")
+            binding = "all"
+            tags = []
+        normalized_tags = format_tags(tags)
         raw = generate_token()
         key_id = uuid.uuid4().hex
         created = datetime.now(UTC)
         with _connect(self.db_path) as conn:
             conn.execute(
-                "INSERT INTO api_keys (id, key_hash, name, scope, created_at, revoked)"
-                " VALUES (?, ?, ?, ?, ?, 0)",
+                "INSERT INTO api_keys "
+                "(id, key_hash, name, scope, binding, bound_tags, created_at, revoked)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
                 (
                     key_id,
-                    hash_token(raw, pepper=self._pepper),
+                    hash_token(
+                        raw,
+                        pepper=self._pepper,
+                        prefix=(
+                            _RENEWAL_REPORT_HMAC_PREFIX
+                            if scope == RENEWAL_REPORT_SCOPE
+                            else _HMAC_PREFIX
+                        ),
+                    ),
                     name.strip(),
                     scope,
+                    binding,
+                    normalized_tags,
                     created.isoformat(),
                 ),
             )
             conn.commit()
-        entry = ApiKeyEntry(id=key_id, name=name.strip(), scope=scope, created_at=created)
+        entry = ApiKeyEntry(
+            id=key_id,
+            name=name.strip(),
+            scope=scope,
+            binding=binding,
+            bound_tags=tuple(tags),
+            created_at=created,
+        )
         return entry, raw
 
-    def verify_key(self, raw_token: str) -> ApiKeyAuth | None:
+    def verify_key(
+        self,
+        raw_token: str,
+        *,
+        renewal_report_only: bool = False,
+        record_use: bool = True,
+    ) -> ApiKeyAuth | None:
         """Return the auth result for a valid, non-revoked token, else None.
 
         Updates ``last_used_at`` as a side effect on success.  Transparently
@@ -179,12 +279,21 @@ class SqliteApiKeyRepository:
         """
         if not raw_token:
             return None
-        candidates = self._candidate_hashes(raw_token)
-        new_hash = candidates[0]
+        candidates = (
+            self._renewal_report_candidate_hashes(raw_token)
+            if renewal_report_only
+            else self._candidate_hashes(raw_token)
+        )
+        new_hash = hash_token(raw_token, pepper=self._pepper)
+        new_report_hash = hash_token(
+            raw_token,
+            pepper=self._pepper,
+            prefix=_RENEWAL_REPORT_HMAC_PREFIX,
+        )
         placeholders = ", ".join("?" for _ in candidates)
         with _connect(self.db_path) as conn:
             rows = conn.execute(
-                "SELECT id, name, scope, key_hash, revoked FROM api_keys"
+                "SELECT id, name, scope, binding, bound_tags, key_hash, revoked FROM api_keys"
                 f" WHERE key_hash IN ({placeholders})",
                 candidates,
             ).fetchall()
@@ -195,16 +304,48 @@ class SqliteApiKeyRepository:
             )
             if row is None or row["revoked"]:
                 return None
-            auth = ApiKeyAuth(id=row["id"], name=row["name"], scope=row["scope"])
+            if renewal_report_only and row["scope"] != RENEWAL_REPORT_SCOPE:
+                return None
+            tags = tuple(parse_tags(row["bound_tags"]))
+            auth = ApiKeyAuth(
+                id=row["id"], name=row["name"], scope=row["scope"],
+                binding=row["binding"], bound_tags=tags,
+            )
             # A corrupt scope is still returned so the authentication boundary
             # can log and reject the specific key, but it must not look used or
             # receive a hash upgrade for a request that authorization refuses.
             if row["scope"] not in VALID_SCOPES:
                 return auth
+            if row["scope"] == RENEWAL_REPORT_SCOPE:
+                if not row["key_hash"].startswith(_RENEWAL_REPORT_HMAC_PREFIX):
+                    return None
+                if row["binding"] not in VALID_BINDINGS:
+                    return None
+                if row["binding"] == "tags" and not tags:
+                    return None
+                if row["binding"] == "all" and tags:
+                    return None
+                try:
+                    _validate_renewal_report_tags(tags)
+                except ValueError:
+                    return None
+            elif (
+                row["key_hash"].startswith(_RENEWAL_REPORT_HMAC_PREFIX)
+                or row["binding"] != "all"
+                or tags
+            ):
+                return None
+            if not record_use:
+                return auth
             now_iso = datetime.now(UTC).isoformat()
             updates = ["last_used_at = ?"]
             params: list[str] = [now_iso]
-            if row["key_hash"] != new_hash:
+            desired_hash = (
+                new_report_hash
+                if row["scope"] == RENEWAL_REPORT_SCOPE
+                else new_hash
+            )
+            if row["key_hash"] != desired_hash:
                 # Verified under a non-current hash: either an earlier pepper or
                 # the pre-pepper unkeyed SHA-256. Surface it so an operator can
                 # see which keys still trail the current signing material — the
@@ -212,7 +353,9 @@ class SqliteApiKeyRepository:
                 # here is worth rotating.
                 legacy_kind = (
                     "an earlier pepper"
-                    if row["key_hash"].startswith(_HMAC_PREFIX)
+                    if row["key_hash"].startswith(
+                        (_HMAC_PREFIX, _RENEWAL_REPORT_HMAC_PREFIX)
+                    )
                     else "an unkeyed SHA-256 hash"
                 )
                 logger.warning(
@@ -224,7 +367,7 @@ class SqliteApiKeyRepository:
                     legacy_kind,
                 )
                 updates.append("key_hash = ?")
-                params.append(new_hash)
+                params.append(desired_hash)
             params.append(row["id"])
             conn.execute(
                 f"UPDATE api_keys SET {', '.join(updates)} WHERE id = ?",
@@ -246,7 +389,7 @@ class SqliteApiKeyRepository:
     def list_keys(self, *, include_revoked: bool = False) -> list[ApiKeyEntry]:
         """List keys (never exposes the hash or raw token)."""
         sql = (
-            "SELECT id, name, scope, created_at, last_used_at, revoked"
+            "SELECT id, name, scope, binding, bound_tags, created_at, last_used_at, revoked"
             " FROM api_keys"
         )
         if not include_revoked:
@@ -259,6 +402,8 @@ class SqliteApiKeyRepository:
                 id=r["id"],
                 name=r["name"],
                 scope=r["scope"],
+                binding=r["binding"],
+                bound_tags=tuple(parse_tags(r["bound_tags"])),
                 created_at=datetime.fromisoformat(r["created_at"]),
                 last_used_at=(
                     datetime.fromisoformat(r["last_used_at"]) if r["last_used_at"] else None

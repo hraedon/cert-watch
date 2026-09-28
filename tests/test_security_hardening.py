@@ -119,6 +119,31 @@ def test_metrics_token_check_allows_missing_token_configuration(monkeypatch):
     assert request_context.check_metrics_token(request) is True
 
 
+@pytest.mark.parametrize(
+    "authorization, expected",
+    [
+        ("Bearer scraper-secret", True),
+        ("bearer scraper-secret", False),
+        ("Bearer  scraper-secret", False),
+        ("Bearer scraper-secret ", False),
+        ("Basic scraper-secret", False),
+    ],
+)
+def test_metrics_token_keeps_legacy_authorization_parsing(
+    monkeypatch, authorization, expected,
+):
+    from starlette.requests import Request
+
+    import cert_watch.auth.request_context as request_context
+
+    monkeypatch.setattr(request_context, "_METRICS_TOKEN", "scraper-secret")
+    request = Request({
+        "type": "http",
+        "headers": [(b"authorization", authorization.encode("ascii"))],
+    })
+    assert request_context.check_metrics_token(request) is expected
+
+
 def test_open_mode_rejects_untrusted_host_header(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app, base_url="http://localhost") as client:

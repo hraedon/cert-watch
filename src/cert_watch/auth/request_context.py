@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+import re
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -36,6 +37,55 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger("cert_watch.auth.request_context")
+
+
+class BearerCredentials(NamedTuple):
+    """A strictly parsed Authorization header.
+
+    cert-watch API keys accept exactly one ``Authorization`` field containing
+    an exact-case ``Bearer`` scheme, one ASCII space, and a whitespace-free
+    token. The metrics token retains its older, independent parsing contract.
+    """
+
+    token: str | None = None
+    malformed: bool = False
+
+
+def parse_bearer_credentials(request: Request) -> BearerCredentials:
+    """Return the single strict bearer token, or classify a malformed header."""
+    values = [
+        value
+        for name, value in request.scope.get("headers", ())
+        if name.lower() == b"authorization"
+    ]
+    if not values:
+        return BearerCredentials()
+    if len(values) != 1:
+        return BearerCredentials(malformed=True)
+    # ASGI header values are bytes and Latin-1 maps every byte, so decoding is
+    # total; syntax validation below decides whether the value is acceptable.
+    value = values[0].decode("latin-1")
+    if not value.startswith("Bearer "):
+        return BearerCredentials(malformed=True)
+    token = value[7:]
+    if not token or any(char.isspace() for char in token):
+        return BearerCredentials(malformed=True)
+    return BearerCredentials(token=token)
+
+
+# A cert-watch key is the credential itself (optionally after a scheme word),
+# never a substring: a JWT or metrics token that happens to contain "cwk_"
+# must keep origin behaviour instead of tripping the strict parser.
+_CERT_WATCH_KEY_CREDENTIAL = re.compile(rb"^\s*(?:\S+\s+)?cwk_", re.IGNORECASE)
+
+
+def _contains_cert_watch_key(request: Request) -> bool:
+    """Return whether any raw Authorization value presents a ``cwk_`` key."""
+    return any(
+        name.lower() == b"authorization"
+        and _CERT_WATCH_KEY_CREDENTIAL.match(value) is not None
+        for name, value in request.scope.get("headers", ())
+    )
 
 
 def _is_auth_enabled(request: Request) -> bool:
@@ -99,10 +149,11 @@ def check_metrics_token(request: Request) -> bool:
     metrics_token = _metrics_token(request)
     if not metrics_token:
         return True
+    # This deliberately preserves the metrics credential contract from before
+    # renewal-report keys introduced their stricter, capability-specific parser.
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-        return hmac.compare_digest(token, metrics_token)
+        return hmac.compare_digest(auth_header[7:], metrics_token)
     return False
 
 
@@ -120,9 +171,31 @@ _API_KEY_SCOPE_ROLE = {
     "admin": ROLE_ADMIN,
 }
 
+_RENEWAL_REPORT_SCOPE = "renewal-report"
+_RENEWAL_REPORT_ROUTES = frozenset({
+    ("GET", "/api/renewal-reports"),
+    ("POST", "/api/renewal-reports"),
+})
+_RENEWAL_REPORT_FORBIDDEN = "forbidden for this key"
+
+
+def _is_renewal_report_route(request: Request) -> bool:
+    # S2 must enforce bindings against this same raw-path allowlist. Deploying
+    # report routes below a path prefix/root_path is not supported yet: the raw
+    # request path will not match and the capability fails closed.
+    raw_path = request.scope.get("raw_path")
+    if not isinstance(raw_path, bytes):
+        raw_path = request.scope.get("path", "").encode("utf-8")
+    return (request.method, raw_path) in {
+        (method, path.encode("ascii")) for method, path in _RENEWAL_REPORT_ROUTES
+    }
+
 
 def authenticate_api_key(
-    request: Request, db_path: str | Path | None
+    request: Request,
+    db_path: str | Path | None,
+    *,
+    renewal_report_only: bool = False,
 ) -> AuthContext | None:
     """Authenticate an ``Authorization: Bearer cwk_…`` API key.
 
@@ -132,28 +205,53 @@ def authenticate_api_key(
     path), and returns the context. Returns ``None`` when no valid key is
     presented — leaving cookie-session auth and metrics-token auth untouched.
     """
-    header = request.headers.get("authorization", "")
-    if not header.startswith("Bearer "):
+    credentials = parse_bearer_credentials(request)
+    token = credentials.token
+    if token is None:
         return None
-    token = header[7:].strip()
     if not token.startswith("cwk_") or not db_path:
         return None
     from cert_watch.database.api_keys import SqliteApiKeyRepository
 
-    result = SqliteApiKeyRepository(
-        db_path, security=_request_security(request)
-    ).verify_key(token)
+    repo = SqliteApiKeyRepository(db_path, security=_request_security(request))
+    # Verification is deliberately side-effect free until route authorization
+    # succeeds. A report credential refused by the capability allowlist must
+    # not gain last_used_at or a signing-pepper hash upgrade.
+    result = repo.verify_key(
+        token, renewal_report_only=renewal_report_only, record_use=False
+    )
     if result is None:
         return None
+    if result.scope == _RENEWAL_REPORT_SCOPE:
+        if not _is_renewal_report_route(request):
+            request.state.api_key_forbidden = True
+            return None
+        if repo.verify_key(
+            token, renewal_report_only=True, record_use=True
+        ) is None:
+            return None
+        ctx = AuthContext.renewal_report_key(
+            result.name,
+            principal_id=result.id,
+            binding=result.binding,
+            bound_tags=result.bound_tags,
+        )
+        request.scope["auth_user"] = result.name
+        request.state.auth_context = ctx
+        request.state.api_key_auth = True
+        return ctx
     role = _API_KEY_SCOPE_ROLE.get(result.scope)
     if role is None:
         logger.warning("rejecting API key %s with unknown scope", result.id)
+        return None
+    if repo.verify_key(token, record_use=True) is None:
         return None
     ctx = AuthContext.from_tier(
         result.name,
         tier=role,
         roles=[role],
         principal_id=result.id,
+        principal_kind="api-key",
     )
     request.scope["auth_user"] = result.name
     request.state.auth_context = ctx
@@ -213,6 +311,15 @@ def resolve_session_user(request: Request) -> SessionUser:
     Attaches the AuthContext on success. ``error`` is ``"unauthenticated"``
     when neither credential is valid.
     """
+    if getattr(request.state, "api_key_forbidden", False):
+        return SessionUser(error=_RENEWAL_REPORT_FORBIDDEN, api_key_auth=True)
+    existing = getattr(request.state, "auth_context", None)
+    if (
+        existing is not None
+        and getattr(existing, "principal_kind", "") == _RENEWAL_REPORT_SCOPE
+    ):
+        return SessionUser(user=existing.username, api_key_auth=True)
+
     token = request.cookies.get(SESSION_COOKIE, "")
     db_path = _request_db_path(request)
     info = decode_session(token, _request_security(request))
@@ -230,6 +337,8 @@ def resolve_session_user(request: Request) -> SessionUser:
     api_ctx = authenticate_api_key(request, db_path)
     if api_ctx is not None:
         return SessionUser(user=api_ctx.username, api_key_auth=True)
+    if getattr(request.state, "api_key_forbidden", False):
+        return SessionUser(error=_RENEWAL_REPORT_FORBIDDEN, api_key_auth=True)
     return SessionUser(error="unauthenticated")
 
 
@@ -242,10 +351,34 @@ async def auth_middleware(
     The /api/* data routes require auth: unauthenticated API requests get a
     401, unauthenticated UI requests redirect to /login.
     """
+    path = request.url.path
+    # Renewal-report keys are capability credentials with a two-route
+    # allowlist. Inspect them before public-path routing so every other path,
+    # including static files and unknown routes, has one indistinguishable
+    # refusal. Existing key scopes retain their normal route behaviour.
+    credentials = BearerCredentials()
+    if _contains_cert_watch_key(request):
+        credentials = parse_bearer_credentials(request)
+        if credentials.malformed or not (
+            credentials.token and credentials.token.startswith("cwk_")
+        ):
+            return JSONResponse(
+                content={"error": "malformed authorization"}, status_code=401
+            )
+        api_ctx = authenticate_api_key(
+            request, _request_db_path(request), renewal_report_only=True
+        )
+        if getattr(request.state, "api_key_forbidden", False):
+            return JSONResponse(
+                content={"error": _RENEWAL_REPORT_FORBIDDEN}, status_code=403
+            )
+        if (
+            api_ctx is not None
+            and getattr(api_ctx, "principal_kind", "") == _RENEWAL_REPORT_SCOPE
+        ):
+            return await call_next(request)
     if not _is_auth_enabled(request):
         return await call_next(request)
-
-    path = request.url.path
     if is_public_path(path, request):
         return await call_next(request)
 
@@ -253,8 +386,9 @@ async def auth_middleware(
         return await call_next(request)
 
     # Unauthenticated
-    authorization = request.headers.get("authorization", "")
-    cert_watch_key_presented = authorization.startswith("Bearer cwk_")
+    cert_watch_key_presented = bool(
+        credentials.token and credentials.token.startswith("cwk_")
+    )
     if (
         cert_watch_key_presented
         or path.rstrip("/") == "/metrics"

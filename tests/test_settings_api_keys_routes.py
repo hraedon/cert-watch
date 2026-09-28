@@ -141,6 +141,8 @@ def test_create_api_key_happy_path(reload_app, tmp_path, monkeypatch):
     detail = json.loads(audit["detail"])
     assert detail["name"] == "deploy-key"
     assert detail["scope"] == "write"
+    assert detail["binding"] == "all"
+    assert detail["bound_tags"] == []
     # Security property: the raw token must never appear in the audit row.
     assert "cwk_" not in audit["detail"]
     assert audit["source_ip"] is not None
@@ -235,6 +237,91 @@ def test_create_api_key_invalid_scope(reload_app, tmp_path, monkeypatch):
     assert "Invalid scope" in r.text
     repo = SqliteApiKeyRepository(db)
     assert len(repo.list_keys()) == 0
+
+
+def test_create_renewal_report_key_requires_and_displays_binding(
+    reload_app, tmp_path, monkeypatch,
+):
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    db = _seed_local_admin(tmp_path)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        missing = client.post(
+            "/settings/api-keys",
+            data={"name": "renewal", "scope": "renewal-report"},
+        )
+        empty_tags = client.post(
+            "/settings/api-keys",
+            data={
+                "name": "renewal", "scope": "renewal-report",
+                "binding": "tags", "bound_tags": " , ",
+            },
+        )
+        created = client.post(
+            "/settings/api-keys",
+            data={
+                "name": "renewal", "scope": "renewal-report",
+                "binding": "tags", "bound_tags": " Prod,edge,prod ",
+            },
+        )
+
+    assert "explicit binding" in missing.text
+    assert "at least one tag" in empty_tags.text
+    assert created.status_code == 200
+    assert "renewal-report" in created.text
+    assert "host tags: Prod, edge" in created.text
+    entry = SqliteApiKeyRepository(db).list_keys()[0]
+    assert (entry.binding, entry.bound_tags) == ("tags", ("Prod", "edge"))
+
+    audit = _read_audit_rows(db)[0]
+    detail = json.loads(audit["detail"])
+    assert detail["scope"] == "renewal-report"
+    assert detail["binding"] == "tags"
+    assert detail["bound_tags"] == ["Prod", "edge"]
+
+
+def test_corrupt_key_binding_is_displayed_as_disabled(
+    reload_app, tmp_path, monkeypatch,
+):
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    db = _seed_local_admin(tmp_path)
+    repo = SqliteApiKeyRepository(db)
+    entry, _ = repo.create_key("corrupt", "read")
+    from cert_watch.database.connection import _connect
+
+    with _connect(db) as conn:
+        conn.execute("PRAGMA ignore_check_constraints = ON")
+        conn.execute(
+            "UPDATE api_keys SET binding = 'future' WHERE id = ?", (entry.id,)
+        )
+        conn.commit()
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        response = client.get("/settings/api-keys")
+
+    assert response.status_code == 200
+    assert "invalid binding (key disabled)" in response.text
+
+
+def test_create_existing_scope_refuses_tag_binding(reload_app, tmp_path, monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    db = _seed_local_admin(tmp_path)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        response = client.post(
+            "/settings/api-keys",
+            data={
+                "name": "reader", "scope": "read",
+                "binding": "tags", "bound_tags": "prod",
+            },
+        )
+    assert response.status_code == 200
+    assert "must use binding" in response.text
+    assert SqliteApiKeyRepository(db).list_keys() == []
 
 
 def test_create_api_key_default_scope_is_read(reload_app, tmp_path, monkeypatch):

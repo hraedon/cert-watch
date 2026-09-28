@@ -15,11 +15,11 @@
         each is shown exactly once, at creation.
       </div>
     </div>
-    <div class="cw-note t-warn">
+    <div class="cw-note">
       {{ icons.svg_icon('alert', 14) }}
       <div>
-        API keys are not tag-scoped: any key sees the whole fleet. Scope-limited
-        keys are tracked as follow-up work.
+        Read, write, and admin keys cover the whole fleet. Renewal-report keys
+        are limited to reporting routes and can be bound to host tags.
       </div>
     </div>
   </div>
@@ -59,7 +59,25 @@
             <option value="read">read — GET only</option>
             <option value="write">write — create / update</option>
             <option value="admin">admin — full, incl. settings</option>
+            <option value="renewal-report">renewal-report — report renewals only</option>
           </select>
+        </div>
+        <div class="cw-field" role="radiogroup" aria-labelledby="api_key_binding_label"
+             data-testid="api-key-binding-options">
+          <span class="cw-label" id="api_key_binding_label">Renewal-report binding</span>
+          <label class="cw-check">
+            <input type="radio" name="binding" value="all"> All endpoints
+          </label>
+          <label class="cw-check">
+            <input type="radio" name="binding" value="tags"> Selected host tags
+          </label>
+          <span class="cw-hint">Required only for renewal-report keys; neither choice is preselected.</span>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="api_key_bound_tags">Host tags</label>
+          <input class="cw-input" type="text" id="api_key_bound_tags" name="bound_tags"
+                 placeholder="production, edge" data-testid="api-key-bound-tags-input">
+          <span class="cw-hint">One or more comma-separated tags when “selected host tags” is chosen.</span>
         </div>
       </div>
       <div class="cw-form-foot">
@@ -74,13 +92,16 @@
   <div class="cw-table-clip" tabindex="0" role="region" aria-label="API keys">
   <table class="cw-table" data-testid="api-keys-table">
     <thead>
-      <tr><th>Name</th><th>Scope</th><th>Created</th><th>Last used</th><th><span class="cw-sr">Actions</span></th></tr>
+      <tr><th>Name</th><th>Scope</th><th>Binding</th><th>Created</th><th>Last used</th><th><span class="cw-sr">Actions</span></th></tr>
     </thead>
     <tbody>
       {% for k in api_keys %}
       <tr data-testid="api-key-row">
         <td><span class="cw-strong">{{ k.name }}</span></td>
         <td><span class="cw-chip {{ 't-ink' if k.scope in ('write', 'admin') else '' }}">{{ k.scope }}</span></td>
+        <td>
+          {% if k.binding == 'tags' %}host tags: {{ k.bound_tags | join(', ') }}{% elif k.binding == 'all' %}all endpoints{% else %}invalid binding (key disabled){% endif %}
+        </td>
         <td class="tnum">{{ k.created_at.strftime('%Y-%m-%d') }}</td>
         <td class="tnum">
           {% if k.last_used_at %}{{ k.last_used_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}

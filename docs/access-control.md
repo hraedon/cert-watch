@@ -124,12 +124,32 @@ rule applies to usernames listed in a role mapping.
 ## API keys
 
 Scripts and other systems authenticate with API keys, created by an
-administrator under **Settings → API keys**. A key has one of three scopes:
-`read` (viewer), `write` (operator) or `admin`. The token is shown once; only
-its hash is stored. Send it as `Authorization: Bearer cwk_…`.
+administrator under **Settings → API keys**. A key has one of four scopes:
+`read` (viewer), `write` (operator), `admin`, or `renewal-report`. The token is
+shown once; only its hash is stored. Send exactly one header as
+`Authorization: Bearer cwk_…`. The scheme is case-sensitive and the token
+cannot have leading, trailing or embedded whitespace; malformed or duplicate
+Authorization headers are rejected.
 
-API keys are not tag-scoped: a `read` key can read the whole estate. Create
-keys for systems, not people, and revoke them when they are no longer needed.
+Read, write and admin keys are not tag-scoped: a `read` key can read the whole
+estate. A `renewal-report` key has no read, write or settings permissions. It
+can reach only `GET /api/renewal-reports` and `POST /api/renewal-reports` and
+is refused everywhere else, including health, metrics, HTML and static-file
+paths. Those report routes are introduced separately; until then they return
+404.
+
+A renewal-report key must be bound explicitly either to all endpoints or to
+one or more tags. Tag bindings match the endpoint's **host tags only**;
+certificate-only tags never bring an endpoint into the binding. A binding is
+checked live on each report request and cannot be edited. Revoke the key and
+create another to change its binding. A key can bind at most 20 tags, each at
+most 64 characters and containing at least one visible character.
+
+The report-key allowlist compares the raw request path. Deploying cert-watch
+under a URL path prefix or ASGI `root_path` is not supported for report keys
+yet; those credentials fail closed instead of reaching the report routes.
+
+Create keys for systems, not people, and revoke them when they are no longer needed.
 Creating, listing and revoking keys needs an administrator's browser session,
 so an API key can't mint more keys, not even an `admin` key. A key keeps
 working after the person who created it loses administrator access, so review

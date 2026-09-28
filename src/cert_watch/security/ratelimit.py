@@ -363,6 +363,11 @@ async def rate_limit_headers_middleware(
         response.headers["Retry-After"] = str(retry_after)
         return response
     response = await call_next(request)
+    # Renewal-report capability refusals are deliberately indistinguishable
+    # across API, HTML, health, metrics, static, and unknown paths. Do not add
+    # API-only headers after authentication has classified that refusal.
+    if getattr(request.state, "api_key_forbidden", False):
+        return response
     remaining, _ = get_rate_remaining(key, 60, 60)
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     response.headers["X-RateLimit-Limit"] = "60"

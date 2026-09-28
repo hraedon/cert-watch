@@ -191,6 +191,11 @@ class AuthContext:
     # Stable machine-principal identity. API keys use their immutable key id;
     # human principals leave this empty and retain their username identity.
     principal_id: str = ""
+    # Machine-principal discriminator. Human sessions keep ``session``;
+    # renewal-report credentials use their own least-privilege kind.
+    principal_kind: str = "session"
+    api_key_binding: str = ""
+    api_key_bound_tags: tuple[str, ...] = ()
     roles: list[str] = field(default_factory=list)
     permissions: frozenset[Permission] = frozenset()
     tier: str = ""
@@ -226,12 +231,14 @@ class AuthContext:
         principal_id: str = "",
         tag_tiers: dict[str, str] | None = None,
         local_account: bool = False,
+        principal_kind: str = "session",
     ) -> AuthContext:
         """Build a context from the explicit permission tier (WI-050)."""
         tier = tier if tier in PERMISSION_TIERS else ROLE_VIEWER
         return cls(
             username=username,
             principal_id=principal_id,
+            principal_kind=principal_kind,
             roles=roles or [tier],
             permissions=permissions_for_tier(tier),
             tier=tier,
@@ -239,6 +246,33 @@ class AuthContext:
             email=email,
             tag_tiers=dict(tag_tiers or {}),
             local_account=local_account,
+        )
+
+    @classmethod
+    def renewal_report_key(
+        cls,
+        username: str,
+        *,
+        principal_id: str,
+        binding: str,
+        bound_tags: tuple[str, ...],
+    ) -> AuthContext:
+        """Build the zero-RBAC-permission renewal-report principal."""
+        return cls(
+            username=username,
+            principal_id=principal_id,
+            principal_kind="renewal-report",
+            roles=["renewal-report"],
+            permissions=frozenset(),
+            tier="",
+            scope_tag=",".join(bound_tags) if binding == "tags" else "",
+            api_key_binding=binding,
+            api_key_bound_tags=bound_tags,
+            # S2's binding enforcement consumes operator-tier tag entries via
+            # ensure_write_scope_on. Until then, the route allowlist plus
+            # renewal_report_guard are the barrier; ordinary guards explicitly
+            # reject this principal kind despite these entries.
+            tag_tiers={tag: ROLE_OPERATOR for tag in bound_tags},
         )
 
     @classmethod
@@ -260,6 +294,7 @@ class AuthContext:
             permissions=frozenset(Permission),
             tier=ROLE_ADMIN,
             is_system=True,
+            principal_kind="system",
         )
 
     def has_permission(self, perm: Permission) -> bool:

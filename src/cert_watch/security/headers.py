@@ -41,9 +41,10 @@ def _build_csp(nonce: str, report_uri: str = "") -> str:
 
     ``report-uri`` is appended when ``CERT_WATCH_CSP_REPORT_URI`` is set.
     """
+    script_src = f"script-src 'self' 'nonce-{nonce}'; " if nonce else "script-src 'self'; "
     policy = (
         "default-src 'self'; "
-        f"script-src 'self' 'nonce-{nonce}'; "
+        f"{script_src}"
         "style-src 'self'; "
         "img-src 'self' data:; "
         "connect-src 'self'; "
@@ -131,6 +132,11 @@ async def security_headers_middleware(
             status_code=500,
         )
     settings = getattr(request.app.state, "settings", None)
+    # Capability refusals contain no HTML or script. Use the stricter stable
+    # no-nonce policy so the complete response headers do not reveal whether
+    # the refused target was an API, page, health, static, or unknown path.
+    if getattr(request.state, "api_key_forbidden", False):
+        nonce = ""
     _apply_security_headers(
         response,
         nonce,
