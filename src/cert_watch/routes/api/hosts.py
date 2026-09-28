@@ -23,6 +23,7 @@ from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_aut
 from cert_watch.routes._scoped import (
     scope_read_denied,
     scope_tags_from_auth,
+    scope_write_denied,
     superseded_json,
 )
 from cert_watch.routes.api._shared import (
@@ -66,6 +67,10 @@ from cert_watch.services.host_ownership import (
     HostOwnershipUpdate,
     HostOwnershipValidationError,
     update_host_ownership,
+)
+from cert_watch.services.renewal_reports import (
+    RenewalReportNotFoundError,
+    clear_renewal_failure,
 )
 from cert_watch.services.resource_metadata import (
     ResourceMetadataNotFoundError,
@@ -492,6 +497,37 @@ async def api_update_host_settings(
             "renewal_status": updated.renewal_status,
         }
     )
+
+
+@router.post("/api/hosts/{host_id}/renewal-failure/clear")
+async def api_clear_host_renewal_failure(
+    host_id: IdParam,
+    request: Request,
+    _auth: str = Depends(json_write_guard),
+) -> JSONResponse:
+    """JSON peer for explicitly clearing a carried renewal failure."""
+    try:
+        body = json_body(await request.body())
+        if body:
+            raise JsonBodyError("renewal failure clear accepts an empty JSON object")
+        denied = scope_write_denied(request, _db_path(request), host_id=host_id)
+        if denied:
+            raise ScopeDeniedError(denied)
+        cleared = clear_renewal_failure(
+            _db_path(request),
+            host_id,
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+        from cert_watch.scheduler import wake_scheduler
+
+        wake_scheduler(getattr(request.app.state, "scheduler", None))
+    except (JsonBodyError, ScopeDeniedError) as exc:
+        return _service_error(exc)
+    except RenewalReportNotFoundError as exc:
+        return _service_error(exc, not_found=True)
+    return JSONResponse(content={"id": host_id, "cleared": cleared})
 
 
 @router.patch("/api/hosts/{host_id}/notes")

@@ -77,13 +77,22 @@ Rollback requires restoring the pre-migration backup.
 
 ### Migration 0049
 
-Migration **0049** adds `failure_reported_at` to renewal attempts and backfills
-it from the first retained, accepted failed report for each attempt. This
-durable transition marker lets `renewal_failed` remain open across a bare
-success claim and lets renewal digests work when Event stream storage is
-disabled or purged. Existing report messages, tools, correlations, key
-identities and recipient identities are not copied into the marker or digest.
-Rollback requires restoring the pre-migration backup.
+Migration **0049** adds the originating `failure_attempt_id`,
+`failure_reported_at`, `failure_cleared_at`, and a rule-only wake timestamp to
+renewal attempts. It backfills the originating attempt and first retained,
+accepted failed report for every stored failure; every such stored failure is
+therefore eligible to alert at the first rule pass after upgrade, regardless of
+its age. It also fills missing historical `not_deployed` raise times from the
+attempt's accepted report time.
+
+The durable condition remains attached to later attempts until stored scan
+evidence verifies a carrying attempt or observes a successor to the failed
+baseline, the endpoint is deleted, or an authorized operator explicitly clears
+it. A start report, lease, bare success claim, lease expiry, or echoed
+`renewal_status=pending` write does not clear it. Existing report messages,
+tools, correlations, key identities and recipient identities are not copied
+into the marker or digest. Rollback requires restoring the pre-migration
+backup.
 
 ## Upgrading from 1.1.0 to 1.1.1
 

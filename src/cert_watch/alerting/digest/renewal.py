@@ -91,17 +91,31 @@ def build_renewal_digest(
                AND timestamp >= ?""",
             (cutoff,),
         ).fetchall()
-        problem_rows = conn.execute(
-            """SELECT a.attempt_id,a.state,a.failure_reported_at,a.raised_at,
+        failure_rows = conn.execute(
+            """SELECT COALESCE(a.failure_attempt_id,a.attempt_id) AS condition_id,
+                      MIN(a.failure_reported_at) AS failure_reported_at,
+                      MAX(a.failure_cleared_at) AS failure_cleared_at,
                       h.hostname,h.port,h.owner_email
                FROM renewal_attempts a
                JOIN hosts h ON h.id=a.host_id
-               WHERE a.is_current=1 AND (
-                  (a.failure_reported_at>=? AND a.failure_reported_at<=?
-                      AND a.state NOT IN ('verified','cancelled'))
-                  OR (a.raised_at>=? AND a.raised_at<=? AND a.state='not_deployed'))
-               ORDER BY COALESCE(a.failure_reported_at,a.raised_at),a.opened_seq""",
-            (cutoff, current.isoformat(), cutoff, current.isoformat()),
+               WHERE a.failure_reported_at IS NOT NULL
+               GROUP BY condition_id,a.host_id,h.hostname,h.port,h.owner_email
+               HAVING MIN(a.failure_reported_at)<=?
+                  AND (MAX(a.failure_cleared_at) IS NULL
+                       OR MAX(a.failure_cleared_at)>=?)
+               ORDER BY MIN(a.failure_reported_at)""",
+            (current.isoformat(), cutoff),
+        ).fetchall()
+        not_deployed_rows = conn.execute(
+            """SELECT COALESCE(a.raised_at,a.received_at) AS raised_at,
+                      h.hostname,h.port,h.owner_email
+               FROM renewal_attempts a
+               JOIN hosts h ON h.id=a.host_id
+               WHERE a.is_current=1 AND a.state='not_deployed'
+                 AND COALESCE(a.raised_at,a.received_at)>=?
+                 AND COALESCE(a.raised_at,a.received_at)<=?
+               ORDER BY COALESCE(a.raised_at,a.received_at),a.opened_seq""",
+            (cutoff, current.isoformat()),
         ).fetchall()
 
     renewed_by_endpoint: dict[_Endpoint, int] = {}
@@ -117,7 +131,8 @@ def build_renewal_digest(
             overdue_by_endpoint[endpoint] = overdue_by_endpoint.get(endpoint, 0) + 1
 
     problem_endpoints = {
-        (str(row["hostname"]), int(row["port"])) for row in problem_rows
+        (str(row["hostname"]), int(row["port"]))
+        for row in (*failure_rows, *not_deployed_rows)
     }
     activity_endpoints = renewed_by_endpoint.keys() | overdue_by_endpoint.keys()
     endpoints = activity_endpoints | problem_endpoints
@@ -193,19 +208,20 @@ def build_renewal_digest(
         digest.shortened_count += 1
         digest.shortened_hosts.append(_endpoint_label(endpoint))
 
-    for row in problem_rows:
+    for row in failure_rows:
         endpoint = (str(row["hostname"]), int(row["port"]))
         digest = _ensure_owner(str(row["owner_email"] or ""))
-        if row["failure_reported_at"] and row["state"] not in {"verified", "cancelled"}:
-            digest.failed_count += 1
-            digest.failed_entries.append(
-                f"{_endpoint_label(endpoint)} at {_fmt_transition(row['failure_reported_at'])}"
-            )
-        if row["raised_at"] and row["state"] == "not_deployed":
-            digest.not_deployed_count += 1
-            digest.not_deployed_entries.append(
-                f"{_endpoint_label(endpoint)} at {_fmt_transition(row['raised_at'])}"
-            )
+        digest.failed_count += 1
+        digest.failed_entries.append(
+            f"{_endpoint_label(endpoint)} at {_fmt_transition(row['failure_reported_at'])}"
+        )
+    for row in not_deployed_rows:
+        endpoint = (str(row["hostname"]), int(row["port"]))
+        digest = _ensure_owner(str(row["owner_email"] or ""))
+        digest.not_deployed_count += 1
+        digest.not_deployed_entries.append(
+            f"{_endpoint_label(endpoint)} at {_fmt_transition(row['raised_at'])}"
+        )
 
     expiry_by_label = {
         _endpoint_label(endpoint): value for endpoint, value in current_expiry.items()

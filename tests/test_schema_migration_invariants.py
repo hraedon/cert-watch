@@ -217,6 +217,29 @@ def test_fresh_schema_matches_genuine_0001_upgrade(tmp_path: Path) -> None:
     assert _schema_snapshot(fresh) == _schema_snapshot(upgraded)
 
 
+def test_0049_runner_is_idempotent_and_matches_fresh_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cert_watch.migrations.registry  # noqa: F401
+    from cert_watch.migrations import runner
+
+    upgraded = tmp_path / "through-0048.sqlite3"
+    fresh = tmp_path / "fresh-0049.sqlite3"
+    migrations = runner.get_migrations()
+    monkeypatch.setattr(
+        runner,
+        "_MIGRATIONS",
+        [migration for migration in migrations if migration[0] <= "0048"],
+    )
+    assert runner.run_pending_migrations(upgraded, backup=False)[-1] == "0048"
+
+    monkeypatch.setattr(runner, "_MIGRATIONS", migrations)
+    assert runner.run_pending_migrations(upgraded, backup=False) == ["0049"]
+    assert runner.run_pending_migrations(upgraded, backup=False) == []
+    init_schema(fresh)
+    assert _schema_snapshot(upgraded) == _schema_snapshot(fresh)
+
+
 def test_v090_schema_upgrades_to_fresh_schema(tmp_path: Path) -> None:
     import cert_watch.migrations.registry  # noqa: F401
     from cert_watch.migrations.runner import run_pending_migrations

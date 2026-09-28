@@ -29,6 +29,48 @@ class VerificationResult:
     reason: str | None
 
 
+def observe_failure_successor_on(
+    conn: sqlite3.Connection,
+    hostname: str,
+    port: int,
+    leaf_fingerprint: str,
+    *,
+    observed_at: datetime,
+) -> bool:
+    """Clear a carried failure when an atomic scan stores a new leaf."""
+    attempt = conn.execute(
+        """SELECT a.* FROM renewal_attempts a
+           JOIN hosts h ON h.id=a.host_id
+           WHERE h.hostname=? AND h.port=? AND a.is_current=1
+             AND a.failure_reported_at IS NOT NULL
+             AND a.failure_cleared_at IS NULL""",
+        (hostname, port),
+    ).fetchone()
+    if attempt is None or not attempt["baseline_fingerprint"]:
+        return False
+    leaf = leaf_fingerprint.lower()
+    if leaf == str(attempt["baseline_fingerprint"]).lower():
+        return False
+    instant = observed_at.astimezone(UTC).isoformat()
+    origin = str(attempt["failure_attempt_id"] or attempt["attempt_id"])
+    conn.execute(
+        """UPDATE renewal_attempts
+           SET state='verified',suppresses_stalled=0,
+               verification_reason='observed_successor',next_check_at=NULL,
+               closed_reason='observed_successor',verified_fingerprint=?,
+               failure_cleared_at=COALESCE(failure_cleared_at,?),rule_due_at=?
+           WHERE attempt_id=?""",
+        (leaf, instant, instant, attempt["attempt_id"]),
+    )
+    conn.execute(
+        """UPDATE renewal_attempts
+           SET failure_cleared_at=COALESCE(failure_cleared_at,?),rule_due_at=?
+           WHERE host_id=? AND COALESCE(failure_attempt_id,attempt_id)=?""",
+        (instant, instant, attempt["host_id"], origin),
+    )
+    return True
+
+
 def _instant(value: Any) -> datetime | None:
     if not value:
         return None
@@ -125,7 +167,10 @@ def evaluate_evidence_on(
 ) -> VerificationResult:
     """Apply one successful stored observation using the caller's transaction."""
     state = str(attempt["state"])
-    if state not in {"open", "verifying", "not_deployed"}:
+    failure_open = bool(
+        attempt["failure_reported_at"] and not attempt["failure_cleared_at"]
+    )
+    if state not in {"open", "verifying", "not_deployed"} and not failure_open:
         return VerificationResult(state, attempt["next_check_at"], attempt["verification_reason"])
     leaf = leaf_fingerprint.lower() if leaf_fingerprint else None
     baseline = (
@@ -154,6 +199,11 @@ def evaluate_evidence_on(
         state, reason = "verified", "reported_fingerprint"
     elif successor and baseline is not None and expected is None:
         state, reason = "verified", "observed_successor"
+    elif failure_open and state not in {"open", "verifying", "not_deployed"}:
+        # Failure-only states have no verification scan cadence.  An ordinary
+        # stored scan may still prove the successor and close the condition,
+        # but a baseline observation never changes their state.
+        return VerificationResult(state, attempt["next_check_at"], None)
     elif not count_check:
         # Acceptance may recognize successor evidence already stored by a
         # completed scan, but it never turns an old observation into a raise
@@ -205,6 +255,9 @@ def evaluate_evidence_on(
     if state == "verified":
         updates["closed_reason"] = reason
         updates["verified_fingerprint"] = leaf
+        if failure_open:
+            updates["failure_cleared_at"] = started_at.isoformat()
+            updates["rule_due_at"] = started_at.isoformat()
     elif state == "not_deployed" and not attempt["raised_at"]:
         updates["raised_at"] = started_at.isoformat()
     assignments = ",".join(f"{name}=?" for name in updates)
@@ -212,6 +265,22 @@ def evaluate_evidence_on(
         f"UPDATE renewal_attempts SET {assignments} WHERE attempt_id=?",
         (*updates.values(), attempt["attempt_id"]),
     )
+    if state == "verified" and failure_open:
+        failure_attempt_id = str(
+            attempt["failure_attempt_id"] or attempt["attempt_id"]
+        )
+        conn.execute(
+            """UPDATE renewal_attempts
+               SET failure_cleared_at=COALESCE(failure_cleared_at,?),rule_due_at=?
+               WHERE host_id=?
+                 AND COALESCE(failure_attempt_id,attempt_id)=?""",
+            (
+                started_at.isoformat(),
+                started_at.isoformat(),
+                attempt["host_id"],
+                failure_attempt_id,
+            ),
+        )
     return VerificationResult(
         state, next_check.isoformat() if next_check else None, reason
     )

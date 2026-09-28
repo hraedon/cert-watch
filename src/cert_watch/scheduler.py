@@ -138,7 +138,7 @@ def _host_scan_deadlines(
                 ON sh.hostname = h.hostname AND sh.port = h.port
             LEFT JOIN renewal_attempts a
                 ON a.host_id=h.id AND a.is_current=1
-                  AND a.state IN ('failed','verifying','not_deployed')
+                  AND a.state IN ('verifying','not_deployed')
             LEFT JOIN host_scan_claims claim ON claim.host_id=h.id
             GROUP BY h.id,h.hostname,h.port,h.scan_interval_hours,
                      a.next_check_at,claim.claim_expires_at
@@ -307,6 +307,29 @@ def _seconds_until_next_scan(
     # hourly retry wakeup rather than triggering unsolicited scans at startup.
     return min((FAST_RETRY_INTERVAL if unattempted else max(0.0, (deadline - now).total_seconds())
                 for _, _, deadline, unattempted in deadlines), default=float("inf"))
+
+
+def _seconds_until_next_rule_pass(
+    db_path: str | Path, *, now: datetime | None = None
+) -> float:
+    """Return the durable renewal-rule wake without making a host scan-due."""
+    from cert_watch.database import _connect
+
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT MIN(rule_due_at) FROM renewal_attempts WHERE rule_due_at IS NOT NULL"
+        ).fetchone()
+    value = row[0] if row else None
+    if value is None:
+        return float("inf")
+    try:
+        due = datetime.fromisoformat(str(value))
+        due = due.replace(tzinfo=UTC) if due.tzinfo is None else due.astimezone(UTC)
+    except (TypeError, ValueError):
+        logger.warning("renewal rule wake timestamp is malformed (%r); running now", value)
+        return 0.0
+    return max(0.0, (due - current).total_seconds())
 
 
 class Clock(Protocol):
@@ -478,6 +501,10 @@ class Scheduler:
                                 self.context.settings.db_path,
                                 current_hour,
                                 current_minute,
+                                now=now,
+                            ),
+                            _seconds_until_next_rule_pass(
+                                self.context.settings.db_path,
                                 now=now,
                             ),
                         )

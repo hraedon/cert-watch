@@ -66,9 +66,15 @@ def test_migration_0049_backfills_first_accepted_failure(tmp_path: Path) -> None
         upgrade(conn)
         upgrade(conn)
         marker = conn.execute(
-            "SELECT failure_reported_at FROM renewal_attempts WHERE attempt_id='attempt'"
-        ).fetchone()[0]
-    assert marker == "2026-09-22T00:00:00+00:00"
+            """SELECT failure_attempt_id,failure_reported_at,rule_due_at,raised_at
+               FROM renewal_attempts WHERE attempt_id='attempt'"""
+        ).fetchone()
+    assert tuple(marker) == (
+        "attempt",
+        "2026-09-22T00:00:00+00:00",
+        "2026-09-22T00:00:00+00:00",
+        "2026-09-20T00:00:00+00:00",
+    )
 
 
 def _run_concurrent_migration(

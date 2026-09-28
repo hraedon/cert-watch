@@ -995,6 +995,17 @@ def store_scanned(
         leaf_id, replaced_cert_id, cert_unchanged = _stage(
             "replace", _stage_replace, repo_path, entry, conn,
         )
+        from cert_watch.renewal_verification import observe_failure_successor_on
+
+        _stage(
+            "renewal_verification",
+            observe_failure_successor_on,
+            conn,
+            entry.host,
+            entry.port,
+            entry.leaf.fingerprint_sha256,
+            observed_at=entry.scanned_at,
+        )
         if posture_eval is not None:
             posture_grade, original_findings, stored_chain_status = _stage(
                 "posture", _stage_posture, repo_path, leaf_id, entry,

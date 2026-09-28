@@ -8,8 +8,8 @@ from pathlib import Path
 
 from cert_watch.alerting.keys import certificate_alert_key
 from cert_watch.alerting.routing import resolve_routing
-from cert_watch.database import Alert, AlertRepository, AlertStore
-from cert_watch.database.connection import _connect
+from cert_watch.database import Alert, AlertRepository, AlertStore, get_write_lock
+from cert_watch.database.connection import _connect, begin_immediate
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,7 @@ class _Condition:
 
 def _conditions(row: sqlite3.Row) -> tuple[_Condition, ...]:
     conditions: list[_Condition] = []
-    if row["failure_reported_at"] and row["state"] not in {"verified", "cancelled"}:
+    if row["failure_reported_at"] and not row["failure_cleared_at"]:
         conditions.append(_Condition("renewal_failed", str(row["failure_reported_at"])))
     if row["state"] == "not_deployed":
         conditions.append(_Condition("renewal_not_deployed", str(row["received_at"])))
@@ -28,6 +28,9 @@ def _conditions(row: sqlite3.Row) -> tuple[_Condition, ...]:
 
 
 def _key(row: sqlite3.Row, alert_type: str) -> str:
+    if alert_type == "renewal_failed":
+        failure_attempt_id = row["failure_attempt_id"] or row["attempt_id"]
+        return f"renewal_failed:{failure_attempt_id}"
     return certificate_alert_key(
         alert_type,
         cert_id=str(row["cert_id"]),
@@ -66,7 +69,8 @@ def evaluate_renewal_report_alerts(
     """Open and close attempt-scoped renewal failure/deployment alerts."""
     with _connect(db_path) as conn:
         rows = conn.execute(
-            """SELECT a.attempt_id,a.state,a.received_at,a.failure_reported_at,
+            """SELECT a.attempt_id,a.state,a.received_at,a.failure_attempt_id,
+                      a.failure_reported_at,a.failure_cleared_at,
                       a.verification_reason,h.hostname,h.port,
                       c.id AS cert_id,c.subject,c.fingerprint_sha256
                FROM renewal_attempts a
@@ -77,12 +81,22 @@ def evaluate_renewal_report_alerts(
                      AND leaf.is_leaf=1 AND leaf.source='scanned'
                    ORDER BY leaf.created_at DESC,leaf.rowid DESC LIMIT 1
                )
-               WHERE a.is_current=1
-                 AND (a.state='not_deployed' OR (
+               WHERE (a.is_current=1 AND a.state='not_deployed') OR (
                      a.failure_reported_at IS NOT NULL
-                     AND a.state NOT IN ('verified','cancelled')
-                 ))
+                     AND a.failure_cleared_at IS NULL
+                     AND NOT EXISTS (
+                         SELECT 1 FROM renewal_attempts later
+                         WHERE later.host_id=a.host_id
+                           AND later.failure_attempt_id=
+                               COALESCE(a.failure_attempt_id,a.attempt_id)
+                           AND later.opened_seq>a.opened_seq
+                     )
+                 )
                ORDER BY a.opened_seq"""
+        ).fetchall()
+        wake_rows = conn.execute(
+            """SELECT attempt_id,rule_due_at FROM renewal_attempts
+               WHERE rule_due_at IS NOT NULL"""
         ).fetchall()
         open_keys = {
             str(row["dedupe_key"])
@@ -128,14 +142,21 @@ def evaluate_renewal_report_alerts(
             if alert_id is not None:
                 alert.id = alert_id
                 created.append(alert)
-    # A failed report borrows next_check_at only to wake this rule pass. Failed
-    # attempts have no verification scan cadence, so consuming that wake avoids
-    # making the endpoint continuously due. not_deployed retains its cadence.
-    with _connect(db_path) as conn:
-        conn.execute(
-            """UPDATE renewal_attempts SET next_check_at=NULL
-               WHERE is_current=1 AND state='failed'
-                 AND failure_reported_at IS NOT NULL"""
-        )
-        conn.commit()
+    # Consume only the durable wake values observed by this pass.  A report
+    # racing enqueue changes rule_due_at, so its compare-and-set fails and the
+    # scheduler immediately runs another pass that can see the new condition.
+    with get_write_lock():
+        conn = _connect(db_path)
+        try:
+            begin_immediate(conn)
+            for wake in wake_rows:
+                conn.execute(
+                    """UPDATE renewal_attempts SET rule_due_at=NULL
+                       WHERE attempt_id=? AND rule_due_at=?""",
+                    (wake["attempt_id"], wake["rule_due_at"]),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
     return created

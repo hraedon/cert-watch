@@ -204,6 +204,20 @@ def _cache_renewal_status(conn: sqlite3.Connection, host_id: str, *, now: dateti
     return status
 
 
+def _open_failure(attempt: sqlite3.Row | None) -> tuple[str | None, str | None]:
+    """Return the endpoint-cycle failure carried by *attempt*, if unresolved."""
+    if (
+        attempt is None
+        or not attempt["failure_reported_at"]
+        or attempt["failure_cleared_at"]
+    ):
+        return None, None
+    return (
+        str(attempt["failure_attempt_id"] or attempt["attempt_id"]),
+        str(attempt["failure_reported_at"]),
+    )
+
+
 def write_through_renewal_status_on(
     conn: sqlite3.Connection,
     db_path: str | Path,
@@ -295,6 +309,8 @@ def write_through_renewal_status_on(
         assert attempt is not None
         attempt_id = str(attempt["attempt_id"])
 
+    failure_attempt_id, failure_reported_at = _open_failure(attempt)
+
     report_id = uuid.uuid4().hex
     cursor = conn.execute(
         """INSERT INTO renewal_reports
@@ -333,8 +349,9 @@ def write_through_renewal_status_on(
             """INSERT INTO renewal_attempts
                (attempt_id,host_id,is_current,source,state,opened_seq,baseline_fingerprint,
                 baseline_not_after,new_fingerprint,lease_expires_at,suppresses_stalled,
-                received_at,next_check_at,closed_reason,baseline_lease_claimed)
-               VALUES (?,?,1,?,'open',?,?,?,NULL,?,?,?,NULL,NULL,?)""",
+                received_at,next_check_at,closed_reason,baseline_lease_claimed,
+                failure_attempt_id,failure_reported_at,rule_due_at)
+               VALUES (?,?,1,?,'open',?,?,?,NULL,?,?,?,NULL,NULL,?,?,?,?)""",
             (
                 attempt_id,
                 host_id,
@@ -360,6 +377,9 @@ def write_through_renewal_status_on(
                 claims_baseline,
                 received_at,
                 claims_baseline,
+                failure_attempt_id,
+                failure_reported_at,
+                failure_reported_at,
             ),
         )
     elif outcome == "cancelled":
@@ -387,6 +407,56 @@ def write_through_renewal_status_on(
         conn=conn,
     )
     return post_status, audit_event
+
+
+def clear_renewal_failure(
+    db_path: str | Path,
+    host_id: str,
+    *,
+    auth: Any,
+    actor: str,
+    source_ip: str | None,
+    now: datetime | None = None,
+) -> bool:
+    """Explicitly clear every unresolved failure condition for one endpoint."""
+    if auth is None:
+        raise ScopeDeniedError("authenticated principal required")
+    cleared_at = (now or datetime.now(UTC)).astimezone(UTC).isoformat()
+    audit_event: dict[str, Any] | None = None
+    with get_write_lock():
+        conn = _connect(db_path)
+        try:
+            begin_immediate(conn)
+            host = conn.execute(
+                "SELECT id FROM hosts WHERE id=?", (host_id,)
+            ).fetchone()
+            if host is None:
+                raise RenewalReportNotFoundError("endpoint not found")
+            ensure_write_scope_on(conn, auth, host_id=host_id)
+            cursor = conn.execute(
+                """UPDATE renewal_attempts
+                   SET failure_cleared_at=?,closed_reason='manual_clear',rule_due_at=?
+                   WHERE host_id=? AND failure_reported_at IS NOT NULL
+                     AND failure_cleared_at IS NULL""",
+                (cleared_at, cleared_at, host_id),
+            )
+            changed = cursor.rowcount > 0
+            audit_event = record_audit(
+                db_path,
+                actor=actor,
+                action="renewal_failure.clear",
+                target_type="host",
+                target_id=host_id,
+                detail={"cleared": changed, "closed_reason": "manual_clear"},
+                source_ip=source_ip,
+                conn=conn,
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    export_audit(audit_event)
+    return changed
 
 
 def _current_leaf(conn: sqlite3.Connection, host_id: str) -> tuple[str | None, str | None]:
@@ -885,6 +955,7 @@ def create_report(
                 (target.host_id,),
             ).fetchone()
             attempt = _expire_current_attempt_on(conn, target.host_id, attempt, received=received)
+            carried_failure_id, carried_failure_at = _open_failure(attempt)
 
             (
                 current_fingerprint,
@@ -1073,9 +1144,10 @@ def create_report(
                        (attempt_id,host_id,is_current,source,state,opened_seq,baseline_fingerprint,
                         baseline_not_after,new_fingerprint,lease_expires_at,
                         suppresses_stalled,received_at,next_check_at,closed_reason,
-                        success_received_at,failure_reported_at,
+                        success_received_at,failure_attempt_id,failure_reported_at,
+                        rule_due_at,
                         baseline_lease_claimed)
-                       VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         attempt_id,
                         target.host_id,
@@ -1092,10 +1164,15 @@ def create_report(
                         lease,
                         suppresses,
                         received_at,
-                        received_at if state in {"failed", "verifying"} else None,
+                        received_at if state == "verifying" else None,
                         None if state in {"open", "verifying"} else "reported_failed",
                         received_at if state == "verifying" else None,
-                        received_at if state == "failed" else None,
+                        carried_failure_id
+                        or (attempt_id if state == "failed" else None),
+                        carried_failure_at
+                        or (received_at if state == "failed" else None),
+                        carried_failure_at
+                        or (received_at if state == "failed" else None),
                         claims_baseline,
                     ),
                 )
@@ -1103,16 +1180,14 @@ def create_report(
                 conn.execute(
                     """UPDATE renewal_attempts
                        SET state=?,suppresses_stalled=0,
+                           failure_attempt_id=COALESCE(failure_attempt_id,attempt_id),
                            failure_reported_at=COALESCE(failure_reported_at,?),
-                           next_check_at=CASE
-                               WHEN next_check_at IS NULL OR next_check_at>?
-                               THEN ? ELSE next_check_at END,
+                           rule_due_at=?,
                            closed_reason=CASE
                                WHEN ?='failed' THEN 'reported_failed' ELSE closed_reason END
                        WHERE attempt_id=?""",
                     (
                         state,
-                        received_at,
                         received_at,
                         received_at,
                         state,

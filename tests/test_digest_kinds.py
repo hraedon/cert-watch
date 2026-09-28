@@ -142,15 +142,22 @@ def _seed_problem_attempt(
         conn.execute(
             """INSERT INTO renewal_attempts
                (attempt_id,host_id,is_current,source,state,opened_seq,
-                suppresses_stalled,received_at,failure_reported_at,raised_at,
+                suppresses_stalled,received_at,failure_attempt_id,
+                failure_reported_at,failure_cleared_at,raised_at,
                 baseline_lease_claimed)
-               VALUES (?,?,1,'api_key:private-key-id',?,1,0,?,?,?,1)""",
+               VALUES (?,?,1,'api_key:private-key-id',?,1,0,?,?,?,?,?,1)""",
             (
                 attempt_id,
                 host_id,
                 state,
                 (failure_at or raised_at or NOW).isoformat(),
+                attempt_id if failure_at else None,
                 failure_at.isoformat() if failure_at else None,
+                (
+                    (failure_at + timedelta(hours=1)).isoformat()
+                    if failure_at and state in {"verified", "cancelled"}
+                    else None
+                ),
                 raised_at.isoformat() if raised_at else None,
             ),
         )
@@ -227,13 +234,21 @@ def test_renewal_problem_digest_uses_attempts_current_owner_and_ledger(tmp_path)
 
     digests = build_renewal_digest(db, cadence_days=7, now=NOW)
     by_owner = {digest.owner_email: digest for digest in digests}
-    assert set(by_owner) == {"new-owner@example.test", ""}
+    assert set(by_owner) == {
+        "new-owner@example.test",
+        "recovered@example.test",
+        "",
+    }
     assert (by_owner["new-owner@example.test"].failed_count, by_owner[""].failed_count) == (
         1,
         1,
     )
     assert by_owner[""].not_deployed_count == 1
-    assert all("recovered.example.test" not in entry for d in digests for entry in d.failed_entries)
+    assert by_owner["recovered@example.test"].failed_count == 1
+    assert any(
+        "recovered.example.test" in entry
+        for entry in by_owner["recovered@example.test"].failed_entries
+    )
 
     kind = RenewalDigestKind(_config(["new-owner@example.test"]))
     targets = kind.targets(db, NOW, 7)
@@ -242,7 +257,7 @@ def test_renewal_problem_digest_uses_attempts_current_owner_and_ledger(tmp_path)
     assert owner.smtp_recipients == ()
     assert unowned.smtp_recipients == ()
     rendered = "\n".join(kind.render(target).body for target in targets)
-    assert "Renewal failed: 2" in rendered
+    assert "Renewal failed: 3" in rendered
     assert "Reported but not deployed: 1" in rendered
     assert "2026-09-22 12:00 UTC" in rendered
     for private in (
@@ -271,4 +286,102 @@ def test_renewal_problem_digest_uses_attempts_current_owner_and_ledger(tmp_path)
     engine = DigestEngine(db, [SMTP()], clock=lambda: NOW)
     first = engine.run(kind, period)
     retry = engine.run(kind, period)
-    assert (first.sent, retry.sent, retry.skipped, len(sent)) == (1, 0, 1, 1)
+    assert (first.sent, retry.sent, retry.skipped, len(sent)) == (2, 0, 2, 2)
+
+
+def test_failure_digest_uses_condition_history_across_successor_attempts(tmp_path) -> None:
+    db = tmp_path / "digest-history.sqlite3"
+    init_schema(db)
+    host_id = SqliteHostRepository(db).add("retry.example.test", 443)
+    failure_at = NOW - timedelta(days=2)
+    with _connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                suppresses_stalled,received_at,baseline_lease_claimed,
+                failure_attempt_id,failure_reported_at)
+               VALUES ('failure-origin',?,0,'test','failed',1,0,?,1,
+                       'failure-origin',?)""",
+            (host_id, failure_at.isoformat(), failure_at.isoformat()),
+        )
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                suppresses_stalled,received_at,baseline_lease_claimed,
+                failure_attempt_id,failure_reported_at)
+               VALUES ('retry-attempt',?,1,'test','open',2,0,?,1,
+                       'failure-origin',?)""",
+            (
+                host_id,
+                (failure_at + timedelta(hours=1)).isoformat(),
+                failure_at.isoformat(),
+            ),
+        )
+        conn.commit()
+
+    [digest] = build_renewal_digest(db, cadence_days=7, now=NOW)
+    assert digest.failed_count == 1
+    reported = failure_at.strftime("%Y-%m-%d %H:%M UTC")
+    assert digest.failed_entries == [f"retry.example.test at {reported}"]
+
+
+def test_failure_digest_includes_period_overlap_and_excludes_prior_clear(tmp_path) -> None:
+    db = tmp_path / "digest-overlap.sqlite3"
+    init_schema(db)
+    hosts = SqliteHostRepository(db)
+    names = (
+        "still-open.example.test",
+        "cleared-in.example.test",
+        "cleared-before.example.test",
+    )
+    for name in names:
+        hosts.add(name, 443)
+        _seed_problem_attempt(
+            db,
+            name,
+            attempt_id=name,
+            state="failed",
+            failure_at=NOW - timedelta(days=10),
+        )
+    with _connect(db) as conn:
+        conn.execute(
+            """UPDATE renewal_attempts SET failure_cleared_at=?
+               WHERE attempt_id='cleared-in.example.test'""",
+            ((NOW - timedelta(days=2)).isoformat(),),
+        )
+        conn.execute(
+            """UPDATE renewal_attempts SET failure_cleared_at=?
+               WHERE attempt_id='cleared-before.example.test'""",
+            ((NOW - timedelta(days=8)).isoformat(),),
+        )
+        conn.commit()
+
+    [digest] = build_renewal_digest(db, cadence_days=7, now=NOW)
+    assert digest.failed_count == 2
+    assert {entry.split(" at ", 1)[0] for entry in digest.failed_entries} == {
+        "still-open.example.test",
+        "cleared-in.example.test",
+    }
+
+
+def test_not_deployed_digest_falls_back_when_raised_at_is_null(tmp_path) -> None:
+    db = tmp_path / "digest-null-raised.sqlite3"
+    init_schema(db)
+    host_id = SqliteHostRepository(db).add("legacy-not-deployed.example.test", 443)
+    received_at = NOW - timedelta(hours=4)
+    with _connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                suppresses_stalled,received_at,baseline_lease_claimed,raised_at)
+               VALUES ('legacy-not-deployed',?,1,'test','not_deployed',1,0,?,1,NULL)""",
+            (host_id, received_at.isoformat()),
+        )
+        conn.commit()
+
+    [digest] = build_renewal_digest(db, cadence_days=7, now=NOW)
+    assert digest.not_deployed_count == 1
+    received = received_at.strftime("%Y-%m-%d %H:%M UTC")
+    assert digest.not_deployed_entries == [
+        f"legacy-not-deployed.example.test at {received}"
+    ]

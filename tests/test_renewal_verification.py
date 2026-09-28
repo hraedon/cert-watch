@@ -22,14 +22,20 @@ from cert_watch.scan import ScannedEntry, store_scanned
 from cert_watch.scheduler import (
     ScanHistory,
     _host_scan_deadlines,
+    _seconds_until_next_rule_pass,
     _seconds_until_next_scan,
     claim_hosts_due_for_scan,
     get_hosts_due_for_scan,
     record_scan_history,
 )
-from cert_watch.services.host_management import delete_host
+from cert_watch.services.host_management import (
+    HostSettingsUpdate,
+    delete_host,
+    update_host_settings,
+)
 from cert_watch.services.renewal_reports import (
     RenewalReportInput,
+    clear_renewal_failure,
     create_report,
     resolve_target,
 )
@@ -1091,8 +1097,10 @@ def test_failed_report_wakes_rule_pass_and_uses_only_fixed_text(estate):
         now=NOW,
     )
     row = _row(db)
+    assert row["failure_attempt_id"] == result.attempt_id
     assert row["failure_reported_at"] == NOW.isoformat()
-    assert _seconds_until_next_scan(db, 6, 0, now=NOW) == 0
+    assert _seconds_until_next_rule_pass(db, now=NOW) == 0
+    assert _seconds_until_next_scan(db, 6, 0, now=NOW) == 3600
 
     [created] = evaluate_renewal_report_alerts(
         db, SqliteAlertRepository(db), base_url="https://certs.example.test"
@@ -1113,6 +1121,7 @@ def test_failed_report_wakes_rule_pass_and_uses_only_fixed_text(estate):
     ):
         assert private not in created.message
     assert _row(db)["next_check_at"] is None
+    assert _seconds_until_next_rule_pass(db, now=NOW) == float("inf")
 
 
 def test_not_deployed_failed_report_marks_attempt_and_opens_both_alerts(estate):
@@ -1160,6 +1169,264 @@ def test_failure_alert_survives_success_claim_until_scan_verifies(estate):
     closed: list[Alert] = []
     evaluate_renewal_report_alerts(db, repo, closed_sent=closed)
     assert [alert.id for alert in closed] == [created.id]
+
+
+def test_started_retry_carries_one_failure_condition_and_alert(estate):
+    db, _host_id, _cert_id, _baseline, settings = estate
+    failed = _post(estate, "failed", NOW, correlation_id="failed-cycle")
+    repo = SqliteAlertRepository(db)
+    [created] = evaluate_renewal_report_alerts(db, repo)
+
+    started = _post(
+        estate,
+        "started",
+        NOW + timedelta(minutes=1),
+        correlation_id="retry-cycle",
+    )
+    assert started.attempt_id != failed.attempt_id
+    row = _row(db)
+    assert row["failure_attempt_id"] == failed.attempt_id
+    assert row["failure_reported_at"] == NOW.isoformat()
+    assert row["failure_cleared_at"] is None
+    assert evaluate_renewal_report_alerts(db, repo) == []
+    with _connect(db) as conn:
+        alerts = conn.execute(
+            """SELECT id,dedupe_key,closed_at FROM alerts
+               WHERE alert_type='renewal_failed'"""
+        ).fetchall()
+    assert [(alert["id"], alert["dedupe_key"], alert["closed_at"]) for alert in alerts] == [
+        (created.id, f"renewal_failed:{failed.attempt_id}", None)
+    ]
+
+    successor = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    observed_at = NOW + timedelta(minutes=5)
+    store_scanned(
+        ScannedEntry(
+            host=HOST,
+            port=443,
+            leaf=successor,
+            chain=[],
+            scanned_at=observed_at,
+        ),
+        db,
+    )
+    result = evaluate_after_scan(
+        db,
+        HOST,
+        443,
+        successor.fingerprint_sha256,
+        started_at=observed_at,
+        settings=settings,
+    )
+    assert result is not None and result.state == "verified"
+    assert _row(db)["failure_cleared_at"] == observed_at.isoformat()
+
+
+def test_manual_and_succeeded_attempts_carry_failure_origin(estate):
+    db, host_id, _cert_id, _baseline, _settings = estate
+    failed = _post(estate, "failed", NOW)
+
+    update_host_settings(
+        db,
+        host_id,
+        HostSettingsUpdate(None, None, "in_progress"),
+        auth=AuthContext.system(),
+        actor="system",
+        source_ip=None,
+    )
+    manual = _row(db)
+    assert manual["attempt_id"] != failed.attempt_id
+    assert manual["failure_attempt_id"] == failed.attempt_id
+    assert manual["failure_reported_at"] == NOW.isoformat()
+
+    succeeded = _post(estate, "succeeded", NOW + timedelta(hours=48))
+    assert succeeded.attempt_id != manual["attempt_id"]
+    latest = _row(db)
+    assert latest["failure_attempt_id"] == failed.attempt_id
+    assert latest["failure_reported_at"] == NOW.isoformat()
+    assert latest["failure_cleared_at"] is None
+
+
+def test_successor_scan_verifies_failed_attempt_and_closes_same_alert(estate):
+    db, _host_id, _cert_id, _baseline, settings = estate
+    failed = _post(estate, "failed", NOW)
+    repo = SqliteAlertRepository(db)
+    [created] = evaluate_renewal_report_alerts(db, repo)
+    successor = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    observed_at = NOW + timedelta(minutes=5)
+    store_scanned(
+        ScannedEntry(
+            host=HOST,
+            port=443,
+            leaf=successor,
+            chain=[],
+            scanned_at=observed_at,
+        ),
+        db,
+    )
+
+    result = evaluate_after_scan(
+        db,
+        HOST,
+        443,
+        successor.fingerprint_sha256,
+        started_at=observed_at,
+        settings=settings,
+    )
+    assert result is not None and result.state == "verified"
+    row = _row(db)
+    assert row["failure_attempt_id"] == failed.attempt_id
+    assert row["failure_cleared_at"] == observed_at.isoformat()
+    closed: list[Alert] = []
+    assert evaluate_renewal_report_alerts(db, repo, closed_sent=closed) == []
+    with _connect(db) as conn:
+        alerts = conn.execute(
+            "SELECT dedupe_key,closed_at FROM alerts WHERE alert_type='renewal_failed'"
+        ).fetchall()
+    assert len(alerts) == 1
+    assert alerts[0]["dedupe_key"] == created.dedupe_key
+    assert alerts[0]["closed_at"] is not None
+
+
+def test_explicit_manual_clear_marks_reason_and_closes_on_rule_pass(estate):
+    db, host_id, _cert_id, _baseline, _settings = estate
+    _post(estate, "failed", NOW)
+    repo = SqliteAlertRepository(db)
+    [created] = evaluate_renewal_report_alerts(db, repo)
+
+    update_host_settings(
+        db,
+        host_id,
+        HostSettingsUpdate(None, None, "pending"),
+        auth=AuthContext.system(),
+        actor="system",
+        source_ip=None,
+    )
+    assert _row(db)["failure_cleared_at"] is None
+
+    assert clear_renewal_failure(
+        db,
+        host_id,
+        auth=AuthContext.system(),
+        actor="system",
+        source_ip=None,
+        now=NOW + timedelta(minutes=2),
+    )
+    row = _row(db)
+    assert row["closed_reason"] == "manual_clear"
+    assert row["failure_cleared_at"] == (NOW + timedelta(minutes=2)).isoformat()
+    assert row["rule_due_at"] == row["failure_cleared_at"]
+    evaluate_renewal_report_alerts(db, repo)
+    with _connect(db) as conn:
+        alert = conn.execute(
+            "SELECT closed_at FROM alerts WHERE id=?", (created.id,)
+        ).fetchone()
+        audit = conn.execute(
+            "SELECT action FROM audit_log ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+    assert alert["closed_at"] is not None
+    assert audit["action"] == "renewal_failure.clear"
+
+
+def test_rule_wake_compare_and_set_preserves_racing_failure(estate):
+    db, _host_id, _cert_id, _baseline, settings = estate
+    other = "rule-race.example.test"
+    SqliteHostRepository(db).add(other, 443)
+    seed_scanned(db, other, 443, parse_certificate(_make_cert(other).der))
+    _post(estate, "failed", NOW)
+
+    repo = SqliteAlertRepository(db)
+    real_enqueue = repo.enqueue
+    raced: list[str] = []
+
+    def enqueue_with_race(alert, **kwargs):
+        if not raced:
+            raced.append("reported")
+            auth = AuthContext.renewal_report_key(
+                "key", principal_id="key", binding="all", bound_tags=()
+            )
+            create_report(
+                db,
+                settings,
+                resolve_target(db, auth, hostname=other, port=443),
+                RenewalReportInput("failed", None, None, None, None, None),
+                auth=auth,
+                actor="api_key:key",
+                source_ip=None,
+                idempotency_key=None,
+                body_sha256="racing-failure",
+                now=NOW + timedelta(seconds=1),
+            )
+        return real_enqueue(alert, **kwargs)
+
+    repo.enqueue = enqueue_with_race  # type: ignore[method-assign]
+    evaluate_renewal_report_alerts(db, repo)
+    with _connect(db) as conn:
+        wake = conn.execute(
+            """SELECT a.rule_due_at FROM renewal_attempts a
+               JOIN hosts h ON h.id=a.host_id WHERE h.hostname=?""",
+            (other,),
+        ).fetchone()[0]
+        count = conn.execute(
+            """SELECT count(*) FROM alerts
+               WHERE hostname=? AND alert_type='renewal_failed'""",
+            (other,),
+        ).fetchone()[0]
+    assert count == 0
+    assert wake == (NOW + timedelta(seconds=1)).isoformat()
+
+    repo.enqueue = real_enqueue  # type: ignore[method-assign]
+    evaluate_renewal_report_alerts(db, repo)
+    with _connect(db) as conn:
+        wake = conn.execute(
+            """SELECT a.rule_due_at FROM renewal_attempts a
+               JOIN hosts h ON h.id=a.host_id WHERE h.hostname=?""",
+            (other,),
+        ).fetchone()[0]
+        count = conn.execute(
+            """SELECT count(*) FROM alerts
+               WHERE hostname=? AND alert_type='renewal_failed'""",
+            (other,),
+        ).fetchone()[0]
+    assert count == 1
+    assert wake is None
+
+
+def test_failed_report_storm_schedules_zero_extra_scans(estate):
+    db, _host_id, _cert_id, _baseline, settings = estate
+    record_scan_history(
+        db,
+        ScanHistory(
+            hostname=HOST,
+            port=443,
+            status="success",
+            scanned_at=NOW - timedelta(minutes=1),
+        ),
+    )
+    auth = AuthContext.renewal_report_key(
+        "key", principal_id="key", binding="all", bound_tags=()
+    )
+    target = resolve_target(db, auth, hostname=HOST, port=443)
+    scan_selections = 0
+    for index in range(120):
+        at = NOW + timedelta(seconds=index * 30)
+        create_report(
+            db,
+            settings,
+            target,
+            RenewalReportInput("failed", None, None, None, None, None),
+            auth=auth,
+            actor="api_key:key",
+            source_ip=None,
+            idempotency_key=None,
+            body_sha256=f"failure-{index}",
+            now=at,
+        )
+        scan_selections += len(get_hosts_due_for_scan(db, now=at))
+        evaluate_renewal_report_alerts(db, SqliteAlertRepository(db))
+    assert scan_selections == 0
+    with _connect(db) as conn:
+        assert conn.execute("SELECT count(*) FROM scan_history").fetchone()[0] == 1
 
 
 def test_failed_attempt_without_scanned_leaf_has_no_alert(tmp_path):

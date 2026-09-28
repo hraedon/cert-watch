@@ -71,7 +71,13 @@ from cert_watch.services.host_ownership import (
     HostOwnershipValidationError,
     update_host_ownership,
 )
-from cert_watch.services.renewal_reports import RenewalStatusOutOfDateError
+from cert_watch.services.renewal_reports import (
+    RenewalReportNotFoundError,
+    RenewalStatusOutOfDateError,
+)
+from cert_watch.services.renewal_reports import (
+    clear_renewal_failure as clear_renewal_failure_service,
+)
 from cert_watch.services.resource_metadata import (
     ResourceMetadataNotFoundError,
     ResourceMetadataValidationError,
@@ -393,6 +399,37 @@ async def update_host_settings(
     except ManagedHostNotFoundError:
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
     return RedirectResponse(url=f"{back}?endpoint_saved=1#edit-host", status_code=303)
+
+
+@router.post("/hosts/{host_id}/renewal-failure/clear")
+def clear_host_renewal_failure(
+    request: Request,
+    host_id: IdParam,
+    _auth: str = Depends(write_form_guard),
+) -> RedirectResponse:
+    """Explicitly clear the endpoint's carried renewal-failure condition."""
+    db = _db_path(request)
+    denied = scope_write_denied(request, db, host_id=host_id)
+    if denied:
+        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
+    try:
+        clear_renewal_failure_service(
+            db,
+            host_id,
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+        from cert_watch.scheduler import wake_scheduler
+
+        wake_scheduler(getattr(request.app.state, "scheduler", None))
+    except ScopeDeniedError as exc:
+        return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
+    except RenewalReportNotFoundError:
+        return RedirectResponse(url="/?error=host+not+found", status_code=303)
+    return RedirectResponse(
+        url=f"/certificates/{host_id}?renewal_failure_cleared=1", status_code=303
+    )
 
 
 @router.post("/hosts")
