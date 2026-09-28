@@ -1,4 +1,4 @@
-"""Migration 0046 — durable renewal reports and current attempts (#118 S2)."""
+"""Migration 0046 — durable renewal reports and attempt history (#118 S2)."""
 
 from __future__ import annotations
 
@@ -18,8 +18,7 @@ def upgrade(conn: sqlite3.Connection) -> None:
     # history lets most recent lineage rows remain fingerprint-addressable
     # immediately after upgrading too.
     tables = {
-        str(row[0])
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
     if "cert_history" in tables:
         conn.execute(
@@ -66,8 +65,10 @@ def upgrade(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """CREATE TABLE IF NOT EXISTS renewal_attempts (
-               host_id TEXT PRIMARY KEY REFERENCES hosts(id) ON DELETE CASCADE,
-               attempt_id TEXT NOT NULL UNIQUE,
+               attempt_id TEXT PRIMARY KEY,
+               host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+               is_current INTEGER NOT NULL DEFAULT 1 CHECK (is_current IN (0,1)),
+               source TEXT NOT NULL,
                state TEXT NOT NULL CHECK (
                    state IN ('open','abandoned','failed','verifying',
                              'not_deployed','verified','cancelled')
@@ -82,6 +83,26 @@ def upgrade(conn: sqlite3.Connection) -> None:
                received_at TEXT NOT NULL,
                next_check_at TEXT,
                closed_reason TEXT
+           )"""
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_renewal_attempts_current_host "
+        "ON renewal_attempts(host_id) WHERE is_current=1"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_renewal_attempts_host_opened "
+        "ON renewal_attempts(host_id, opened_seq DESC)"
+    )
+    # Reports are retention-bound, but correlation ownership is not: a stale
+    # retry must remain late after its report rows have aged out.
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS renewal_attempt_correlations (
+               host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+               source TEXT NOT NULL,
+               correlation_id TEXT NOT NULL,
+               attempt_id TEXT NOT NULL REFERENCES renewal_attempts(attempt_id)
+                   ON DELETE CASCADE,
+               PRIMARY KEY (host_id, source, correlation_id)
            )"""
     )
     conn.execute(

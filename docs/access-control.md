@@ -145,10 +145,11 @@ create another to change its binding. A key can bind at most 20 tags, each at
 most 64 characters and containing at least one visible character.
 
 A report key sees only its own report history. Signed-in users who can read an
-endpoint see report outcome, timestamps and state. Report message, tool and
-source follow the existing write boundary for routing identities: only an
-administrator or a caller with effective write access to that endpoint sees
-them.
+endpoint see report outcome, timestamps and state. Report message, tool,
+source and correlation id follow the endpoint's host-tag write boundary: only
+an administrator or a caller with write access through a host tag sees them.
+Certificate-only tags can grant read visibility but do not reveal these
+fields.
 
 The report-key allowlist compares the raw request path. Deploying cert-watch
 under a URL path prefix or ASGI `root_path` is not supported for report keys

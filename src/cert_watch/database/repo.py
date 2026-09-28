@@ -978,6 +978,9 @@ class SqliteHostRepository:
             # Reports are endpoint-owned private history. Removing them here
             # prevents a later host with the same address inheriting it.
             conn.execute("DELETE FROM renewal_idempotency WHERE host_id = ?", (host_id,))
+            conn.execute(
+                "DELETE FROM renewal_attempt_correlations WHERE host_id = ?", (host_id,)
+            )
             conn.execute("DELETE FROM renewal_attempts WHERE host_id = ?", (host_id,))
             conn.execute("DELETE FROM renewal_reports WHERE host_id = ?", (host_id,))
             # event_log has no host column; match the JSON payload's endpoint.

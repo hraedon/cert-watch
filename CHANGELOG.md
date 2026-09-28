@@ -30,11 +30,12 @@ All notable changes to cert-watch are documented in this file.
 
 ### Added
 
-- Added durable, append-only renewal reports and one current attempt per
-  endpoint, with strict 16 KiB ingestion, live host-tag targeting, recent-leaf
-  fingerprint lookup, source-scoped idempotency, non-extending leases,
-  redacted paginated history, retention and delete/re-add isolation. Renewal
-  success reports fail closed with 503 until scan verification ships (#118 S2).
+- Added durable, append-only renewal reports and retained attempt history with
+  at most one current attempt per endpoint, strict JSON-only 16 KiB ingestion,
+  live host-tag targeting, recent-leaf fingerprint lookup, endpoint-bound
+  source idempotency, non-extending leases, redacted bounded history,
+  retention and delete/re-add isolation. Renewal success reports fail closed
+  with 503 until scan verification ships (#118 S2).
 
 ### Fixed
 
@@ -54,7 +55,8 @@ All notable changes to cert-watch are documented in this file.
 
 ### Upgrade notes
 
-- Migration 0046 adds renewal report, current-attempt and idempotency tables.
+- Migration 0046 adds renewal report, attempt/correlation history and
+  idempotency tables.
   It does not change alerting or existing renewal status behavior. See
   [UPGRADING.md](UPGRADING.md).
 

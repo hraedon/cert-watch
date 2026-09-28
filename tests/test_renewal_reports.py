@@ -19,10 +19,12 @@ from cert_watch.services.renewal_reports import (
     RenewalReportConflictError,
     RenewalReportInput,
     RenewalReportNotFoundError,
+    RenewalReportUnavailableError,
     create_report,
     expire_renewal_leases,
     list_reports,
     purge_renewal_reports,
+    resolve_history_target,
     resolve_target,
 )
 from tests._helpers import seed_scanned
@@ -107,6 +109,8 @@ NORMATIVE_TRANSITIONS = (
     (17, "terminal", "same_correlation_started", "abandoned", "ignored_late"),
     (18, "any", "endpoint_deleted", "none", "cascade"),
     (19, "any", "tags_changed", "unchanged", "404-to-old-key"),
+    (20, "new_cycle", "old_correlation_started", "failed", "ignored_late"),
+    (21, "B-C", "baseline_returns_to_B", "open", "no-remute"),
 )
 
 
@@ -169,9 +173,7 @@ def test_normative_transition_table_drives_s2_reducer(
         observed = ("unavailable", "S3-manual")
     elif row == 16:
         _create(estate, occurred_at="2027-01-01T00:00:00+00:00")
-        result, _ = _create(
-            estate, "failed", occurred_at="2025-01-01T00:00:00+00:00"
-        )
+        result, _ = _create(estate, "failed", occurred_at="2025-01-01T00:00:00+00:00")
         observed = (result.state, "received-order")
     elif row == 17:
         _create(estate, correlation_id="late")
@@ -188,7 +190,7 @@ def test_normative_transition_table_drives_s2_reducer(
         with _connect(estate[0]) as conn:
             assert conn.execute("SELECT count(*) FROM renewal_attempts").fetchone()[0] == 0
         observed = ("none", "cascade")
-    else:
+    elif row == 19:
         _create(estate)
         with _connect(estate[0]) as conn:
             conn.execute("UPDATE hosts SET tags='other' WHERE id=?", (estate[2],))
@@ -196,8 +198,41 @@ def test_normative_transition_table_drives_s2_reducer(
         with pytest.raises(RenewalReportNotFoundError):
             resolve_target(estate[0], _auth("key-a", "prod"), hostname=HOST, port=443)
         observed = ("unchanged", "404-to-old-key")
+    elif row == 20:
+        _create(estate, correlation_id="old-cycle")
+        _create(estate, "failed", correlation_id="old-cycle")
+        _create(estate, correlation_id="new-cycle")
+        late, _ = _create(estate, correlation_id="old-cycle")
+        observed = (late.state, late.effect)
+    else:
+        first, _ = _create(estate, correlation_id="baseline-b")
+        expire_renewal_leases(estate[0], now=NOW + timedelta(hours=24))
+        with _connect(estate[0]) as conn:
+            conn.execute(
+                "UPDATE certificates SET fingerprint_sha256=? WHERE hostname=? AND is_leaf=1",
+                ("c" * 64, HOST),
+            )
+            conn.commit()
+        _create(estate, correlation_id="baseline-c", now=NOW + timedelta(hours=25))
+        expire_renewal_leases(estate[0], now=NOW + timedelta(hours=49))
+        with _connect(estate[0]) as conn:
+            conn.execute(
+                "UPDATE certificates SET fingerprint_sha256=? WHERE hostname=? AND is_leaf=1",
+                (estate[4], HOST),
+            )
+            conn.commit()
+        returned, _ = _create(
+            estate, correlation_id="baseline-b-again", now=NOW + timedelta(hours=50)
+        )
+        with _connect(estate[0]) as conn:
+            current = conn.execute(
+                "SELECT * FROM renewal_attempts WHERE attempt_id=?", (returned.attempt_id,)
+            ).fetchone()
+        assert returned.attempt_id != first.attempt_id
+        assert current["suppresses_stalled"] == 0
+        observed = (returned.state, "no-remute")
 
-    assert row in {*range(1, 9), *range(15, 20)}
+    assert row in {*range(1, 9), *range(15, 22)}
     assert all((initial, trigger))
     assert observed == (state, effect)
 
@@ -239,7 +274,7 @@ def test_lease_never_extends_and_one_suppression_per_baseline(estate):
     second, _ = _create(estate, now=NOW + timedelta(hours=25))
     assert second.attempt_id != first.attempt_id
     with _connect(estate[0]) as conn:
-        current = conn.execute("SELECT * FROM renewal_attempts").fetchone()
+        current = conn.execute("SELECT * FROM renewal_attempts WHERE is_current=1").fetchone()
     assert current["state"] == "open"
     assert current["suppresses_stalled"] == 0
 
@@ -268,6 +303,73 @@ def test_terminal_same_correlation_is_late_but_new_work_opens(estate):
     new, _ = _create(estate, correlation_id="cycle-2")
     assert new.attempt_id != first.attempt_id
     assert (new.state, new.effect) == ("open", "applied")
+
+
+def test_old_correlation_stays_with_finished_attempt_after_new_cycle(estate):
+    first, _ = _create(estate, correlation_id="cycle-1")
+    _create(estate, "failed", correlation_id="cycle-1")
+    second, _ = _create(estate, correlation_id="cycle-2")
+    late, _ = _create(estate, correlation_id="cycle-1")
+
+    assert second.attempt_id != first.attempt_id
+    assert (late.attempt_id, late.state, late.effect) == (
+        first.attempt_id,
+        "failed",
+        "ignored_late",
+    )
+    with _connect(estate[0]) as conn:
+        attempts = conn.execute(
+            "SELECT attempt_id,state,is_current FROM renewal_attempts ORDER BY opened_seq"
+        ).fetchall()
+    assert [(row["state"], row["is_current"]) for row in attempts] == [
+        ("failed", 0),
+        ("open", 1),
+    ]
+
+
+def test_correlation_ownership_survives_report_retention(estate):
+    first, _ = _create(estate, correlation_id="cycle-1")
+    _create(estate, "failed", correlation_id="cycle-1")
+    _create(estate, correlation_id="cycle-2")
+    with _connect(estate[0]) as conn:
+        conn.execute("DELETE FROM renewal_reports WHERE attempt_id=?", (first.attempt_id,))
+        conn.commit()
+
+    late, _ = _create(estate, correlation_id="cycle-1")
+    assert (late.attempt_id, late.state, late.effect) == (
+        first.attempt_id,
+        "failed",
+        "ignored_late",
+    )
+
+
+def test_history_uses_each_reports_real_attempt_state(estate):
+    auth = _auth("key-a", "prod")
+    first, _ = _create(estate, correlation_id="cycle-1")
+    _create(estate, "failed", correlation_id="cycle-1")
+    second, _ = _create(estate, correlation_id="cycle-2")
+    target = resolve_target(estate[0], auth, hostname=HOST, port=443)
+
+    history = list_reports(estate[0], target, auth=auth, page=1, limit=50, now=NOW)
+    states = {item["attempt_id"]: item["state"] for item in history["items"]}
+    assert states[first.attempt_id] == "failed"
+    assert states[second.attempt_id] == "open"
+
+
+def test_cancelled_attempt_cannot_regrant_same_baseline_suppression(estate):
+    first, _ = _create(estate, correlation_id="cycle-1")
+    with _connect(estate[0]) as conn:
+        conn.execute(
+            "UPDATE renewal_attempts SET state='cancelled',suppresses_stalled=0 WHERE attempt_id=?",
+            (first.attempt_id,),
+        )
+        conn.commit()
+    second, _ = _create(estate, correlation_id="cycle-2")
+    with _connect(estate[0]) as conn:
+        current = conn.execute(
+            "SELECT * FROM renewal_attempts WHERE attempt_id=?", (second.attempt_id,)
+        ).fetchone()
+    assert current["suppresses_stalled"] == 0
 
 
 def test_abandoned_failed_report_starts_a_new_failed_attempt(estate):
@@ -301,9 +403,7 @@ def test_terminal_attempt_new_correlation_starts_new_cycle(estate, terminal):
 def test_future_verification_state_accepts_newer_failure(estate, initial):
     first, _ = _create(estate)
     with _connect(estate[0]) as conn:
-        conn.execute(
-            "UPDATE renewal_attempts SET state=? WHERE host_id=?", (initial, estate[2])
-        )
+        conn.execute("UPDATE renewal_attempts SET state=? WHERE host_id=?", (initial, estate[2]))
         conn.commit()
     failed, _ = _create(estate, "failed")
     assert failed.attempt_id == first.attempt_id
@@ -329,6 +429,53 @@ def test_source_scoped_idempotency_and_collision(estate):
             ).fetchone()[0]
             == 2
         )
+
+
+def test_idempotency_key_cannot_move_to_another_resolved_endpoint(estate):
+    auth = _auth("key-a", "prod")
+    _create(estate, auth=auth, idempotency_key="delivery-7", body_sha256="same")
+    other_host = "second.example.test"
+    estate[1].add(other_host, 443, tags="prod")
+    seed_scanned(
+        estate[0],
+        other_host,
+        443,
+        parse_certificate(_make_cert(other_host, days_valid=60).der),
+    )
+    target = resolve_target(estate[0], auth, hostname=other_host, port=443)
+    with pytest.raises(RenewalReportConflictError, match="idempotency key reused"):
+        create_report(
+            estate[0],
+            estate[5],
+            target,
+            _report("started"),
+            auth=auth,
+            actor="api_key:key-a",
+            source_ip=None,
+            idempotency_key="delivery-7",
+            body_sha256="same",
+            now=NOW,
+        )
+
+
+def test_service_rejects_succeeded_without_storing(estate):
+    auth = _auth("key-a", "prod")
+    target = resolve_target(estate[0], auth, hostname=HOST, port=443)
+    with pytest.raises(RenewalReportUnavailableError, match="verification is not available"):
+        create_report(
+            estate[0],
+            estate[5],
+            target,
+            _report("succeeded"),
+            auth=auth,
+            actor="api_key:key-a",
+            source_ip=None,
+            idempotency_key=None,
+            body_sha256="succeeded",
+            now=NOW,
+        )
+    with _connect(estate[0]) as conn:
+        assert conn.execute("SELECT count(*) FROM renewal_reports").fetchone()[0] == 0
 
 
 def test_binding_is_rechecked_before_replay(estate):
@@ -388,6 +535,90 @@ def test_unknown_out_of_binding_and_ambiguous_fingerprint(estate):
         resolve_target(estate[0], bound, cert_fingerprint=estate[4])
 
 
+def test_certificate_only_tag_does_not_bind_or_create_fingerprint_ambiguity(estate):
+    bound = _auth("key", "prod")
+    with _connect(estate[0]) as conn:
+        conn.execute(
+            "UPDATE certificates SET fingerprint_sha256=?,tags='prod' "
+            "WHERE hostname='other.example.test' AND is_leaf=1",
+            (estate[4],),
+        )
+        conn.commit()
+    target = resolve_target(estate[0], bound, cert_fingerprint=estate[4])
+    assert target.host_id == estate[2]
+
+
+def test_two_current_leaves_use_newest_head_for_post_and_get(estate, report_client):
+    client, headers, _db = report_client
+    with _connect(estate[0]) as conn:
+        original = dict(
+            conn.execute(
+                "SELECT * FROM certificates WHERE hostname=? AND is_leaf=1", (HOST,)
+            ).fetchone()
+        )
+        original.update(
+            id="newest-leaf",
+            fingerprint_sha256="d" * 64,
+            created_at="2099-01-01T00:00:00+00:00",
+        )
+        columns = tuple(original)
+        conn.execute(
+            f"INSERT INTO certificates ({','.join(columns)}) VALUES "
+            f"({','.join('?' for _ in columns)})",
+            [original[column] for column in columns],
+        )
+        conn.commit()
+
+    target = resolve_target(estate[0], _auth("key", "prod"), hostname=HOST, port=443)
+    assert target.baseline_fingerprint == "d" * 64
+    posted = client.post(
+        "/api/renewal-reports",
+        headers=headers,
+        json={"hostname": HOST, "port": 443, "outcome": "started"},
+    )
+    history = client.get(
+        "/api/renewal-reports",
+        headers=headers,
+        params={"hostname": HOST, "port": 443},
+    )
+    assert posted.status_code == 202
+    assert history.status_code == 200
+
+
+def test_real_0038_alias_merge_remains_reportable(tmp_path):
+    from cert_watch.migrations.m0038_canonical_hostnames import upgrade as upgrade_0038
+
+    db = tmp_path / "alias-merge.sqlite3"
+    init_schema(db)
+    canonical = "alias.example.test"
+    variant = "ALIAS.example.test."
+    with _connect(db) as conn:
+        added_at = NOW.isoformat()
+        conn.execute(
+            "INSERT INTO hosts (id,hostname,port,tags,added_at) VALUES (?,?,?,?,?)",
+            ("alias-a", canonical, 443, "prod", added_at),
+        )
+        conn.execute(
+            "INSERT INTO hosts (id,hostname,port,tags,added_at) VALUES (?,?,?,?,?)",
+            ("alias-b", variant, 443, "prod", added_at),
+        )
+        conn.commit()
+    seed_scanned(db, canonical, 443, parse_certificate(_make_cert(canonical).der))
+    seed_scanned(db, variant, 443, parse_certificate(_make_cert(variant).der))
+    with _connect(db) as conn:
+        upgrade_0038(conn)
+        conn.commit()
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM certificates WHERE hostname=? AND is_leaf=1",
+                (canonical,),
+            ).fetchone()[0]
+            == 2
+        )
+    target = resolve_target(db, _auth("key", "prod"), hostname=canonical, port=443)
+    assert target.host_id == "alias-a"
+
+
 def test_recent_lineage_predecessor_fingerprint_targets_endpoint(estate):
     old_fingerprint = estate[4]
     seed_scanned(
@@ -441,7 +672,13 @@ def test_concurrent_keys_serialize_one_attempt(estate):
 def test_history_redaction_and_report_key_ownership(estate):
     a = _auth("key-a", "prod")
     b = _auth("key-b", "prod")
-    _create(estate, auth=a, message="private detail", tool="hook-a")
+    _create(
+        estate,
+        auth=a,
+        message="private detail",
+        tool="hook-a",
+        correlation_id="corr-a",
+    )
     _create(estate, auth=b, message="other detail", tool="hook-b")
     target = resolve_target(estate[0], a, hostname=HOST, port=443)
     own = list_reports(estate[0], target, auth=a, page=1, limit=50, now=NOW)
@@ -451,7 +688,25 @@ def test_history_redaction_and_report_key_ownership(estate):
     viewer = AuthContext.from_tier("viewer", "viewer", scope_tag="prod")
     redacted = list_reports(estate[0], target, auth=viewer, page=1, limit=50, now=NOW)
     assert redacted["total"] == 2
-    assert {"message", "tool", "source"}.isdisjoint(redacted["items"][0])
+    assert {"message", "tool", "source", "correlation_id"}.isdisjoint(redacted["items"][0])
+
+    with _connect(estate[0]) as conn:
+        conn.execute(
+            "UPDATE certificates SET tags='certteam' WHERE hostname=? AND is_leaf=1",
+            (HOST,),
+        )
+        conn.commit()
+    cert_only_operator = AuthContext.from_tier(
+        "cert-operator",
+        "viewer",
+        scope_tag="certteam",
+        tag_tiers={"certteam": "operator"},
+    )
+    visible = resolve_history_target(estate[0], cert_only_operator, HOST, 443)
+    cert_redacted = list_reports(
+        estate[0], visible, auth=cert_only_operator, page=1, limit=50, now=NOW
+    )
+    assert {"message", "tool", "source", "correlation_id"}.isdisjoint(cert_redacted["items"][0])
 
 
 def test_delete_then_readd_has_no_history(estate):
@@ -462,6 +717,7 @@ def test_delete_then_readd_has_no_history(estate):
     with _connect(estate[0]) as conn:
         assert conn.execute("SELECT count(*) FROM renewal_reports").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM renewal_attempts").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM renewal_attempt_correlations").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM renewal_idempotency").fetchone()[0] == 0
     assert new_id != estate[2]
 
@@ -519,9 +775,7 @@ def test_route_rejects_hostile_messages(report_client, message):
     assert response.status_code == 422
 
 
-@pytest.mark.parametrize(
-    "tool", ["bad tool", "x" * 65, 'x"}', "line\r\nbreak", "direction\u202e"]
-)
+@pytest.mark.parametrize("tool", ["bad tool", "x" * 65, 'x"}', "line\r\nbreak", "direction\u202e"])
 def test_route_rejects_hostile_tools(report_client, tool):
     client, headers, _db = report_client
     response = client.post(
@@ -530,6 +784,63 @@ def test_route_rejects_hostile_tools(report_client, tool):
         json={"hostname": HOST, "port": 443, "outcome": "failed", "tool": tool},
     )
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "correlation_id",
+    ["has space", "line\r\nbreak", "nul\x00byte", "é", "", "x" * 129],
+)
+def test_route_rejects_non_printable_or_non_ascii_correlations(report_client, correlation_id):
+    client, headers, _db = report_client
+    response = client.post(
+        "/api/renewal-reports",
+        headers=headers,
+        json={
+            "hostname": HOST,
+            "port": 443,
+            "outcome": "failed",
+            "correlation_id": correlation_id,
+        },
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("content_type", ["text/plain", "application/x-www-form-urlencoded", ""])
+def test_route_requires_json_content_type(report_client, content_type):
+    client, headers, _db = report_client
+    request_headers = {**headers, "Content-Type": content_type}
+    response = client.post(
+        "/api/renewal-reports",
+        headers=request_headers,
+        content=json.dumps({"hostname": HOST, "port": 443, "outcome": "started"}),
+    )
+    assert response.status_code == 415
+
+
+def test_route_accepts_json_content_type_charset(report_client):
+    client, headers, _db = report_client
+    response = client.post(
+        "/api/renewal-reports",
+        headers={**headers, "Content-Type": "application/json; charset=utf-8"},
+        content=json.dumps({"hostname": HOST, "port": 443, "outcome": "started"}),
+    )
+    assert response.status_code == 202
+
+
+def test_route_rejects_duplicate_idempotency_headers(report_client):
+    client, headers, _db = report_client
+    response = client.post(
+        "/api/renewal-reports",
+        headers=[
+            ("Authorization", headers["Authorization"]),
+            ("Content-Type", "application/json"),
+            ("Idempotency-Key", "one"),
+            ("Idempotency-Key", "two"),
+        ],
+        content=json.dumps({"hostname": HOST, "port": 443, "outcome": "started"}),
+    )
+    assert response.status_code == 400
+    assert response.json() == {"error": "duplicate Idempotency-Key header"}
 
 
 def test_route_body_cap_precedes_json_parse(report_client):
@@ -659,15 +970,47 @@ def test_get_is_newest_first_and_succeeded_does_not_consume_idempotency(report_c
     assert response.json()["items"][0]["outcome"] == "failed"
 
 
+@pytest.mark.parametrize("params", [{"page": 10_001}, {"limit": 101}])
+def test_get_bounds_pagination(report_client, params):
+    client, headers, _db = report_client
+    response = client.get(
+        "/api/renewal-reports",
+        headers=headers,
+        params={"hostname": HOST, "port": 443, **params},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("failure_site", ["resolve_history_target", "list_reports"])
+def test_get_maps_every_service_refusal_to_404(report_client, monkeypatch, failure_site):
+    client, headers, _db = report_client
+    route_module = importlib.import_module("cert_watch.routes.api.renewal_reports")
+
+    def refuse(*_args, **_kwargs):
+        raise RenewalReportConflictError("deliberately hidden")
+
+    monkeypatch.setattr(route_module, failure_site, refuse)
+    response = client.get(
+        "/api/renewal-reports",
+        headers=headers,
+        params={"hostname": HOST, "port": 443},
+    )
+    assert response.status_code == 404
+    assert response.json() == {"error": "endpoint not found"}
+
+
 def test_delete_readd_under_another_team_has_empty_get_history(report_client):
     from cert_watch.database.api_keys import SqliteApiKeyRepository
 
     client, headers, db = report_client
-    assert client.post(
-        "/api/renewal-reports",
-        headers=headers,
-        json={"hostname": HOST, "port": 443, "outcome": "started"},
-    ).status_code == 202
+    assert (
+        client.post(
+            "/api/renewal-reports",
+            headers=headers,
+            json={"hostname": HOST, "port": 443, "outcome": "started"},
+        ).status_code
+        == 202
+    )
     host_repo = SqliteHostRepository(db)
     old = host_repo.get_by_endpoint(HOST, 443)
     assert old is not None and host_repo.delete(old.id)

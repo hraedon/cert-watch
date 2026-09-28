@@ -10,18 +10,21 @@ per minute per key and endpoint.
 
 ### `POST /api/renewal-reports`
 
-The body is a strict JSON object, limited to 16 KiB. Unknown fields, duplicate
-JSON keys, non-finite numbers and type coercion are rejected. Select exactly
-one target:
+The body is a strict JSON object, limited to 16 KiB, and the request must send
+`Content-Type: application/json` (a `charset` parameter is allowed). Other
+media types return 415. Unknown fields, duplicate JSON keys, non-finite
+numbers and type coercion are rejected. Select exactly one target:
 
 - `hostname` and `port` (recommended); or
 - `cert_fingerprint`, a 64-character SHA-256 hexadecimal fingerprint.
 
 Fingerprint lookup considers only scanned leaves on endpoints in the key's
 current host-tag binding. It matches the currently served leaf or a leaf
-recorded as replaced on that endpoint in the last seven days. No match returns
-404. More than one in-binding match returns 409 without naming the endpoints.
-Uploaded certificates cannot be targeted.
+recorded as replaced on that endpoint in the last seven days. Recent-
+predecessor lookup depends on the predecessor still being available in
+retained certificate history when migration 0046 backfills older lineage.
+No match returns 404. More than one in-binding match returns 409 without naming
+the endpoints. Uploaded certificates cannot be targeted.
 
 `outcome` is required and is `started`, `failed` or `succeeded`. S2 accepts
 `started` and `failed`; until deployment verification ships, `succeeded`
@@ -32,15 +35,17 @@ stores nothing. Optional fields are:
 |---|---|
 | `message` | At most 2,000 Unicode code points after NFC normalization. C0/C1 controls other than tab/newline and bidi overrides are rejected. |
 | `tool` | 1–64 characters matching `[A-Za-z0-9._+-]`. |
-| `correlation_id` | At most 128 code points; informational, not an idempotency key. |
+| `correlation_id` | 1–128 printable, non-space ASCII characters (`0x21`–`0x7e`); informational, not an idempotency key. |
 | `new_fingerprint` | A 64-character SHA-256 hexadecimal fingerprint. |
 | `occurred_at` | ISO 8601 with a UTC offset. Stored for history, never used to order or reduce reports. |
 
 The optional `Idempotency-Key` header is 1–128 printable ASCII characters and
-is scoped to the reporting key. Repeating the same key and canonical body
-returns the saved response. Reusing it with another body returns 409. A
-different report key may reuse the same value. Target existence and the live
-binding are checked before every replay lookup.
+is scoped to the reporting key and resolved endpoint. Duplicate header lines
+return 400. Repeating the same key, endpoint and canonical body returns the
+saved response. Reusing it with another body or an endpoint that resolves to a
+different `host_id` returns 409. A different report key may reuse the same
+value. Target existence and the live binding are checked before every replay
+lookup.
 
 Accepted reports return status 202:
 
@@ -51,24 +56,34 @@ Accepted reports return status 202:
 Reports are ordered only by the monotonic `report_id`. A repeated `started`
 is retained but never extends the original lease. The default lease is 24
 hours (`CERT_WATCH_RENEWAL_REPORT_LEASE_HOURS`, range 1–168). A lapsed lease
-becomes `abandoned` without raising an alert. Repeated `failed` reports are
-retained without changing the state; late reports do not reopen a terminal
-attempt.
+becomes `abandoned` without raising an alert. Every attempt is retained, while
+a partial unique index marks at most one as current for an endpoint. Repeated
+`failed` reports are retained without changing the state. Correlation
+ownership is retained separately from report retention, so a late report stays
+attached to its finished attempt and cannot reopen work. Only the first
+attempt for an endpoint and baseline leaf can suppress a stalled signal,
+including across intervening baselines and cancelled attempts.
 
 ### `GET /api/renewal-reports?hostname=…&port=…`
 
-Returns newest-first history. `page` defaults to 1 and `limit` defaults to 50
-(maximum 100). A report key receives only reports created by that same key,
+Returns newest-first history. `page` defaults to 1 (maximum 10,000) and
+`limit` defaults to 50 (maximum 100). A report key receives only reports created by that same key,
 and only while the endpoint remains in its live host-tag binding. Unknown and
 out-of-binding endpoints both return `404 {"error":"endpoint not found"}`.
+GET also maps a malformed hostname to that same 404; POST treats a malformed
+hostname as body validation and returns 422.
 
 A signed-in user who can read the endpoint sees outcome, timestamps, effect
-and attempt state. `message`, `tool` and `source` are included only for an
-administrator or a caller with effective write access to the endpoint. A
-report key can see those fields on its own reports. Report text is never
-copied to logs, events, alerts or notification delivery.
+and the state of that report's actual attempt. `message`, `tool`, `source` and
+`correlation_id` are included only for an administrator or a caller with
+HOST-tag write access to the endpoint. A report key can see those fields on
+its own reports. Report text is never
+copied to logs, events, alerts or notification delivery. Audit detail
+deliberately retains `tool` and `correlation_id` for administrators, but stores
+only the message length and hash rather than its text.
 
 Each endpoint retains at least its newest 50 reports plus every report newer
 than `history_retention_days`. Idempotency records expire after seven days.
-Deleting an endpoint deletes its reports, current attempt and idempotency
-records, so re-adding the same address does not inherit private history.
+Deleting an endpoint deletes its reports, attempt and correlation history, and
+idempotency records, so re-adding the same address does not inherit private
+history.

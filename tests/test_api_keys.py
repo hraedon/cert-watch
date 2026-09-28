@@ -690,9 +690,8 @@ def test_renewal_report_key_route_allowlist_is_uniform(reload_app):
         ]
         head = client.head("/api/renewal-reports", headers=headers)
         refusals.append(client.put("/api/renewal-reports", headers=headers))
-        for method in (client.get, client.post):
-            response = method("/api/renewal-reports", headers=headers)
-            assert response.status_code == 422
+        assert client.get("/api/renewal-reports", headers=headers).status_code == 422
+        assert client.post("/api/renewal-reports", headers=headers).status_code == 415
 
     assert {(r.status_code, r.content) for r in refusals} == {
         (403, b'{"error":"forbidden for this key"}')
@@ -892,9 +891,9 @@ def test_renewal_report_allowlist_applies_when_auth_is_disabled(reload_app):
 
     assert refused.status_code == 403
     assert refused.content == b'{"error":"forbidden for this key"}'
-    # The real route's validation response proves the key passed the pre-router
+    # The real route's media-type response proves the key passed the pre-router
     # allowlist and renewal-report guard even though browser auth is disabled.
-    assert admitted.status_code == 422
+    assert admitted.status_code == 415
 
 
 def test_refused_renewal_report_key_has_no_usage_side_effects(reload_app):

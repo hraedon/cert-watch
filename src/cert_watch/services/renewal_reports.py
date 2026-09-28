@@ -18,14 +18,22 @@ from cert_watch.auth.scope import ensure_write_scope_on, may_reveal_routing_iden
 from cert_watch.config import Settings
 from cert_watch.database import get_write_lock
 from cert_watch.database.connection import _connect, begin_immediate
-from cert_watch.tags import merge_tags, parse_tags
+from cert_watch.tags import parse_tags
 
 
-class RenewalReportNotFoundError(Exception):
+class RenewalReportServiceError(Exception):
     pass
 
 
-class RenewalReportConflictError(Exception):
+class RenewalReportNotFoundError(RenewalReportServiceError):
+    pass
+
+
+class RenewalReportConflictError(RenewalReportServiceError):
+    pass
+
+
+class RenewalReportUnavailableError(RenewalReportServiceError):
     pass
 
 
@@ -99,10 +107,14 @@ def resolve_target(
 ) -> RenewalTarget:
     """Resolve an endpoint and its live key binding in one SQL statement."""
     clause, binding_params = _binding_clause(auth)
-    leaf_join = (
-        "LEFT JOIN certificates c ON c.hostname=h.hostname AND c.port=h.port "
-        "AND c.is_leaf=1 AND c.source='scanned'"
-    )
+    # An old alias merge can leave two scanned leaves on one endpoint. Match
+    # the same deterministic head used by dashboard/readiness and cert_ops.
+    leaf_join = """LEFT JOIN certificates c ON c.rowid=(
+        SELECT head.rowid FROM certificates head
+        WHERE head.hostname=h.hostname AND head.port=h.port
+          AND head.is_leaf=1 AND head.source='scanned'
+        ORDER BY head.created_at DESC, head.rowid DESC LIMIT 1
+    )"""
     with _connect(db_path) as conn:
         if hostname is not None and port is not None:
             rows = conn.execute(
@@ -120,8 +132,12 @@ def resolve_target(
                            c.fingerprint_sha256 AS baseline_fingerprint,
                            c.not_after AS baseline_not_after
                     FROM hosts h
-                    JOIN certificates c ON c.hostname=h.hostname AND c.port=h.port
-                     AND c.is_leaf=1 AND c.source='scanned'
+                    JOIN certificates c ON c.rowid=(
+                        SELECT head.rowid FROM certificates head
+                        WHERE head.hostname=h.hostname AND head.port=h.port
+                          AND head.is_leaf=1 AND head.source='scanned'
+                        ORDER BY head.created_at DESC, head.rowid DESC LIMIT 1
+                    )
                     WHERE {clause} AND (
                         lower(c.fingerprint_sha256)=? OR EXISTS (
                             SELECT 1 FROM certificate_lineage cl
@@ -151,8 +167,12 @@ def _source(auth: Any) -> str:
 def _current_leaf(conn: sqlite3.Connection, host_id: str) -> tuple[str | None, str | None]:
     row = conn.execute(
         """SELECT c.fingerprint_sha256,c.not_after FROM hosts h
-           LEFT JOIN certificates c ON c.hostname=h.hostname AND c.port=h.port
-            AND c.is_leaf=1 AND c.source='scanned'
+           LEFT JOIN certificates c ON c.rowid=(
+               SELECT head.rowid FROM certificates head
+               WHERE head.hostname=h.hostname AND head.port=h.port
+                 AND head.is_leaf=1 AND head.source='scanned'
+               ORDER BY head.created_at DESC, head.rowid DESC LIMIT 1
+           )
            WHERE h.id=?""",
         (host_id,),
     ).fetchone()
@@ -182,6 +202,8 @@ def create_report(
     Returns ``(result, replayed)``. Target resolution is advisory; host
     existence and binding are checked again after ``BEGIN IMMEDIATE``.
     """
+    if report.outcome == "succeeded":
+        raise RenewalReportUnavailableError("renewal verification is not available yet")
     received = (now or datetime.now(UTC)).astimezone(UTC)
     received_at = received.isoformat()
     source = _source(auth)
@@ -207,12 +229,12 @@ def create_report(
 
             if idempotency_key:
                 old = conn.execute(
-                    "SELECT body_sha256,response_body FROM renewal_idempotency "
+                    "SELECT host_id,body_sha256,response_body FROM renewal_idempotency "
                     "WHERE source=? AND key=?",
                     (source, idempotency_key),
                 ).fetchone()
                 if old is not None:
-                    if old["body_sha256"] != body_sha256:
+                    if old["host_id"] != target.host_id or old["body_sha256"] != body_sha256:
                         raise RenewalReportConflictError("idempotency key reused")
                     saved = json.loads(str(old["response_body"]))
                     conn.rollback()
@@ -220,7 +242,8 @@ def create_report(
 
             baseline_fingerprint, baseline_not_after = _current_leaf(conn, target.host_id)
             attempt = conn.execute(
-                "SELECT * FROM renewal_attempts WHERE host_id=?", (target.host_id,)
+                "SELECT * FROM renewal_attempts WHERE host_id=? AND is_current=1",
+                (target.host_id,),
             ).fetchone()
             if (
                 attempt is not None
@@ -230,31 +253,50 @@ def create_report(
             ):
                 conn.execute(
                     "UPDATE renewal_attempts SET state='abandoned',"
-                    "suppresses_stalled=0,closed_reason='lease_expired' WHERE host_id=?",
-                    (target.host_id,),
+                    "suppresses_stalled=0,closed_reason='lease_expired' WHERE attempt_id=?",
+                    (attempt["attempt_id"],),
                 )
                 attempt = conn.execute(
-                    "SELECT * FROM renewal_attempts WHERE host_id=?", (target.host_id,)
+                    "SELECT * FROM renewal_attempts WHERE host_id=? AND is_current=1",
+                    (target.host_id,),
                 ).fetchone()
 
             new_attempt = attempt is None
             effect = "applied"
             state = "open" if report.outcome == "started" else "failed"
             attempt_id = uuid.uuid4().hex
-            previous_baseline: str | None = None
+            correlation_owner = None
+            if report.correlation_id:
+                correlation_owner = conn.execute(
+                    """SELECT a.* FROM renewal_attempt_correlations ac
+                       JOIN renewal_attempts a ON a.attempt_id=ac.attempt_id
+                       WHERE ac.host_id=? AND ac.source=? AND ac.correlation_id=?""",
+                    (target.host_id, source, report.correlation_id),
+                ).fetchone()
+
+            # Correlation ownership outlives report retention. Once a newer
+            # cycle is current, a stale retry belongs to its original attempt
+            # and can never reopen work or mint another suppression lease.
+            if correlation_owner is not None and (
+                attempt is None or correlation_owner["attempt_id"] != attempt["attempt_id"]
+            ):
+                attempt_id = str(correlation_owner["attempt_id"])
+                state = str(correlation_owner["state"])
+                effect = "ignored_late"
+                new_attempt = False
             if attempt is not None:
                 current_state = str(attempt["state"])
-                attempt_id = str(attempt["attempt_id"])
-                previous_baseline = attempt["baseline_fingerprint"]
+                if effect == "ignored_late":
+                    pass
+                else:
+                    attempt_id = str(attempt["attempt_id"])
                 same_correlation = bool(
-                    report.correlation_id
-                    and conn.execute(
-                        "SELECT 1 FROM renewal_reports WHERE attempt_id=? "
-                        "AND correlation_id=? LIMIT 1",
-                        (attempt_id, report.correlation_id),
-                    ).fetchone()
+                    correlation_owner is not None
+                    and correlation_owner["attempt_id"] == attempt["attempt_id"]
                 )
-                if current_state == "open":
+                if effect == "ignored_late":
+                    pass
+                elif current_state == "open":
                     if report.outcome == "started":
                         state, effect = "open", "duplicate"
                     else:
@@ -308,13 +350,19 @@ def create_report(
                 raise RuntimeError("renewal report insert returned no sequence")
             seq = int(cursor.lastrowid)
             if new_attempt:
+                conn.execute(
+                    "UPDATE renewal_attempts SET is_current=0 WHERE host_id=? AND is_current=1",
+                    (target.host_id,),
+                )
                 suppresses = int(
                     report.outcome == "started"
-                    and not (
-                        previous_baseline == baseline_fingerprint
-                        and attempt is not None
-                        and attempt["state"] in ("abandoned", "failed")
-                    )
+                    and conn.execute(
+                        """SELECT 1 FROM renewal_attempts
+                           WHERE host_id=? AND baseline_fingerprint IS ?
+                             AND lease_expires_at IS NOT NULL LIMIT 1""",
+                        (target.host_id, baseline_fingerprint),
+                    ).fetchone()
+                    is None
                 )
                 lease = (
                     (received + renewal_lease_for(target, settings)).isoformat()
@@ -323,23 +371,14 @@ def create_report(
                 )
                 conn.execute(
                     """INSERT INTO renewal_attempts
-                       (host_id,attempt_id,state,opened_seq,baseline_fingerprint,
+                       (attempt_id,host_id,is_current,source,state,opened_seq,baseline_fingerprint,
                         baseline_not_after,new_fingerprint,lease_expires_at,
                         suppresses_stalled,received_at,next_check_at,closed_reason)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,NULL,?)
-                       ON CONFLICT(host_id) DO UPDATE SET
-                         attempt_id=excluded.attempt_id,state=excluded.state,
-                         opened_seq=excluded.opened_seq,
-                         baseline_fingerprint=excluded.baseline_fingerprint,
-                         baseline_not_after=excluded.baseline_not_after,
-                         new_fingerprint=excluded.new_fingerprint,
-                         lease_expires_at=excluded.lease_expires_at,
-                         suppresses_stalled=excluded.suppresses_stalled,
-                         received_at=excluded.received_at,next_check_at=NULL,
-                         closed_reason=excluded.closed_reason""",
+                       VALUES (?,?,1,?,?,?,?,?,?,?,?,?,NULL,?)""",
                     (
-                        target.host_id,
                         attempt_id,
+                        target.host_id,
+                        source,
                         state,
                         seq,
                         baseline_fingerprint,
@@ -354,8 +393,15 @@ def create_report(
             elif effect == "applied" and state == "failed":
                 conn.execute(
                     "UPDATE renewal_attempts SET state='failed',suppresses_stalled=0,"
-                    "closed_reason='reported_failed' WHERE host_id=? AND attempt_id=?",
-                    (target.host_id, attempt_id),
+                    "closed_reason='reported_failed' WHERE attempt_id=?",
+                    (attempt_id,),
+                )
+
+            if report.correlation_id and effect != "ignored_late":
+                conn.execute(
+                    """INSERT OR IGNORE INTO renewal_attempt_correlations
+                       (host_id,source,correlation_id,attempt_id) VALUES (?,?,?,?)""",
+                    (target.host_id, source, report.correlation_id, attempt_id),
                 )
 
             result = RenewalReportResult(seq, attempt_id, state, effect)
@@ -375,6 +421,9 @@ def create_report(
                     ),
                 )
             message = report.message or ""
+            # Audit detail is the deliberate admin-only exception to report
+            # field confinement: tool and correlation aid incident tracing,
+            # while free-form message content remains hash-and-length only.
             audit_event = record_audit(
                 db_path,
                 actor=actor,
@@ -406,6 +455,8 @@ def resolve_history_target(
     if getattr(auth, "principal_kind", "") == "renewal-report":
         return resolve_target(db_path, auth, hostname=hostname, port=port)
     scope = tuple(parse_tags(getattr(auth, "scope_tag", "") or ""))
+    # Session readers use normal effective certificate+host visibility, while
+    # reporting keys deliberately use the narrower host-tag binding above.
     clause = "cw_tags_overlap(c.tags,h.tags,?)=1" if scope else "1=1"
     params: list[Any] = [",".join(scope)] if scope else []
     with _connect(db_path) as conn:
@@ -413,9 +464,12 @@ def resolve_history_target(
             f"""SELECT h.id,h.hostname,h.port,h.tags,c.tags AS cert_tags,
                        c.fingerprint_sha256 AS baseline_fingerprint,
                        c.not_after AS baseline_not_after
-                FROM hosts h LEFT JOIN certificates c
-                  ON c.hostname=h.hostname AND c.port=h.port
-                 AND c.is_leaf=1 AND c.source='scanned'
+                FROM hosts h LEFT JOIN certificates c ON c.rowid=(
+                    SELECT head.rowid FROM certificates head
+                    WHERE head.hostname=h.hostname AND head.port=h.port
+                      AND head.is_leaf=1 AND head.source='scanned'
+                    ORDER BY head.created_at DESC, head.rowid DESC LIMIT 1
+                )
                 WHERE h.hostname=? AND h.port=? AND ({clause}) LIMIT 1""",
             [hostname, port, *params],
         ).fetchone()
@@ -450,20 +504,15 @@ def list_reports(
         )
         rows = conn.execute(
             f"""SELECT r.*, CASE
-                     WHEN a.attempt_id=r.attempt_id AND a.state='open'
-                          AND a.lease_expires_at<=? THEN 'abandoned'
-                     WHEN a.attempt_id=r.attempt_id THEN a.state
-                     WHEN r.outcome='failed' THEN 'failed'
-                     ELSE 'abandoned' END AS state
+                     WHEN a.state='open' AND a.lease_expires_at<=? THEN 'abandoned'
+                     ELSE a.state END AS state
                 FROM renewal_reports r
-                LEFT JOIN renewal_attempts a ON a.host_id=r.host_id
+                JOIN renewal_attempts a ON a.attempt_id=r.attempt_id
                 WHERE r.host_id=?{source_filter}
                 ORDER BY r.seq DESC LIMIT ? OFFSET ?""",
             [current, *params, limit, offset],
         ).fetchall()
-    reveal = is_report_key or may_reveal_routing_identities(
-        auth, merge_tags(target.cert_tags, target.tags)
-    )
+    reveal = is_report_key or may_reveal_routing_identities(auth, parse_tags(target.tags))
     items: list[dict[str, Any]] = []
     for row in rows:
         item = {
@@ -474,11 +523,15 @@ def list_reports(
             "received_at": row["received_at"],
             "state": row["state"],
             "effect": row["effect"],
-            "correlation_id": row["correlation_id"],
             "new_fingerprint": row["new_fingerprint"],
         }
         if reveal:
-            item.update(message=row["message"], tool=row["tool"], source=row["source"])
+            item.update(
+                message=row["message"],
+                tool=row["tool"],
+                source=row["source"],
+                correlation_id=row["correlation_id"],
+            )
         items.append(item)
     return {"items": items, "page": page, "limit": limit, "total": total}
 
@@ -488,7 +541,8 @@ def expire_renewal_leases(db_path: str | Path, *, now: datetime | None = None) -
     with get_write_lock(), _connect(db_path) as conn:
         cursor = conn.execute(
             "UPDATE renewal_attempts SET state='abandoned',suppresses_stalled=0,"
-            "closed_reason='lease_expired' WHERE state='open' AND lease_expires_at<=?",
+            "closed_reason='lease_expired' WHERE is_current=1 AND state='open' "
+            "AND lease_expires_at<=?",
             (instant,),
         )
         conn.commit()

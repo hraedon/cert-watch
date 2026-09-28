@@ -9,7 +9,7 @@ import unicodedata
 from datetime import datetime
 from typing import Annotated, Literal, Self
 
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import (
     BaseModel,
@@ -31,6 +31,8 @@ from cert_watch.services.renewal_reports import (
     RenewalReportConflictError,
     RenewalReportInput,
     RenewalReportNotFoundError,
+    RenewalReportServiceError,
+    RenewalReportUnavailableError,
     create_report,
     list_reports,
     resolve_history_target,
@@ -40,6 +42,7 @@ from cert_watch.services.renewal_reports import (
 router = APIRouter()
 MAX_RENEWAL_REPORT_BYTES = 16 * 1024
 _TOOL_RE = re.compile(r"^[A-Za-z0-9._+\-]{1,64}$")
+_CORRELATION_RE = re.compile(r"^[\x21-\x7e]{1,128}$")
 _BIDI = set(range(0x202A, 0x202F)) | set(range(0x2066, 0x206A))
 
 
@@ -106,8 +109,8 @@ class RenewalReportBody(BaseModel):
     @field_validator("correlation_id")
     @classmethod
     def valid_correlation(cls, value: str | None) -> str | None:
-        if value is not None and len(value) > 128:
-            raise ValueError("must contain at most 128 code points")
+        if value is not None and not _CORRELATION_RE.fullmatch(value):
+            raise ValueError("must be 1-128 printable non-space ASCII characters")
         return value
 
     @field_validator("occurred_at")
@@ -174,9 +177,17 @@ def _canonical_hash(body: RenewalReportBody) -> str:
 async def api_create_renewal_report(
     request: Request,
     _auth: str = Depends(renewal_report_guard),
-    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JSONResponse:
     auth = acting_auth(request)
+    media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if media_type != "application/json":
+        return JSONResponse(
+            status_code=415, content={"error": "Content-Type must be application/json"}
+        )
+    idempotency_headers = request.headers.getlist("idempotency-key")
+    if len(idempotency_headers) > 1:
+        return JSONResponse(status_code=400, content={"error": "duplicate Idempotency-Key header"})
+    idempotency_key = idempotency_headers[0] if idempotency_headers else None
     principal = str(auth.principal_id)
     if not check_rate_limit(f"renewal_report:{principal}", 30, 60):
         return JSONResponse(status_code=429, content={"error": "rate limited"})
@@ -233,6 +244,8 @@ async def api_create_renewal_report(
         return JSONResponse(status_code=404, content={"error": str(exc)})
     except RenewalReportConflictError as exc:
         return JSONResponse(status_code=409, content={"error": str(exc)})
+    except RenewalReportUnavailableError as exc:
+        return JSONResponse(status_code=503, content={"error": str(exc)})
     return JSONResponse(status_code=202, content=result.__dict__)
 
 
@@ -241,17 +254,16 @@ def api_renewal_report_history(
     request: Request,
     hostname: str,
     port: Annotated[int, Query(ge=1, le=65535)],
-    page: Annotated[int, Query(ge=1)] = 1,
+    page: Annotated[int, Query(ge=1, le=10_000)] = 1,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     _auth: str = Depends(renewal_report_read_guard),
 ) -> JSONResponse:
     try:
         hostname = canonical_hostname(hostname)
         target = resolve_history_target(_db_path(request), acting_auth(request), hostname, port)
-    except (ValueError, RenewalReportNotFoundError):
-        return JSONResponse(status_code=404, content={"error": "endpoint not found"})
-    return JSONResponse(
-        content=list_reports(
+        history = list_reports(
             _db_path(request), target, auth=acting_auth(request), page=page, limit=limit
         )
-    )
+    except (ValueError, RenewalReportServiceError):
+        return JSONResponse(status_code=404, content={"error": "endpoint not found"})
+    return JSONResponse(content=history)
