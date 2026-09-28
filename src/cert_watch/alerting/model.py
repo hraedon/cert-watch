@@ -5,6 +5,7 @@ Imports the standard library only.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -50,6 +51,13 @@ FAILURE_LABELS = {
 }
 
 SendOutcome = Literal["accepted", "partial", "failed", "blocked"]
+
+
+def provider_incident_key(alert_type: str, dedupe_key: str | None) -> str:
+    """Keep legacy provider identity except for attempt-scoped renewal alerts."""
+    if alert_type not in {"renewal_not_deployed", "renewal_failed"}:
+        return ""
+    return hashlib.sha256((dedupe_key or "").encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -117,7 +125,7 @@ class OutboundMessage:
             threshold_days=alert.threshold_days,
             status=alert.status,
             trigger_cert_id=alert.trigger_cert_id,
-            incident_key=alert.dedupe_key or "",
+            incident_key=provider_incident_key(alert.alert_type, alert.dedupe_key),
             recipients=recipients,
             global_recipients=global_recipients,
             queued_recipients=(

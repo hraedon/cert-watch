@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cert_watch.alerting.model import WebhookConfig
+from cert_watch.alerting.model import WebhookConfig, provider_incident_key
 from cert_watch.alerting.transports.webhook import (
     _adapter_has_build_resolve,
     send_webhook_resolve,
@@ -60,7 +60,7 @@ def resolve_webhook_for_renewed_cert(
             hostname=alert.hostname,
             subject=alert.subject,
             alert_created_at=alert.created_at,
-            incident_key=alert.dedupe_key or "",
+            incident_key=provider_incident_key(alert.alert_type, alert.dedupe_key),
         ):
             resolved += 1
     return resolved

@@ -251,9 +251,13 @@ async def _scan_and_store(
     webhook_config: WebhookConfig | None = None,
     scope_guard: Callable[[Any], None] | None = None,
     _store_error_types: tuple[type[BaseException], ...] = (Exception,),
+    _scan_host_fn: Callable[..., Awaitable[Any]] | None = None,
+    _store_scanned_fn: Callable[..., Awaitable[str]] | None = None,
 ) -> ScanResult:
     started_at = datetime.now(UTC)
-    result = await scan_host_async(
+    scan_fn = _scan_host_fn or scan_host_async
+    store_fn = _store_scanned_fn or store_scanned_async
+    result = await scan_fn(
         hostname,
         port,
         verify=settings.tls_verify,
@@ -281,7 +285,7 @@ async def _scan_and_store(
         )
         return ScanResult("scan_error", result.error_message)
     try:
-        leaf_id = await store_scanned_async(
+        leaf_id = await store_fn(
             result,
             db_path,
             drift_alerts=settings.drift_alerts,
@@ -874,14 +878,30 @@ def delete_host(
     auth: Any,
     actor: str,
     source_ip: str | None,
+    webhook_config: WebhookConfig | None = None,
 ) -> bool:
     require_auth_context(auth)
+    closed_sent: list[Any] = []
     with get_write_lock():
         ensure_write_scope(auth, db_path, host_id=host_id)
         conn = _connect(db_path)
         try:
             begin_immediate(conn)
             ensure_write_scope_on(conn, auth, host_id=host_id)
+            cert_ids = [
+                str(row["id"])
+                for row in conn.execute(
+                    """SELECT c.id FROM certificates c JOIN hosts h
+                       ON h.hostname=c.hostname AND h.port=c.port WHERE h.id=?""",
+                    (host_id,),
+                ).fetchall()
+            ]
+            if cert_ids:
+                from cert_watch.database.alert_store import AlertStore
+
+                closed_sent = AlertStore(db_path, initialize=False).close_for_cert_ids(
+                    cert_ids, conn=conn, reason="endpoint deleted"
+                )
             deleted = SqliteHostRepository(db_path).delete(host_id, conn=conn)
             audit_event = record_audit(
                 db_path,
@@ -897,6 +917,15 @@ def delete_host(
             conn.rollback()
             raise
     export_audit(audit_event)
+    if closed_sent:
+        try:
+            from cert_watch.alerting.resolve import resolve_webhook_for_renewed_cert
+
+            resolve_webhook_for_renewed_cert(
+                db_path, "", webhook_config, pending_alerts=closed_sent
+            )
+        except Exception:
+            logger.warning("host-delete alert resolve failed", exc_info=True)
     return deleted
 
 

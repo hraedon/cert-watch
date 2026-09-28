@@ -6,6 +6,7 @@ integration via ``send_webhook``.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 from datetime import datetime
@@ -61,6 +62,78 @@ def _config(kind: str = "generic", **kw) -> WebhookConfig:
     }
     defaults.update(kw)
     return WebhookConfig(**defaults)
+
+
+@pytest.mark.parametrize(
+    "alert_type,threshold",
+    [
+        ("expiry_warning", 7),
+        ("expired", None),
+        ("drift", None),
+        ("renewal_stalled", None),
+        ("policy_violation", None),
+    ],
+)
+def test_existing_alert_provider_keys_remain_legacy(alert_type, threshold):
+    alert = Alert(
+        cert_id="current-cert",
+        trigger_cert_id="trigger-cert",
+        alert_type=alert_type,
+        status="sent",
+        message="condition",
+        threshold_days=threshold,
+        dedupe_key=f"new-internal-key:{alert_type}",
+        hostname="host.example.test",
+        subject="CN=host.example.test",
+    )
+    message = OutboundMessage.from_alert(alert)
+
+    pagerduty = json.loads(
+        PagerDutyAdapter().build(message, _config("pagerduty", routing_key="rk")).body
+    )
+    assert pagerduty["dedup_key"] == _pd_dedup_key(
+        "trigger-cert", alert_type, threshold
+    )
+    pagerduty_resolve = json.loads(
+        PagerDutyAdapter().build_resolve(
+            "trigger-cert",
+            alert_type,
+            threshold,
+            _config("pagerduty", routing_key="rk"),
+            incident_key=message.incident_key,
+        ).body
+    )
+    assert pagerduty_resolve["dedup_key"] == pagerduty["dedup_key"]
+    alertmanager = json.loads(
+        AlertmanagerAdapter().build(message, _config("alertmanager")).body
+    )
+    assert "cert_watch_dedupe_key" not in alertmanager["alerts"][0]["labels"]
+    alertmanager_resolve = json.loads(
+        AlertmanagerAdapter().build_resolve(
+            "trigger-cert",
+            alert_type,
+            threshold,
+            _config("alertmanager"),
+            incident_key=message.incident_key,
+        ).body
+    )
+    assert "cert_watch_dedupe_key" not in alertmanager_resolve["alerts"][0]["labels"]
+
+
+@pytest.mark.parametrize("alert_type", ["renewal_not_deployed", "renewal_failed"])
+def test_attempt_scoped_alert_provider_key_is_sha256(alert_type):
+    dedupe_key = f"{alert_type}:host.example.test:443:" + "f" * 96
+    message = OutboundMessage.from_alert(
+        Alert(
+            cert_id="cert",
+            alert_type=alert_type,
+            status="sent",
+            message="condition",
+            dedupe_key=dedupe_key,
+        )
+    )
+    assert message.incident_key == hashlib.sha256(dedupe_key.encode()).hexdigest()
+    assert len(message.incident_key) == 64
 
 
 # ---------------------------------------------------------------------------

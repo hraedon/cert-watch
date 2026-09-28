@@ -1035,6 +1035,29 @@ def report_client(estate, monkeypatch):
         yield client, {"Authorization": f"Bearer {raw}"}, db
 
 
+def test_unscanned_success_without_fingerprint_is_409_and_stores_nothing(report_client):
+    client, headers, db = report_client
+    SqliteHostRepository(db).add("unscanned.example.test", 443, tags="prod")
+    response = client.post(
+        "/api/renewal-reports",
+        headers=headers,
+        json={
+            "hostname": "unscanned.example.test",
+            "port": 443,
+            "outcome": "succeeded",
+        },
+    )
+    assert response.status_code == 409
+    assert response.json() == {
+        "error": "endpoint has not been scanned yet; report again after its first scan"
+    }
+    with _connect(db) as conn:
+        assert conn.execute(
+            """SELECT count(*) FROM renewal_reports r JOIN hosts h ON h.id=r.host_id
+               WHERE h.hostname='unscanned.example.test'"""
+        ).fetchone()[0] == 0
+
+
 @pytest.mark.parametrize(
     "message",
     ["bad\r\nheader", "direction\u202eoverride", "x" * 2001, "nul\x00byte"],

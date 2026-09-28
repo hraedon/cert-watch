@@ -76,7 +76,8 @@ _target(
     _Contract(
         renewal_reports.create_report,
         renewal_reports.create_report,
-        "INSERT INTO renewal_reports",
+        "_insert_report_on",
+        ((renewal_reports._insert_report_on, "INSERT INTO renewal_reports"),),
     ),
     "POST /api/renewal-reports",
 )
@@ -102,7 +103,6 @@ _target(
         (
             (host_management.create_hosts, "scope_guard=scope_guard"),
             (host_management._scan_and_store, "guard=scope_guard"),
-            (html_host_routes._scan_and_store, "guard=scope_guard"),
             (scan.store_scanned_async, "_guard=guard"),
         ),
     ),
@@ -117,7 +117,6 @@ _target(
         (
             (host_management.import_hosts_csv, "scope_guard=scope_guard"),
             (host_management._scan_and_store, "guard=scope_guard"),
-            (html_host_routes._scan_and_store, "guard=scope_guard"),
             (scan.store_scanned_async, "_guard=guard"),
         ),
     ),
@@ -132,7 +131,6 @@ _target(
         (
             (host_management.scan_host_now, "scope_guard=scope_guard"),
             (host_management._scan_and_store, "guard=scope_guard"),
-            (html_host_routes._scan_and_store, "guard=scope_guard"),
             (scan.store_scanned_async, "_guard=guard"),
         ),
     ),
@@ -147,7 +145,6 @@ _target(
         (
             (host_management.scan_all_hosts, "scope_guard=scope_guard"),
             (host_management._scan_and_store, "guard=scope_guard"),
-            (html_host_routes._scan_and_store, "guard=scope_guard"),
             (scan.store_scanned_async, "_guard=guard"),
         ),
     ),
@@ -890,8 +887,9 @@ def test_route_scope_classes_have_the_expected_guard_tier() -> None:
 
 
 def test_scan_failure_bookkeeping_authorizes_after_begin() -> None:
+    assert _call_positions(host_management._scan_and_store, "_record_scan_failure")
+    assert _call_positions(html_host_routes._scan_and_store, "_service_scan_and_store")
     for wrapper in (host_management._scan_and_store, html_host_routes._scan_and_store):
-        assert _call_positions(wrapper, "_record_scan_failure"), wrapper.__qualname__
         assert _call_positions(wrapper, "scope_guard=scope_guard"), wrapper.__qualname__
     begin = _call_positions(host_management._record_scan_failure, "begin_immediate")
     guard = _call_positions(host_management._record_scan_failure, "scope_guard(conn)")

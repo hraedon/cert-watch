@@ -19,12 +19,18 @@ def upgrade(conn: sqlite3.Connection) -> None:
         "verification_blocked_at": "TEXT",
         "raised_at": "TEXT",
         "verification_reason": "TEXT",
+        "success_received_at": "TEXT",
     }
     for name, definition in additions.items():
         if name not in columns:
             conn.execute(
                 f"ALTER TABLE renewal_attempts ADD COLUMN {name} {definition}"
             )
+    conn.execute(
+        """UPDATE renewal_attempts SET success_received_at=received_at
+           WHERE success_received_at IS NULL
+             AND state IN ('verifying','not_deployed','verified')"""
+    )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_renewal_attempts_pending_check "
         "ON renewal_attempts(next_check_at) WHERE is_current=1 AND next_check_at IS NOT NULL"

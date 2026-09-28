@@ -602,6 +602,7 @@ async def api_delete_host(
             auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
+            webhook_config=_get_settings(request).build_webhook_config(),
         )
     except ScopeDeniedError as exc:
         return _service_error(exc)

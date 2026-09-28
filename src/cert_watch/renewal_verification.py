@@ -56,9 +56,19 @@ def _band(attempt: sqlite3.Row, now: datetime) -> str:
 
 
 def _grace_at(attempt: sqlite3.Row, settings: Settings) -> datetime:
-    received = _instant(attempt["received_at"])
-    assert received is not None
-    return received + timedelta(minutes=settings.renewal_verify_grace_minutes)
+    succeeded = _instant(attempt["success_received_at"]) or _instant(
+        attempt["received_at"]
+    )
+    assert succeeded is not None
+    return succeeded + timedelta(minutes=settings.renewal_verify_grace_minutes)
+
+
+def _success_at(attempt: sqlite3.Row) -> datetime:
+    succeeded = _instant(attempt["success_received_at"]) or _instant(
+        attempt["received_at"]
+    )
+    assert succeeded is not None
+    return succeeded
 
 
 def _following_check(
@@ -69,9 +79,7 @@ def _following_check(
     if now < grace and band in {"urgent", "expired"}:
         return grace
     if band == "early":
-        received = _instant(attempt["received_at"])
-        assert received is not None
-        deadline = received + timedelta(hours=RENEWAL_VERIFY_EARLY_CHECK_HOURS)
+        deadline = _success_at(attempt) + timedelta(hours=RENEWAL_VERIFY_EARLY_CHECK_HOURS)
         if now < deadline:
             return deadline
         return now + timedelta(hours=RENEWAL_VERIFY_EARLY_CHECK_HOURS)
@@ -79,6 +87,11 @@ def _following_check(
         return now + timedelta(hours=RENEWAL_VERIFY_MID_CHECK_HOURS)
     if band == "expired":
         return now + timedelta(minutes=RENEWAL_VERIFY_EXPIRED_CHECK_MINUTES)
+    # Unknown expiry follows a stable hourly grid rooted at the grace anchor.
+    if _instant(attempt["baseline_not_after"]) is None:
+        elapsed = max(timedelta(), now - grace)
+        periods = int(elapsed / timedelta(hours=RENEWAL_VERIFY_URGENT_CHECK_HOURS)) + 1
+        return grace + periods * timedelta(hours=RENEWAL_VERIFY_URGENT_CHECK_HOURS)
     return now + timedelta(hours=RENEWAL_VERIFY_URGENT_CHECK_HOURS)
 
 
@@ -89,13 +102,15 @@ def _qualifies(attempt: sqlite3.Row, started_at: datetime, settings: Settings) -
 def _raise_due(attempt: sqlite3.Row, started_at: datetime, settings: Settings) -> bool:
     if not _qualifies(attempt, started_at, settings):
         return False
-    received = _instant(attempt["received_at"])
-    assert received is not None
     band = _band(attempt, started_at)
     if band == "early":
-        return started_at >= received + timedelta(hours=RENEWAL_VERIFY_EARLY_CHECK_HOURS)
+        return started_at >= _success_at(attempt) + timedelta(
+            hours=RENEWAL_VERIFY_EARLY_CHECK_HOURS
+        )
     if band == "mid":
-        return started_at >= received + timedelta(hours=RENEWAL_VERIFY_MID_RAISE_HOURS)
+        return started_at >= _success_at(attempt) + timedelta(
+            hours=RENEWAL_VERIFY_MID_RAISE_HOURS
+        )
     return True
 
 
@@ -134,18 +149,34 @@ def evaluate_evidence_on(
 
     reason: str | None = None
     next_check: datetime | None = None
-    if leaf is not None and expected is not None and leaf == expected:
+    successor = leaf is not None and leaf != baseline
+    if successor and expected is not None and leaf == expected:
         state, reason = "verified", "reported_fingerprint"
-    elif leaf is not None and baseline is not None and leaf != baseline and expected is None:
+    elif successor and baseline is not None and expected is None:
         state, reason = "verified", "observed_successor"
+    elif not count_check:
+        # Acceptance may recognize successor evidence already stored by a
+        # completed scan, but it never turns an old observation into a raise
+        # or displaces the one immediate post-report check.
+        return VerificationResult(state, attempt["next_check_at"], None)
     elif (
         leaf is not None
         and expected is not None
         and leaf != expected
         and leaf != baseline
     ):
-        state, reason = "not_deployed", "mismatch"
-        next_check = _following_check(attempt, started_at, settings)
+        if spaced_check and _raise_due(attempt, started_at, settings):
+            state, reason = "not_deployed", "mismatch"
+            # With no baseline, the first deadline decides the claim. Further
+            # scans return to the endpoint's ordinary cadence.
+            next_check = (
+                None if baseline is None else _following_check(attempt, started_at, settings)
+            )
+        else:
+            state = "verifying"
+            next_check = _following_check(attempt, started_at, settings)
+            if not spaced_check and last_check is not None:
+                next_check = max(next_check, last_check + timedelta(minutes=5))
     elif state == "open":
         # An open attempt changes only when the scan proves a successor.
         return VerificationResult(state, attempt["next_check_at"], None)
@@ -154,7 +185,8 @@ def evaluate_evidence_on(
         next_check = _following_check(attempt, started_at, settings)
     elif not spaced_check:
         existing_next = _instant(attempt["next_check_at"])
-        next_check = existing_next
+        spacing_floor = last_check + timedelta(minutes=5) if last_check else started_at
+        next_check = max(existing_next or spacing_floor, spacing_floor)
         reason = str(attempt["verification_reason"] or "") or None
     else:
         next_check = _following_check(attempt, started_at, settings)

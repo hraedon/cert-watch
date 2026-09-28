@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
@@ -24,17 +24,11 @@ from cert_watch.database import SqliteHostRepository
 from cert_watch.host_validation import hostname_is_valid
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth
 from cert_watch.routes._scoped import scope_write_denied, superseded_redirect, tags_with_scope
-from cert_watch.scan import (
-    ScanError,
-    resolve_and_validate_host,
-    scan_host_async,
-    store_scanned_async,
-)
+from cert_watch.scan import resolve_and_validate_host, scan_host_async, store_scanned_async
 from cert_watch.scan_freshness import (
     MAX_SCAN_INTERVAL_HOURS,
     MIN_SCAN_INTERVAL_HOURS,
 )
-from cert_watch.scheduler import ScanHistory, record_scan_history
 from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
 from cert_watch.services.certificate_identity import CertificateSupersededError
 from cert_watch.services.host_edit import HostEditUpdate, edit_host
@@ -44,8 +38,11 @@ from cert_watch.services.host_management import (
 from cert_watch.services.host_management import (
     HostSettingsUpdate,
     HostValidationError,
-    _record_scan_failure,
+    ScanStatus,
     create_hosts,
+)
+from cert_watch.services.host_management import (
+    _scan_and_store as _service_scan_and_store,
 )
 from cert_watch.services.host_management import (
     delete_host as delete_host_service,
@@ -106,78 +103,22 @@ async def _scan_and_store(
     webhook_config: WebhookConfig | None = None,
     scope_guard: Callable[[Any], None] | None = None,
     _store_error_types: tuple[type[BaseException], ...] = (Exception,),
-) -> tuple[Literal["success", "scan_error", "store_error"], str | None]:
-    result = await scan_host_async(
+) -> tuple[ScanStatus, str | None]:
+    result = await _service_scan_and_store(
         hostname,
         port,
-        verify=settings.tls_verify,
-        timeout=settings.scan_timeout,
-        retries=settings.scan_retries,
-        allow_private=settings.allow_private,
-        allowed_subnets=settings.allowed_subnets,
-        dns_servers=settings.dns_servers,
+        db,
+        settings,
         pinned_ip=pinned_ip,
-        max_output_bytes=settings.scan_max_output_bytes,
-        hsts_timeout=settings.hsts_timeout,
         starttls_mode=starttls_mode,
+        source=source,
+        webhook_config=webhook_config,
+        scope_guard=scope_guard,
+        _store_error_types=_store_error_types,
+        _scan_host_fn=scan_host_async,
+        _store_scanned_fn=store_scanned_async,
     )
-    if isinstance(result, ScanError):
-        _record_scan_failure(
-            db,
-            hostname=hostname,
-            port=port,
-            error_message=result.error_message,
-            source=source,
-            scope_guard=scope_guard,
-        )
-        return "scan_error", result.error_message
-    try:
-        leaf_id = await store_scanned_async(
-            result,
-            db,
-            drift_alerts=settings.drift_alerts,
-            check_revocation=settings.check_revocation,
-            allow_private=settings.allow_private,
-            allowed_subnets=settings.allowed_subnets,
-            webhook_config=webhook_config,
-            guard=scope_guard,
-        )
-    except ScopeDeniedError:
-        raise
-    except _store_error_types as exc:
-        logger.exception("store_scanned_async failed for %s:%d", hostname, port)
-        record_scan_history(
-            db,
-            ScanHistory(
-                hostname=hostname,
-                port=port,
-                status="failure",
-                error_message=f"store failed: {exc}",
-            ),
-        )
-        return "store_error", f"store failed: {exc}"
-    if not leaf_id:
-        # Defense in depth (WI-142): store_scanned now raises rather than
-        # returning "" on a rolled-back transaction, so this branch should
-        # be unreachable from the real store path. Kept as a safety net for
-        # any future store_fn regression that silently returns empty.
-        logger.warning(
-            "store_scanned returned empty (transaction rolled back) for %s:%d",
-            hostname,
-            port,
-        )
-        record_scan_history(
-            db,
-            ScanHistory(
-                hostname=hostname,
-                port=port,
-                status="failure",
-                error_message="store failed: transaction rolled back",
-            ),
-        )
-        return "store_error", "store failed: transaction rolled back"
-    record_scan_history(db, ScanHistory(hostname=hostname, port=port, status="success"))
-    return "success", None
+    return result.status, result.error
 
 
 router = APIRouter()
@@ -693,6 +634,7 @@ async def delete_host(
             auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
+            webhook_config=_get_settings(request).build_webhook_config(),
         )
     except ScopeDeniedError as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)

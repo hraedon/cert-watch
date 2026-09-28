@@ -138,8 +138,14 @@ def resolve_target(
             cutoff = (datetime.now(UTC) - timedelta(days=7)).isoformat()
             rows = conn.execute(
                 f"""SELECT DISTINCT h.id,h.hostname,h.port,h.tags,c.tags AS cert_tags,
-                           c.fingerprint_sha256 AS baseline_fingerprint,
-                           c.not_after AS baseline_not_after
+                           CASE WHEN lower(c.fingerprint_sha256)=? THEN c.fingerprint_sha256
+                                ELSE ? END AS baseline_fingerprint,
+                           CASE WHEN lower(c.fingerprint_sha256)=? THEN c.not_after
+                                ELSE (SELECT ch.not_after FROM cert_history ch
+                                      WHERE ch.hostname=h.hostname AND ch.port=h.port
+                                        AND lower(ch.fingerprint_sha256)=?
+                                      ORDER BY ch.scanned_at DESC LIMIT 1)
+                           END AS baseline_not_after
                     FROM hosts h
                     JOIN certificates c ON c.rowid=(
                         SELECT head.rowid FROM certificates head
@@ -155,7 +161,16 @@ def resolve_target(
                               AND lower(cl.old_fingerprint)=?
                         )
                     ) ORDER BY h.id LIMIT 2""",
-                [*binding_params, cert_fingerprint, cutoff, cert_fingerprint],
+                [
+                    cert_fingerprint,
+                    cert_fingerprint,
+                    cert_fingerprint,
+                    cert_fingerprint,
+                    *binding_params,
+                    cert_fingerprint,
+                    cutoff,
+                    cert_fingerprint,
+                ],
             ).fetchall()
     if not rows:
         raise RenewalReportNotFoundError("endpoint not found")
@@ -173,21 +188,16 @@ def _source(auth: Any) -> str:
     return f"user:{principal_id or getattr(auth, 'username', '')}"
 
 
-def _cache_renewal_status(
-    conn: sqlite3.Connection, host_id: str, *, now: datetime
-) -> str:
+def _cache_renewal_status(conn: sqlite3.Connection, host_id: str, *, now: datetime) -> str:
     """Refresh the legacy host column from the post-transition attempt state."""
     attempt = conn.execute(
-        "SELECT state,lease_expires_at FROM renewal_attempts "
-        "WHERE host_id=? AND is_current=1",
+        "SELECT state,lease_expires_at FROM renewal_attempts WHERE host_id=? AND is_current=1",
         (host_id,),
     ).fetchone()
     status = (
         "in_progress"
         if attempt is not None
-        and renewal_attempt_is_live(
-            str(attempt["state"]), attempt["lease_expires_at"], now=now
-        )
+        and renewal_attempt_is_live(str(attempt["state"]), attempt["lease_expires_at"], now=now)
         else "pending"
     )
     conn.execute("UPDATE hosts SET renewal_status=? WHERE id=?", (status, host_id))
@@ -228,9 +238,7 @@ def write_through_renewal_status_on(
     ):
         raise ScopeDeniedError("renewal-report keys cannot cancel renewal attempts")
     ensure_write_scope_on(conn, auth, host_id=host_id)
-    host = conn.execute(
-        "SELECT id,hostname,port FROM hosts WHERE id=?", (host_id,)
-    ).fetchone()
+    host = conn.execute("SELECT id,hostname,port FROM hosts WHERE id=?", (host_id,)).fetchone()
     if host is None:
         raise RenewalReportNotFoundError("endpoint not found")
     received = (now or datetime.now(UTC)).astimezone(UTC)
@@ -253,9 +261,7 @@ def write_through_renewal_status_on(
         and seen_status is None
         and status != derived_status
     ):
-        raise RenewalStatusOutOfDateError(
-            "The form is out of date; reload and try again."
-        )
+        raise RenewalStatusOutOfDateError("The form is out of date; reload and try again.")
     # HTML submits the value it rendered separately from the selected value.
     # An unchanged stale form is a no-op regardless of the state at commit.
     # JSON omits ``seen_status`` and retains explicit-intent semantics.
@@ -320,7 +326,8 @@ def write_through_renewal_status_on(
                    WHERE host_id=? AND baseline_fingerprint IS ?
                    LIMIT 1""",
                 (host_id, baseline_fingerprint),
-            ).fetchone() is None
+            ).fetchone()
+            is None
         )
         conn.execute(
             """INSERT INTO renewal_attempts
@@ -335,18 +342,21 @@ def write_through_renewal_status_on(
                 int(cursor.lastrowid),
                 baseline_fingerprint,
                 baseline_not_after,
-                (received + renewal_lease_for(
-                    RenewalTarget(
-                        host_id,
-                        str(host["hostname"]),
-                        int(host["port"]),
-                        "",
-                        "",
-                        baseline_fingerprint,
-                        baseline_not_after,
-                    ),
-                    settings,
-                )).isoformat(),
+                (
+                    received
+                    + renewal_lease_for(
+                        RenewalTarget(
+                            host_id,
+                            str(host["hostname"]),
+                            int(host["port"]),
+                            "",
+                            "",
+                            baseline_fingerprint,
+                            baseline_not_after,
+                        ),
+                        settings,
+                    )
+                ).isoformat(),
                 claims_baseline,
                 received_at,
                 claims_baseline,
@@ -421,6 +431,134 @@ def _evaluate_succeeded_on(
         settings=settings,
         count_check=False,
     ).state
+
+
+def _report_baseline(
+    conn: sqlite3.Connection,
+    target: RenewalTarget,
+    current_fingerprint: str | None,
+    current_not_after: str | None,
+    *,
+    received: datetime,
+) -> tuple[str | None, str | None]:
+    """Keep a target's recent predecessor as the attempt baseline."""
+    candidate = target.baseline_fingerprint
+    if candidate is None or candidate == current_fingerprint:
+        return current_fingerprint, current_not_after
+    cutoff = (received - timedelta(days=7)).isoformat()
+    recent = conn.execute(
+        """SELECT 1 FROM certificate_lineage cl
+           JOIN certificates c ON c.id=cl.new_cert_id
+           WHERE cl.hostname=? AND cl.port=? AND lower(cl.old_fingerprint)=?
+             AND lower(c.fingerprint_sha256)=? AND cl.created_at>=? LIMIT 1""",
+        (target.hostname, target.port, candidate, current_fingerprint, cutoff),
+    ).fetchone()
+    if recent is not None:
+        return candidate, target.baseline_not_after
+    return current_fingerprint, current_not_after
+
+
+def _next_success_check_on(
+    conn: sqlite3.Connection,
+    host_id: str,
+    received: datetime,
+    *,
+    outcome: str,
+    contradictory: bool,
+) -> datetime:
+    """Grant at most one immediate verification check per endpoint per five minutes."""
+    if outcome != "succeeded" or contradictory:
+        return received
+    previous = conn.execute(
+        """SELECT MAX(success_received_at) FROM renewal_attempts
+           WHERE host_id=? AND success_received_at IS NOT NULL""",
+        (host_id,),
+    ).fetchone()[0]
+    if not previous:
+        return received
+    previous_at = datetime.fromisoformat(str(previous))
+    if previous_at.tzinfo is None:
+        previous_at = previous_at.replace(tzinfo=UTC)
+    return max(received, previous_at.astimezone(UTC) + timedelta(minutes=5))
+
+
+def _initial_evidence_on(
+    conn: sqlite3.Connection,
+    target: RenewalTarget,
+    report: RenewalReportInput,
+    received: datetime,
+) -> tuple[str | None, str | None, str | None]:
+    current_fingerprint, current_not_after = _current_leaf(conn, target.host_id)
+    baseline_fingerprint, baseline_not_after = _report_baseline(
+        conn,
+        target,
+        current_fingerprint,
+        current_not_after,
+        received=received,
+    )
+    if (
+        report.outcome == "succeeded"
+        and current_fingerprint is None
+        and report.new_fingerprint is None
+    ):
+        raise RenewalReportConflictError(
+            "endpoint has not been scanned yet; report again after its first scan"
+        )
+    return current_fingerprint, baseline_fingerprint, baseline_not_after
+
+
+def _insert_report_on(
+    conn: sqlite3.Connection,
+    *,
+    report_id: str,
+    host: sqlite3.Row,
+    report: RenewalReportInput,
+    received_at: str,
+    source: str,
+    effect: str,
+    attempt_id: str,
+) -> int:
+    cursor = conn.execute(
+        """INSERT INTO renewal_reports
+           (report_id,host_id,hostname_snapshot,port_snapshot,outcome,message,tool,
+            correlation_id,new_fingerprint,occurred_at,received_at,source,effect,attempt_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            report_id,
+            host["id"],
+            host["hostname"],
+            host["port"],
+            report.outcome,
+            report.message,
+            report.tool,
+            report.correlation_id,
+            report.new_fingerprint,
+            report.occurred_at,
+            received_at,
+            source,
+            effect,
+            attempt_id,
+        ),
+    )
+    if cursor.lastrowid is None:  # pragma: no cover - SQLite INSERT contract
+        raise RuntimeError("renewal report insert returned no sequence")
+    return int(cursor.lastrowid)
+
+
+def _preserve_contradictory_attempt(
+    attempt: sqlite3.Row | None,
+    *,
+    contradictory: bool,
+    state: str,
+    new_attempt: bool,
+    attempt_id: str,
+    effect: str,
+) -> tuple[str, bool, str, str]:
+    if not contradictory:
+        return state, new_attempt, attempt_id, effect
+    if attempt is None:
+        return "open", new_attempt, attempt_id, "no_change"
+    return str(attempt["state"]), False, str(attempt["attempt_id"]), "no_change"
 
 
 def _store_idempotency_on(
@@ -565,16 +703,30 @@ def create_report(
                     conn.rollback()
                     return RenewalReportResult(**saved), True
 
-            baseline_fingerprint, baseline_not_after = _current_leaf(conn, target.host_id)
+            current_fingerprint, baseline_fingerprint, baseline_not_after = _initial_evidence_on(
+                conn, target, report, received
+            )
             attempt = conn.execute(
                 "SELECT * FROM renewal_attempts WHERE host_id=? AND is_current=1",
                 (target.host_id,),
             ).fetchone()
-            attempt = _expire_current_attempt_on(
-                conn, target.host_id, attempt, received=received
-            )
+            attempt = _expire_current_attempt_on(conn, target.host_id, attempt, received=received)
 
             new_attempt = attempt is None
+            prior_state = str(attempt["state"]) if attempt is not None else None
+            contradictory = bool(
+                report.outcome == "succeeded"
+                and report.new_fingerprint
+                and baseline_fingerprint
+                and report.new_fingerprint.lower() == baseline_fingerprint.lower()
+            )
+            success_check_at = _next_success_check_on(
+                conn,
+                target.host_id,
+                received,
+                outcome=report.outcome,
+                contradictory=contradictory,
+            )
             effect = "applied"
             state = {
                 "started": "open",
@@ -651,14 +803,11 @@ def create_report(
                     state, effect = "failed", "no_change"
                 elif current_state == "failed" and report.outcome == "succeeded":
                     state, effect = "verifying", "applied"
-                elif (
-                    current_state == "verified"
-                    and (
-                        report.outcome == "succeeded"
-                        or (
-                            report.outcome == "failed"
-                            and attempt["baseline_fingerprint"] == baseline_fingerprint
-                        )
+                elif current_state == "verified" and (
+                    report.outcome == "succeeded"
+                    or (
+                        report.outcome == "failed"
+                        and attempt["baseline_fingerprint"] == baseline_fingerprint
                     )
                 ):
                     state, effect, new_attempt = "verified", "ignored_late", False
@@ -668,33 +817,30 @@ def create_report(
                     new_attempt = True
                     attempt_id = uuid.uuid4().hex
 
-            report_id = uuid.uuid4().hex
-            cursor = conn.execute(
-                """INSERT INTO renewal_reports
-                   (report_id,host_id,hostname_snapshot,port_snapshot,outcome,message,tool,
-                    correlation_id,new_fingerprint,occurred_at,received_at,source,
-                    effect,attempt_id)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    report_id,
-                    target.host_id,
-                    host["hostname"],
-                    host["port"],
-                    report.outcome,
-                    report.message,
-                    report.tool,
-                    report.correlation_id,
-                    report.new_fingerprint,
-                    report.occurred_at,
-                    received_at,
-                    source,
-                    effect,
-                    attempt_id,
-                ),
+            # Preserve the report for audit/history, but a claimed fingerprint
+            # that is the baseline is not renewal evidence and changes no live
+            # attempt. A first-ever contradictory report gets an open history
+            # row so its report retains a concrete attempt identity.
+            state, new_attempt, attempt_id, effect = _preserve_contradictory_attempt(
+                attempt,
+                contradictory=contradictory,
+                state=state,
+                new_attempt=new_attempt,
+                attempt_id=attempt_id,
+                effect=effect,
             )
-            if cursor.lastrowid is None:  # pragma: no cover - SQLite INSERT contract
-                raise RuntimeError("renewal report insert returned no sequence")
-            seq = int(cursor.lastrowid)
+
+            report_id = uuid.uuid4().hex
+            seq = _insert_report_on(
+                conn,
+                report_id=report_id,
+                host=host,
+                report=report,
+                received_at=received_at,
+                source=source,
+                effect=effect,
+                attempt_id=attempt_id,
+            )
             if new_attempt:
                 conn.execute(
                     "UPDATE renewal_attempts SET is_current=0 WHERE host_id=? AND is_current=1",
@@ -706,7 +852,8 @@ def create_report(
                            WHERE host_id=? AND baseline_fingerprint IS ?
                            LIMIT 1""",
                         (target.host_id, baseline_fingerprint),
-                    ).fetchone() is None
+                    ).fetchone()
+                    is None
                 )
                 suppresses = int(report.outcome == "started" and claims_baseline)
                 lease = (
@@ -719,8 +866,9 @@ def create_report(
                        (attempt_id,host_id,is_current,source,state,opened_seq,baseline_fingerprint,
                         baseline_not_after,new_fingerprint,lease_expires_at,
                         suppresses_stalled,received_at,next_check_at,closed_reason,
+                        success_received_at,
                         baseline_lease_claimed)
-                       VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         attempt_id,
                         target.host_id,
@@ -729,12 +877,17 @@ def create_report(
                         seq,
                         baseline_fingerprint,
                         baseline_not_after,
-                        report.new_fingerprint if state == "verifying" else None,
+                        (
+                            report.new_fingerprint
+                            if state == "verifying" and not contradictory
+                            else None
+                        ),
                         lease,
                         suppresses,
                         received_at,
-                        received_at if state == "verifying" else None,
+                        success_check_at.isoformat() if state == "verifying" else None,
                         None if state in {"open", "verifying"} else "reported_failed",
+                        received_at if state == "verifying" else None,
                         claims_baseline,
                     ),
                 )
@@ -744,20 +897,37 @@ def create_report(
                     "closed_reason='reported_failed' WHERE attempt_id=?",
                     (attempt_id,),
                 )
-            elif report.outcome == "succeeded" and effect in {"applied", "no_change"}:
+            elif (
+                report.outcome == "succeeded"
+                and effect in {"applied", "no_change"}
+                and not contradictory
+            ):
+                fingerprint_sql = "?" if prior_state == "failed" else "COALESCE(new_fingerprint,?)"
                 conn.execute(
-                    """UPDATE renewal_attempts SET state=?,suppresses_stalled=0,
-                              new_fingerprint=COALESCE(new_fingerprint,?),
-                              next_check_at=COALESCE(next_check_at,?)
+                    f"""UPDATE renewal_attempts SET state=?,suppresses_stalled=0,
+                              new_fingerprint={fingerprint_sql},
+                              success_received_at=?,next_check_at=?,
+                              closed_reason=NULL
                        WHERE attempt_id=?""",
-                    (state, report.new_fingerprint, received_at, attempt_id),
+                    (
+                        state,
+                        report.new_fingerprint,
+                        received_at,
+                        success_check_at.isoformat(),
+                        attempt_id,
+                    ),
                 )
 
-            if report.outcome == "succeeded" and effect != "ignored_late":
+            if (
+                report.outcome == "succeeded"
+                and effect != "ignored_late"
+                and not contradictory
+                and prior_state != "not_deployed"
+            ):
                 state = _evaluate_succeeded_on(
                     conn,
                     attempt_id,
-                    baseline_fingerprint,
+                    current_fingerprint,
                     received=received,
                     settings=settings,
                 )
@@ -777,15 +947,23 @@ def create_report(
             result = RenewalReportResult(report_id, attempt_id, state, effect)
             response_body = json.dumps(result.__dict__, separators=(",", ":"), sort_keys=True)
             _store_idempotency_on(
-                conn, source=source, key=idempotency_key, host_id=target.host_id,
-                body_sha256=body_sha256, response_body=response_body,
+                conn,
+                source=source,
+                key=idempotency_key,
+                host_id=target.host_id,
+                body_sha256=body_sha256,
+                response_body=response_body,
                 received_at=received_at,
             )
             # Audit detail is the deliberate admin-only exception to report
             # field confinement: tool and correlation aid incident tracing,
             # while free-form message content remains hash-and-length only.
             audit_event = _record_report_audit(
-                db_path, conn, report, actor=actor, host_id=target.host_id,
+                db_path,
+                conn,
+                report,
+                actor=actor,
+                host_id=target.host_id,
                 source_ip=source_ip,
             )
             conn.commit()

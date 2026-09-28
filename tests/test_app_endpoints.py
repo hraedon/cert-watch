@@ -7,6 +7,71 @@ import sqlite3
 from fastapi.testclient import TestClient
 
 
+def test_every_html_scan_route_runs_shared_verification(
+    tmp_path, monkeypatch, reload_app, self_signed_leaf
+):
+    from cert_watch.certificate_model import parse_certificate
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.scan import ScannedEntry
+
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    verified = []
+
+    async def fake_scan(hostname, port=443, **_kwargs):
+        return ScannedEntry(
+            host=hostname,
+            port=port,
+            leaf=parse_certificate(self_signed_leaf.der),
+            chain=[],
+        )
+
+    monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", fake_scan)
+    monkeypatch.setattr(
+        "cert_watch.routes.hosts.resolve_and_validate_host",
+        lambda *_args, **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.services.host_management._record_verification_success",
+        lambda _db, hostname, port, *_args, **_kwargs: verified.append((hostname, port)),
+    )
+
+    with TestClient(app_mod.app) as client:
+        assert client.post(
+            "/hosts", data={"hostname": "add.example.test"}, follow_redirects=False
+        ).status_code == 303
+        assert verified == [("add.example.test", 443)]
+
+        verified.clear()
+        assert client.post(
+            "/hosts/import",
+            files={
+                "file": (
+                    "hosts.csv",
+                    b"hostname,port\nimport.example.test,443\n",
+                    "text/csv",
+                )
+            },
+            follow_redirects=False,
+        ).status_code == 303
+        assert verified == [("import.example.test", 443)]
+
+        host_id = SqliteHostRepository(db).add("manual.example.test", 443)
+        verified.clear()
+        assert client.post(
+            f"/hosts/{host_id}/scan", follow_redirects=False
+        ).status_code == 303
+        assert verified == [("manual.example.test", 443)]
+
+        verified.clear()
+        assert client.post("/hosts/all/scan", follow_redirects=False).status_code == 303
+        assert {hostname for hostname, _port in verified} == {
+            "add.example.test",
+            "import.example.test",
+            "manual.example.test",
+        }
+
+
 def test_delete_host_removes_host_and_certs(tmp_path, reload_app, leaf_pem_file):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"

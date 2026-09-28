@@ -31,8 +31,12 @@ report moves an open, failed or newly created attempt to `verifying`, ends any
 stall-suppression lease, and queues an immediate normal scan of the monitored
 endpoint. The request never scans inline. If already-stored scan evidence
 matches `new_fingerprint`, the response can be `verified` immediately. A
-success claim alone never closes a renewal-failed condition; only stored scan
-evidence does. Optional fields are:
+success claim never closes an existing `renewal_not_deployed` condition; a
+later stored scan must do that. An endpoint with no scanned leaf returns
+`409 {"error":"endpoint has not been scanned yet; report again after its first scan"}`
+for `succeeded` unless `new_fingerprint` is supplied. A supplied fingerprint
+equal to the attempt baseline is retained in report history with `no_change`,
+but is not applied as evidence. Optional fields are:
 
 | Field | Contract |
 |---|---|
