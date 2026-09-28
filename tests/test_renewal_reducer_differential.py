@@ -42,22 +42,21 @@ VENDORED_SHA256 = {
     "renewal_verification.py": "e98396f619179a955864133bb95b32b047b9daaa1c088b0b038d1206fc34ec42",
 }
 
-# Every attempt column owned by the pre-S5 report/verification reducers.
-MAIN_COLUMNS = (
-    "state",
-    "is_current",
-    "attempt_id",
-    "opened_seq",
-    "baseline_fingerprint",
-    "baseline_not_after",
-    "baseline_lease_claimed",
-    "new_fingerprint",
-    "verified_fingerprint",
-    "lease_expires_at",
-    "suppresses_stalled",
-    "success_received_at",
-    "next_check_at",
-    "closed_reason",
+# Corpus sequences on which the one documented exception (a failed report
+# carrying a verified attempt's correlation is ignored as late) fires.
+EXPECTED_DIVERGENT_SEQUENCES = [0, 1, 19, 40, 44]
+
+# Columns S5 adds to renewal_attempts for the failure overlay (migration 0049).
+# Every other attempt column is part of the base reducer's contract and must
+# match the merge-base reducer exactly.
+OVERLAY_COLUMNS = frozenset(
+    {
+        "failure_attempt_id",
+        "failure_reported_at",
+        "failure_cleared_at",
+        "failure_expected_fingerprint",
+        "rule_due_at",
+    }
 )
 
 Action = tuple[str, str | None, str | None, int]
@@ -237,7 +236,7 @@ def _auth() -> AuthContext:
 
 def _clone(source: Path, destination: Path) -> None:
     # Do not consume entries in cert-watch's small per-thread connection cache:
-    # this corpus creates two fresh databases for each of 70 cases.
+    # this corpus creates two fresh databases for every sequence it runs.
     with (
         closing(sqlite3.connect(source)) as source_conn,
         closing(sqlite3.connect(destination)) as destination_conn,
@@ -269,10 +268,18 @@ def _side(
     )
 
 
+def _base_columns(conn: sqlite3.Connection) -> tuple[str, ...]:
+    columns = tuple(
+        str(row[1]) for row in conn.execute("PRAGMA table_info(renewal_attempts)")
+    )
+    return tuple(column for column in columns if column not in OVERLAY_COLUMNS)
+
+
 def _snapshot(db: Path) -> tuple[tuple[object, ...], ...]:
     with _connect(db) as conn:
+        columns = _base_columns(conn)
         rows = conn.execute("SELECT * FROM renewal_attempts ORDER BY opened_seq").fetchall()
-    return tuple(tuple(row[column] for column in MAIN_COLUMNS) for row in rows)
+    return tuple(tuple(row[column] for column in columns) for row in rows)
 
 
 def _latest_report_effect(db: Path, report_id: str) -> str:
@@ -296,8 +303,19 @@ def _current_fingerprint(db: Path) -> str:
     return str(row[0])
 
 
-def _store_leaf_sql(db: Path, leaf: Certificate, instant: datetime, identity: object) -> None:
-    """Seed scan evidence without executing either branch's scan-storage code."""
+def _store_leaf_sql(
+    db: Path,
+    leaf: Certificate,
+    instant: datetime,
+    identity: object,
+    *,
+    store_hook: Callable[..., object] | None = None,
+) -> None:
+    """Seed scan evidence without executing either branch's scan-storage code.
+
+    ``store_hook`` runs inside the same transaction, where the branch's real
+    scan store calls it (the PR side passes its store-time failure hook; the
+    merge base has none)."""
     created_at = instant.astimezone(UTC).isoformat()
     leaf_id = f"differential-leaf-{identity}"
     with _connect(db) as conn:
@@ -354,6 +372,8 @@ def _store_leaf_sql(db: Path, leaf: Certificate, instant: datetime, identity: ob
                     previous["fingerprint_sha256"],
                 ),
             )
+        if store_hook is not None:
+            store_hook(conn, HOST, 443, leaf.fingerprint_sha256, observed_at=instant)
         conn.commit()
 
 
@@ -384,7 +404,15 @@ def _run_action(
         if kind == "store":
             assert leaf_name is not None
             leaf = leaves[leaf_name]
-            _store_leaf_sql(side.db, leaf, instant, index)
+            _store_leaf_sql(
+                side.db,
+                leaf,
+                instant,
+                index,
+                store_hook=(
+                    side.verification.observe_failure_successor_on if side.overlay else None
+                ),
+            )
             result = side.verification.evaluate_after_scan(
                 side.db,
                 HOST,
@@ -648,6 +676,53 @@ def test_differential_self_check_catches_acceptance_verification_regression(
         )
 
 
+def test_differential_self_check_catches_store_hook_touching_base_state(
+    differential_seed: DifferentialSeed, tmp_path: Path
+) -> None:
+    """The PR-only store-time hook must never alter base attempt columns."""
+
+    def install_mutant(side: Side) -> None:
+        original = side.verification.observe_failure_successor_on
+
+        def hook_that_verifies(conn: sqlite3.Connection, *args: Any, **kwargs: Any) -> Any:
+            result = original(conn, *args, **kwargs)
+            conn.execute("UPDATE renewal_attempts SET state='verified' WHERE is_current=1")
+            return result
+
+        side.verification = _ModuleProxy(
+            side.verification, observe_failure_successor_on=hook_that_verifies
+        )
+
+    with pytest.raises(AssertionError, match="differential mismatch"):
+        _assert_sequence_matches(
+            differential_seed,
+            tmp_path,
+            (("started", "run", None, 0), ("store", None, "A", 5)),
+            mutate_overlay=install_mutant,
+        )
+
+
+def test_main_side_acceptance_runs_the_vendored_verification(
+    differential_seed: DifferentialSeed, tmp_path: Path
+) -> None:
+    """Pin the sys.modules redirect: the merge-base reducer's acceptance call
+    must reach the vendored verification module, not the live one."""
+    seen: list[str] = []
+    original = main_verification.evaluate_evidence_on
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        seen.append("vendored")
+        return original(*args, **kwargs)
+
+    with patch.object(main_verification, "evaluate_evidence_on", spy):
+        _assert_sequence_matches(
+            differential_seed,
+            tmp_path,
+            (("store", None, "A", 0), ("succeeded", None, "A", 5)),
+        )
+    assert seen, "main-side acceptance did not call the vendored verification module"
+
+
 class _ModuleProxy:
     def __init__(self, module: ModuleType, **overrides: object) -> None:
         self._module = module
@@ -657,3 +732,21 @@ class _ModuleProxy:
         if name in self._overrides:
             return self._overrides[name]
         return getattr(self._module, name)
+
+
+def _divergent_sequences(seed: DifferentialSeed, tmp_path: Path) -> list[int]:
+    divergent: list[int] = []
+    for index, actions in enumerate(SEQUENCES):
+        case_dir = tmp_path / f"case-{index}"
+        case_dir.mkdir()
+        if _assert_sequence_matches(seed, case_dir, actions) is not None:
+            divergent.append(index)
+    return divergent
+
+
+def test_allowed_divergence_occurs_exactly_where_recorded(
+    differential_seed: DifferentialSeed, tmp_path: Path
+) -> None:
+    """Make the recorded divergences observable: the documented exception must
+    fire on exactly these corpus sequences, no more and no fewer."""
+    assert _divergent_sequences(differential_seed, tmp_path) == EXPECTED_DIVERGENT_SEQUENCES

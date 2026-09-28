@@ -82,9 +82,11 @@ All notable changes to cert-watch are documented in this file.
   base. A differential test runs reports, direct stored-leaf evidence, manual
   clears, compatibility status writes, and generated restart sequences against
   merge-base copies of both the report and verification reducers. It compares
-  returned state and effect, stored report effect, and every base attempt
-  column, and stops a sequence when it records that one allowed difference
-  (#118 S5).
+  returned state and effect, stored report effect, and every attempt column
+  except the five failure-overlay columns migration 0049 adds, runs the
+  store-time failure hook on the new side, and stops a sequence when it
+  records that one allowed difference, which must occur on exactly the
+  recorded sequences (#118 S5).
 
 ### Upgrade notes
 
