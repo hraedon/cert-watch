@@ -79,6 +79,7 @@ def test_v090_upgrades_to_head_without_data_loss(v090_db: Path) -> None:
         "0043",
         "0044",
         "0045",
+        "0046",
     ]
 
     # No data lost.

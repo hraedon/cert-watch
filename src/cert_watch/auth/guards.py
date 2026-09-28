@@ -482,6 +482,24 @@ class RenewalReportGuard(MutationGuard):
         return result.user or ""
 
 
+class RenewalReportReadGuard(ReadGuard):
+    """Read guard for report keys and browser sessions, but no ordinary keys."""
+
+    def __init__(self) -> None:
+        super().__init__(admin=False, form=False)
+
+    async def __call__(self, request: Request) -> str:
+        result = _check_auth(request, allow_renewal_report=True)
+        if result.error:
+            _raise_json(result.error)
+        context: AuthContext | None = getattr(request.state, "auth_context", None)
+        if result.api_key_auth and (
+            context is None or context.principal_kind != "renewal-report"
+        ):
+            raise HTTPException(status_code=403, detail="renewal-report key required")
+        return result.user or ""
+
+
 def renewal_report_binding(auth: AuthContext) -> Literal["all"] | tuple[str, ...]:
     """Return the authenticated report key's explicit endpoint binding."""
     if auth.principal_kind != "renewal-report":
@@ -521,6 +539,7 @@ admin_session_json_write_guard = MutationGuard(
     "admin", form=False, json_only=True, session_only=True
 )
 renewal_report_guard = RenewalReportGuard()
+renewal_report_read_guard = RenewalReportReadGuard()
 
 
 class MetricsGuard:

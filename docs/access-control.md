@@ -135,8 +135,7 @@ Read, write and admin keys are not tag-scoped: a `read` key can read the whole
 estate. A `renewal-report` key has no read, write or settings permissions. It
 can reach only `GET /api/renewal-reports` and `POST /api/renewal-reports` and
 is refused everywhere else, including health, metrics, HTML and static-file
-paths. Those report routes are introduced separately; until then they return
-404.
+paths. See the [renewal-report API reference](api.md#renewal-reports).
 
 A renewal-report key must be bound explicitly either to all endpoints or to
 one or more tags. Tag bindings match the endpoint's **host tags only**;
@@ -144,6 +143,12 @@ certificate-only tags never bring an endpoint into the binding. A binding is
 checked live on each report request and cannot be edited. Revoke the key and
 create another to change its binding. A key can bind at most 20 tags, each at
 most 64 characters and containing at least one visible character.
+
+A report key sees only its own report history. Signed-in users who can read an
+endpoint see report outcome, timestamps and state. Report message, tool and
+source follow the existing write boundary for routing identities: only an
+administrator or a caller with effective write access to that endpoint sees
+them.
 
 The report-key allowlist compares the raw request path. Deploying cert-watch
 under a URL path prefix or ASGI `root_path` is not supported for report keys

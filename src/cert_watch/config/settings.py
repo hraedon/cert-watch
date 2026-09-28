@@ -49,6 +49,7 @@ class Settings:
     drift_alerts: bool = True
     event_retention_days: int = 30
     renewal_window_days: int = 30
+    renewal_report_lease_hours: int = 24
     check_revocation: bool = False
     scan_timeout: float = 10.0
     scan_retries: int = 2

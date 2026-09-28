@@ -569,6 +569,11 @@ _QUERY_VARIANTS: dict[str, tuple[str, ...]] = {
     "/api/alerts": ("limit=500",),
     "/api/certificates": ("limit=500",),
     "/api/hosts": ("limit=500",),
+    "/api/renewal-reports": (
+        "hostname=pay-api.payments.test&port=443",
+        "hostname=hrops-portal.hrteam.test&port=443",
+        "hostname=missing.example.test&port=443",
+    ),
     "/api/calendar": ("bucket=week", "bucket=day", "bucket=month"),
     "/api/events": ("limit=500", "event_type=cert_changed", "source=scan"),
     "/api/events/failed": ("limit=500",),
@@ -768,7 +773,7 @@ def test_every_get_route_is_in_the_matrix() -> None:
     assert not empty, f"routes the matrix never requests: {sorted(empty)}"
 
 
-def test_renewal_report_key_get_allowlist_refuses_every_registered_get_route(
+def test_renewal_report_key_get_allowlist_refuses_every_other_registered_get_route(
     estate: _Estate,
 ) -> None:
     """All existing GETs have one byte-identical response before routing."""
@@ -788,8 +793,18 @@ def test_renewal_report_key_get_allowlist_refuses_every_registered_get_route(
                 response = client.get(url, headers=headers, follow_redirects=False)
                 responses[url] = (response.status_code, response.content)
 
-    assert responses
-    assert set(responses.values()) == {
+    allowed = {
+        url: result for url, result in responses.items()
+        if url == "/api/renewal-reports" or url.startswith("/api/renewal-reports?")
+    }
+    refused = {
+        url: result for url, result in responses.items()
+        if url != "/api/renewal-reports" and not url.startswith("/api/renewal-reports?")
+    }
+    assert allowed
+    assert {status for status, _body in allowed.values()} == {200, 404, 422}
+    assert refused
+    assert set(refused.values()) == {
         (403, b'{"error":"forbidden for this key"}')
     }
 
@@ -1490,6 +1505,7 @@ _NON_TARGET_MUTATIONS: dict[str, str] = {
     "/api/trust-anchors": "admin-only, estate-wide",
     "/api/policy": "admin-only, estate-wide",
     "/api/webhook/test": "sends a test webhook; touches no estate data",
+    "/api/renewal-reports": "target is resolved from the JSON body and rechecked transactionally",
     "/alerts/flush": "flushes the caller's own scope of the alert queue (scope_tags)",
     "/api/alert-groups": "admin-only",
     "/api/api-keys": "admin-only account object",

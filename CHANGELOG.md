@@ -8,7 +8,7 @@ All notable changes to cert-watch are documented in this file.
 
 - Added a least-privilege `renewal-report` API-key scope with an explicit
   all-endpoints or host-tag binding. These keys have no certificate or
-  settings permissions and are uniformly refused outside the future
+  settings permissions and are uniformly refused outside the
   `GET`/`POST /api/renewal-reports` routes. A separate hash prefix makes older
   binaries reject them rather than reinterpret them after a downgrade. Their
   tag bindings are limited to 20 visible labels of at most 64 characters each,
@@ -28,6 +28,14 @@ All notable changes to cert-watch are documented in this file.
   instead of the non-unique key name. The key name remains in event detail and
   the Activity page shows it alongside a short id.
 
+### Added
+
+- Added durable, append-only renewal reports and one current attempt per
+  endpoint, with strict 16 KiB ingestion, live host-tag targeting, recent-leaf
+  fingerprint lookup, source-scoped idempotency, non-extending leases,
+  redacted paginated history, retention and delete/re-add isolation. Renewal
+  success reports fail closed with 503 until scan verification ships (#118 S2).
+
 ### Fixed
 
 - Repeated scans of the same deployed certificate keep the persisted renewal
@@ -45,6 +53,10 @@ All notable changes to cert-watch are documented in this file.
   session or login flow; only rejected `cwk_` credentials force a JSON 401.
 
 ### Upgrade notes
+
+- Migration 0046 adds renewal report, current-attempt and idempotency tables.
+  It does not change alerting or existing renewal status behavior. See
+  [UPGRADING.md](UPGRADING.md).
 
 - Migration 0045 adds explicit binding metadata to API keys. Existing keys
   remain bound to all endpoints. See [UPGRADING.md](UPGRADING.md).

@@ -38,6 +38,7 @@ from cert_watch.services import (
     host_edit,
     host_management,
     host_ownership,
+    renewal_reports,
     resource_metadata,
 )
 from tests._route_inventory import mutating_routes
@@ -69,6 +70,17 @@ def _target(contract: _Contract, *keys: str) -> None:
 def _route_service(service: Any, *keys: str) -> None:
     for key in keys:
         _ROUTE_SERVICES[key] = service
+
+
+_target(
+    _Contract(
+        renewal_reports.create_report,
+        renewal_reports.create_report,
+        "INSERT INTO renewal_reports",
+    ),
+    "POST /api/renewal-reports",
+)
+_route_service(renewal_reports.create_report, "POST /api/renewal-reports")
 
 
 _target(

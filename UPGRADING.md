@@ -74,6 +74,14 @@ supported: stop cert-watch and restore the pre-migration backup before
 starting an older binary. Do not point an older binary at the migrated
 database.
 
+### Migration 0046
+
+Migration **0046** adds the append-only renewal report ledger, the one-current-
+attempt-per-endpoint projection and source-scoped idempotency records. It does
+not backfill or reinterpret the existing `renewal_status` column; that
+compatibility transition is intentionally deferred to the next slice. Endpoint
+deletion removes all three new kinds of endpoint-owned data.
+
 ## Upgrading from 1.0.4 to 1.1.0
 
 1.1.0 describes every endpoint with four separate facts -- certificate

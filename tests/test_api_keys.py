@@ -21,10 +21,12 @@ from cert_watch.auth.guards import (
     admin_write_guard,
     renewal_report_binding,
     renewal_report_guard,
+    renewal_report_read_guard,
     require_admin,
     require_auth,
     write_guard,
 )
+from cert_watch.auth.rbac import AuthContext
 from cert_watch.auth.request_context import authenticate_api_key, resolve_session_user
 from cert_watch.database import init_schema
 from cert_watch.database.api_keys import SqliteApiKeyRepository, hash_token
@@ -565,6 +567,33 @@ async def test_renewal_report_guard_refuses_plain_session(seeded):
 
 
 @pytest.mark.anyio
+async def test_renewal_report_read_guard_refuses_missing_and_ordinary_key(seeded):
+    db, repo = seeded
+    missing = _make_request(db, method="GET", path="/api/renewal-reports")
+    with pytest.raises(HTTPException) as unauthenticated:
+        await renewal_report_read_guard(missing)
+    assert unauthenticated.value.status_code == 401
+
+    _, raw = repo.create_key("reader", "read")
+    ordinary = _make_request(
+        db, bearer=raw, method="GET", path="/api/renewal-reports"
+    )
+    with pytest.raises(HTTPException) as forbidden:
+        await renewal_report_read_guard(ordinary)
+    assert forbidden.value.status_code == 403
+
+
+def test_renewal_report_binding_rejects_wrong_or_corrupt_context():
+    with pytest.raises(ValueError, match="principal required"):
+        renewal_report_binding(AuthContext.system())
+    corrupt = AuthContext.renewal_report_key(
+        "broken", principal_id="broken", binding="tags", bound_tags=()
+    )
+    with pytest.raises(ValueError, match="invalid renewal-report binding"):
+        renewal_report_binding(corrupt)
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "guard", [require_auth, write_guard, require_admin, admin_write_guard]
 )
@@ -663,7 +692,7 @@ def test_renewal_report_key_route_allowlist_is_uniform(reload_app):
         refusals.append(client.put("/api/renewal-reports", headers=headers))
         for method in (client.get, client.post):
             response = method("/api/renewal-reports", headers=headers)
-            assert response.status_code == 404
+            assert response.status_code == 422
 
     assert {(r.status_code, r.content) for r in refusals} == {
         (403, b'{"error":"forbidden for this key"}')
@@ -845,7 +874,6 @@ def test_public_path_does_not_consume_existing_key_scopes(reload_app):
 
 
 def test_renewal_report_allowlist_applies_when_auth_is_disabled(reload_app):
-    from fastapi import Depends
     from fastapi.testclient import TestClient
 
     from cert_watch.config import Settings
@@ -854,15 +882,6 @@ def test_renewal_report_allowlist_applies_when_auth_is_disabled(reload_app):
     db = Settings.from_env().db_path
     repo = SqliteApiKeyRepository(db)
     _, raw = repo.create_key("renewal-hook", "renewal-report", binding="all")
-
-    @app_mod.app.post("/api/renewal-reports")
-    async def report(
-        request: Request, user: str = Depends(renewal_report_guard)
-    ) -> dict[str, str]:
-        return {
-            "user": user,
-            "principal_kind": request.state.auth_context.principal_kind,
-        }
 
     with TestClient(app_mod.app) as client:
         refused = client.get("/", headers={"Authorization": f"Bearer {raw}"})
@@ -873,10 +892,9 @@ def test_renewal_report_allowlist_applies_when_auth_is_disabled(reload_app):
 
     assert refused.status_code == 403
     assert refused.content == b'{"error":"forbidden for this key"}'
-    assert admitted.status_code == 200
-    assert admitted.json() == {
-        "user": "renewal-hook", "principal_kind": "renewal-report"
-    }
+    # The real route's validation response proves the key passed the pre-router
+    # allowlist and renewal-report guard even though browser auth is disabled.
+    assert admitted.status_code == 422
 
 
 def test_refused_renewal_report_key_has_no_usage_side_effects(reload_app):
