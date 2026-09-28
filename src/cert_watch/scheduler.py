@@ -857,7 +857,14 @@ def _check_renewal_overdue(
         if send_webhook is not None:
             from cert_watch.database.renewal_attempts import endpoint_stall_suppressions
 
-            suppressions = endpoint_stall_suppressions(db_path, hosts, now=current)
+            try:
+                suppressions = endpoint_stall_suppressions(db_path, hosts, now=current)
+            except Exception:
+                # Suppression is advisory. A read failure must fail open so an
+                # overdue sweep still emits its events and webhooks.
+                logger.exception(
+                    "renewal webhook suppression lookup failed — sending unsuppressed"
+                )
         seen: set[tuple[str, int]] = set()
         for hostname, port in hosts:
             if (hostname, port) in seen:

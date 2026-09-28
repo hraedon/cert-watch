@@ -12,7 +12,7 @@ from cert_watch.database.chain_status_cache import (
     prepare_status,
     verified_chain_status_sql,
 )
-from cert_watch.database.connection import _connect
+from cert_watch.database.connection import _connect, _sql_now
 from cert_watch.database.dashboard_helpers import (
     _SORT_COLUMNS_ALIAS,
     _add_effective_tag_filter,
@@ -498,16 +498,17 @@ def build_inventory_entries(
     for chunk in _chunks(leaf_ids):
         ph = ",".join("?" * len(chunk))
         host_rows += conn.execute(
-            f"""SELECT DISTINCT {host_projection_sql('h')} FROM hosts h JOIN certificates c
+            f"""SELECT DISTINCT {host_projection_sql('h', '?')} FROM hosts h JOIN certificates c
                 ON c.hostname = h.hostname AND c.port = h.port
                 WHERE c.id IN ({ph})""",
-            chunk,
+            [_sql_now(status.now), *chunk],
         ).fetchall()
     pending_hosts: list[Any] = []
     for chunk in _chunks(pending_ids):
         ph = ",".join("?" * len(chunk))
         pending_hosts += conn.execute(
-            f"SELECT {host_projection_sql('h')} FROM hosts h WHERE h.id IN ({ph})", chunk
+            f"SELECT {host_projection_sql('h', '?')} FROM hosts h WHERE h.id IN ({ph})",
+            [_sql_now(status.now), *chunk],
         ).fetchall()
     pairs = sorted({(h["hostname"], h["port"]) for h in [*host_rows, *pending_hosts]})
     scan_rows: list[Any] = []

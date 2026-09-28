@@ -103,9 +103,13 @@ Deleting an endpoint deletes its reports, attempt and correlation history, and
 idempotency records, so re-adding the same address does not inherit private
 history.
 
-The legacy host `renewal_status` field is write-through only when the submitted
-value differs from the lease-aware derived value: `in_progress` creates a
-`started` report, and `pending` cancels only a current open attempt whose lease
-is still live. Echoing either displayed value is a no-op. Responses return
-`in_progress` exactly when the current attempt is open and its lease is live,
-without consulting the stored compatibility column.
+The legacy host `renewal_status` field is optional on JSON `PUT` and `PATCH`
+requests. Omitting it leaves renewal state unchanged. Supplying it is explicit
+intent: `in_progress` creates a `started` report when there is no live lease,
+and `pending` cancels a current attempt only while its lease is live. HTML
+forms also submit the value rendered to the operator; changing the select acts
+on the lease-aware state at commit, while leaving it unchanged never alters a
+lease even if automation reported progress or a lease lapsed while the form
+was open. Responses return `in_progress` exactly when the current attempt is
+open and its lease is live, without consulting the stored compatibility
+column.

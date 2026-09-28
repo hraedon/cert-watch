@@ -173,13 +173,35 @@ def _source(auth: Any) -> str:
     return f"user:{principal_id or getattr(auth, 'username', '')}"
 
 
+def _cache_renewal_status(
+    conn: sqlite3.Connection, host_id: str, *, now: datetime
+) -> str:
+    """Refresh the legacy host column from the post-transition attempt state."""
+    attempt = conn.execute(
+        "SELECT state,lease_expires_at FROM renewal_attempts "
+        "WHERE host_id=? AND is_current=1",
+        (host_id,),
+    ).fetchone()
+    status = (
+        "in_progress"
+        if attempt is not None
+        and renewal_attempt_is_live(
+            str(attempt["state"]), attempt["lease_expires_at"], now=now
+        )
+        else "pending"
+    )
+    conn.execute("UPDATE hosts SET renewal_status=? WHERE id=?", (status, host_id))
+    return status
+
+
 def write_through_renewal_status_on(
     conn: sqlite3.Connection,
     db_path: str | Path,
     settings: Settings,
     host_id: str,
-    status: str,
+    status: str | None,
     *,
+    seen_status: str | None = None,
     auth: Any,
     actor: str,
     source_ip: str | None,
@@ -192,9 +214,15 @@ def write_through_renewal_status_on(
     attempt tables as report ingestion, and returns an audit event for export
     only after the caller commits.
     """
-    if status not in {"pending", "in_progress"}:
+    if status is not None and status not in {"pending", "in_progress"}:
         raise ValueError("invalid renewal status")
-    if status == "pending" and getattr(auth, "principal_kind", "") == "renewal-report":
+    if seen_status is not None and seen_status not in {"pending", "in_progress"}:
+        raise ValueError("invalid seen renewal status")
+    if (
+        status == "pending"
+        and status != seen_status
+        and getattr(auth, "principal_kind", "") == "renewal-report"
+    ):
         raise ScopeDeniedError("renewal-report keys cannot cancel renewal attempts")
     ensure_write_scope_on(conn, auth, host_id=host_id)
     host = conn.execute(
@@ -216,10 +244,16 @@ def write_through_renewal_status_on(
         )
         else "pending"
     )
-    conn.execute(
-        "UPDATE hosts SET renewal_status=? WHERE id=?", (derived_status, host_id)
+    # HTML submits the value it rendered separately from the selected value.
+    # An unchanged stale form is a no-op regardless of the state at commit.
+    # JSON omits ``seen_status`` and retains explicit-intent semantics.
+    unchanged = (
+        status is None
+        or status == derived_status
+        or (seen_status is not None and status == seen_status)
     )
-    if status == derived_status:
+    if unchanged:
+        _cache_renewal_status(conn, host_id, now=received)
         return derived_status, None
 
     outcome = "started" if status == "in_progress" else "cancelled"
@@ -313,6 +347,7 @@ def write_through_renewal_status_on(
             (attempt_id,),
         )
 
+    post_status = _cache_renewal_status(conn, host_id, now=received)
     audit_event = record_audit(
         db_path,
         actor=actor,
@@ -329,7 +364,7 @@ def write_through_renewal_status_on(
         source_ip=source_ip,
         conn=conn,
     )
-    return ("in_progress" if outcome == "started" else "pending"), audit_event
+    return post_status, audit_event
 
 
 def _current_leaf(conn: sqlite3.Connection, host_id: str) -> tuple[str | None, str | None]:
@@ -592,6 +627,8 @@ def create_report(
                     (attempt_id,),
                 )
 
+            _cache_renewal_status(conn, target.host_id, now=received)
+
             if report.correlation_id and effect != "ignored_late":
                 conn.execute(
                     """INSERT INTO renewal_attempt_correlations
@@ -741,14 +778,22 @@ def list_reports(
 
 
 def expire_renewal_leases(db_path: str | Path, *, now: datetime | None = None) -> int:
-    instant = (now or datetime.now(UTC)).astimezone(UTC).isoformat()
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    instant = current.isoformat()
     with get_write_lock(), _connect(db_path) as conn:
+        expiring = conn.execute(
+            "SELECT host_id FROM renewal_attempts WHERE is_current=1 AND state='open' "
+            "AND cw_epoch_ms(lease_expires_at)<=cw_epoch_ms(?)",
+            (instant,),
+        ).fetchall()
         cursor = conn.execute(
             "UPDATE renewal_attempts SET state='abandoned',suppresses_stalled=0,"
             "closed_reason='lease_expired' WHERE is_current=1 AND state='open' "
-            "AND julianday(lease_expires_at)<=julianday(?)",
+            "AND cw_epoch_ms(lease_expires_at)<=cw_epoch_ms(?)",
             (instant,),
         )
+        for row in expiring:
+            _cache_renewal_status(conn, str(row["host_id"]), now=current)
         conn.commit()
         return cursor.rowcount
 

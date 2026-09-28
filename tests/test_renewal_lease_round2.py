@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import uuid
 from datetime import UTC, datetime, timedelta, timezone
 
@@ -14,6 +15,7 @@ from cert_watch.database import SqliteHostRepository, init_schema
 from cert_watch.database.connection import _connect
 from cert_watch.database.renewal_attempts import (
     endpoint_stall_suppression_active,
+    host_projection_sql,
     renewal_attempt_is_live,
     renewal_attempt_is_live_sql,
 )
@@ -59,6 +61,10 @@ def _seed_attempt(db, host_id: str, kind: str) -> str:
                 int(kind == "live"),
                 now.isoformat(),
             ),
+        )
+        conn.execute(
+            "UPDATE hosts SET renewal_status=? WHERE id=?",
+            ("in_progress" if kind == "live" else "pending", host_id),
         )
         conn.commit()
     return "in_progress" if kind == "live" else "pending"
@@ -119,6 +125,7 @@ def test_unrelated_writers_preserve_attempt_and_report_history(
         "scan_interval_hours": "",
         "threshold_days": "17",
         "renewal_status": displayed,
+        "renewal_status_seen": displayed,
         "notes": "unchanged renewal work",
         "tags": "",
     }
@@ -137,6 +144,7 @@ def test_unrelated_writers_preserve_attempt_and_report_history(
                 f"/hosts/{host_id}/edit", data=edit, follow_redirects=False
             )
         elif writer == "edit_json":
+            edit.pop("renewal_status_seen")
             response = client.put(
                 f"/api/hosts/{host_id}",
                 json={**edit, "scan_interval_hours": None, "threshold_days": 17},
@@ -201,6 +209,34 @@ def test_python_and_sql_lease_predicates_agree_on_offsets_and_boundary(tmp_path)
     assert renewal_attempt_is_live("open", now.isoformat(), now=now) is False
 
 
+def test_python_and_sql_lease_predicates_fuzz_to_zero_mismatches(tmp_path) -> None:
+    db = tmp_path / "predicate-fuzz.sqlite3"
+    init_schema(db)
+    rng = random.Random(20260928)
+    base = datetime(2026, 9, 27, 12, tzinfo=UTC)
+    zones = (
+        UTC,
+        timezone(timedelta(hours=-7)),
+        timezone(timedelta(hours=5, minutes=30)),
+    )
+    mismatches = 0
+    with _connect(db) as conn:
+        query = (
+            "SELECT "
+            + renewal_attempt_is_live_sql("a", "?")
+            + " FROM (SELECT 'open' AS state, ? AS lease_expires_at) a"
+        )
+        for _ in range(10_000):
+            now = base + timedelta(microseconds=rng.randint(-10_000_000, 10_000_000))
+            lease = now + timedelta(microseconds=rng.randint(-2_000_000, 2_000_000))
+            now = now.astimezone(rng.choice(zones))
+            lease = lease.astimezone(rng.choice(zones))
+            sql = bool(conn.execute(query, (now.isoformat(), lease.isoformat())).fetchone()[0])
+            python = renewal_attempt_is_live("open", lease.isoformat(), now=now)
+            mismatches += sql != python
+    assert mismatches == 0
+
+
 def test_non_current_open_attempt_and_exact_boundary_do_not_suppress(tmp_path) -> None:
     db = tmp_path / "mutants.sqlite3"
     init_schema(db)
@@ -234,6 +270,119 @@ def test_non_current_open_attempt_and_exact_boundary_do_not_suppress(tmp_path) -
         )
         conn.commit()
     assert not endpoint_stall_suppression_active(db, HOST, 443, now=now)
+
+
+def test_non_current_open_live_attempt_does_not_drive_host_projection(tmp_path) -> None:
+    db = tmp_path / "projection-mutant.sqlite3"
+    init_schema(db)
+    host_id = SqliteHostRepository(db).add(HOST, 443)
+    now = datetime.now(UTC)
+    with _connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,lease_expires_at,
+                suppresses_stalled,received_at)
+               VALUES ('demoted',?,0,'test','open',1,?,0,?),
+                      ('current',?,1,'test','failed',2,NULL,0,?)""",
+            (
+                host_id,
+                (now + timedelta(hours=1)).isoformat(),
+                now.isoformat(),
+                host_id,
+                now.isoformat(),
+            ),
+        )
+        conn.commit()
+    assert SqliteHostRepository(db).get(host_id).renewal_status == "pending"  # type: ignore[union-attr]
+
+
+def test_host_projection_uses_its_bound_request_instant(tmp_path) -> None:
+    db = tmp_path / "projection-clock.sqlite3"
+    init_schema(db)
+    host_id = SqliteHostRepository(db).add(HOST, 443)
+    request_now = datetime(2099, 1, 1, tzinfo=UTC)
+    with _connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,lease_expires_at,
+                suppresses_stalled,received_at)
+               VALUES ('clock',?,1,'test','open',1,?,1,?)""",
+            (host_id, datetime(2030, 1, 1, tzinfo=UTC).isoformat(), request_now.isoformat()),
+        )
+        row = conn.execute(
+            f"SELECT {host_projection_sql('h', '?')} FROM hosts h WHERE h.id=?",
+            (request_now.isoformat(), host_id),
+        ).fetchone()
+    assert row["derived_renewal_status"] == "pending"
+
+
+@pytest.mark.parametrize("adapter", ["html", "json_patch", "json_put"])
+@pytest.mark.parametrize("race", ["report_lands", "lease_lapses"])
+def test_threshold_only_stale_client_never_changes_attempt(
+    tmp_path, reload_app, adapter: str, race: str
+) -> None:
+    app = reload_app().app
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    host_id = SqliteHostRepository(db).add(HOST, 443)
+    seen = "pending"
+    if race == "report_lands":
+        _seed_attempt(db, host_id, "live")
+    else:
+        seen = _seed_attempt(db, host_id, "live")
+        with _connect(db) as conn:
+            conn.execute(
+                "UPDATE renewal_attempts SET lease_expires_at=? WHERE host_id=?",
+                ((datetime.now(UTC) - timedelta(hours=1)).isoformat(), host_id),
+            )
+            conn.commit()
+    before = _attempt_snapshot(db, host_id)
+    with TestClient(app) as client:
+        if adapter == "html":
+            response = client.post(
+                f"/hosts/{host_id}/edit",
+                data={
+                    "owner_name": "",
+                    "owner_email": "",
+                    "owner_slack": "",
+                    "renewal_method": "",
+                    "runbook_url": "",
+                    "scan_interval_hours": "",
+                    "threshold_days": "19",
+                    "renewal_status": seen,
+                    "renewal_status_seen": seen,
+                    "notes": "",
+                    "tags": "",
+                },
+                follow_redirects=False,
+            )
+        elif adapter == "json_patch":
+            response = client.patch(
+                f"/api/hosts/{host_id}/settings",
+                json={"scan_interval_hours": None, "threshold_days": 19},
+            )
+        else:
+            response = client.put(
+                f"/api/hosts/{host_id}",
+                json={
+                    "owner_name": "",
+                    "owner_email": "",
+                    "owner_slack": "",
+                    "renewal_method": "",
+                    "runbook_url": "",
+                    "scan_interval_hours": None,
+                    "threshold_days": 19,
+                    "notes": "",
+                    "tags": "",
+                },
+            )
+    assert response.status_code in {200, 303}, response.text
+    assert _attempt_snapshot(db, host_id) == before
+    with _connect(db) as conn:
+        stored = conn.execute(
+            "SELECT renewal_status FROM hosts WHERE id=?", (host_id,)
+        ).fetchone()[0]
+    assert stored == ("in_progress" if race == "report_lands" else "pending")
 
 
 @pytest.mark.parametrize("writer", ["compatibility", "report"])

@@ -53,7 +53,6 @@ def update_host_ownership(
     owner_name: str | None,
     owner_email: str | None,
     owner_slack: str | None,
-    renewal_status: str | None,
     renewal_method: str | None,
     runbook_url: str | None,
 ) -> HostEntry | None:

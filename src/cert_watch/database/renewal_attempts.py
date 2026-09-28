@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 from cert_watch.database.connection import _connect, _sql_now
@@ -25,14 +25,7 @@ def renewal_attempt_is_live(
         current = now or datetime.now(UTC)
         if current.tzinfo is None:
             current = current.replace(tzinfo=UTC)
-        # SQLite's julianday parser rounds fractional seconds to the nearest
-        # millisecond. Match that precision so the Python and SQL predicates
-        # agree even at the lease boundary.
-        def sqlite_instant(value: datetime) -> datetime:
-            utc = value.astimezone(UTC) + timedelta(microseconds=500)
-            return utc.replace(microsecond=(utc.microsecond // 1000) * 1000)
-
-        return sqlite_instant(lease) > sqlite_instant(current)
+        return _whole_milliseconds(lease) > _whole_milliseconds(current)
     except (TypeError, ValueError, OverflowError):
         return False
 
@@ -41,7 +34,19 @@ def renewal_attempt_is_live_sql(attempt_alias: str, now_sql: str = "?") -> str:
     """SQL twin of :func:`renewal_attempt_is_live` for one attempt row."""
     return (
         f"({attempt_alias}.state='open' "
-        f"AND julianday({attempt_alias}.lease_expires_at)>julianday({now_sql}))"
+        f"AND cw_epoch_ms({attempt_alias}.lease_expires_at)>cw_epoch_ms({now_sql}))"
+    )
+
+
+def _whole_milliseconds(value: datetime) -> int:
+    """Return an instant at the precision used by ``cw_epoch_ms`` in SQL."""
+    utc = value.astimezone(UTC)
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
+    delta = utc - epoch
+    return (
+        delta.days * 86_400_000
+        + delta.seconds * 1_000
+        + delta.microseconds // 1_000
     )
 
 
@@ -68,7 +73,7 @@ def endpoint_stall_suppression_exists_sql(
     )
 
 
-def host_projection_sql(host_alias: str = "h") -> str:
+def host_projection_sql(host_alias: str = "h", now_sql: str = "cw_utc_now()") -> str:
     """Select every host field while deriving the compatibility status."""
     names = (
         "id",
@@ -88,7 +93,7 @@ def host_projection_sql(host_alias: str = "h") -> str:
         "added_at",
     )
     columns = ",".join(f"{host_alias}.{name}" for name in names)
-    live_attempt = live_attempt_exists_sql(host_alias, "cw_utc_now()")
+    live_attempt = live_attempt_exists_sql(host_alias, now_sql)
     return (
         f"{columns},CASE WHEN {live_attempt} "
         "THEN 'in_progress' ELSE 'pending' END AS derived_renewal_status"
@@ -106,16 +111,24 @@ def endpoint_stall_suppressions(
     if not unique:
         return set()
     instant = _sql_now(now or datetime.now(UTC))
-    endpoint_sql = " UNION ALL ".join("SELECT ? AS hostname,? AS port" for _ in unique)
-    params: list[object] = [value for endpoint in unique for value in endpoint]
-    params.append(instant)
+    suppressions: set[tuple[str, int]] = set()
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            f"WITH ep AS ({endpoint_sql}) SELECT ep.hostname,ep.port FROM ep WHERE "
-            + endpoint_stall_suppression_exists_sql("ep", "?"),
-            params,
-        ).fetchall()
-    return {(str(row["hostname"]), int(row["port"])) for row in rows}
+        for offset in range(0, len(unique), 400):
+            chunk = unique[offset : offset + 400]
+            endpoint_sql = " UNION ALL ".join(
+                "SELECT ? AS hostname,? AS port" for _ in chunk
+            )
+            params: list[object] = [value for endpoint in chunk for value in endpoint]
+            params.append(instant)
+            rows = conn.execute(
+                f"WITH ep AS ({endpoint_sql}) SELECT ep.hostname,ep.port FROM ep WHERE "
+                + endpoint_stall_suppression_exists_sql("ep", "?"),
+                params,
+            ).fetchall()
+            suppressions.update(
+                (str(row["hostname"]), int(row["port"])) for row in rows
+            )
+    return suppressions
 
 
 def endpoint_stall_suppression_active(

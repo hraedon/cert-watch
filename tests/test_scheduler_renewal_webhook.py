@@ -257,6 +257,51 @@ def test_check_renewal_overdue_db_path_none_is_noop(runtime):
     send.assert_not_called()
 
 
+def test_check_renewal_overdue_sends_for_1200_endpoints(seeded_db, monkeypatch):
+    from cert_watch.events import EventStreamConfig, save_event_config
+    from cert_watch.scheduler import _check_renewal_overdue
+
+    db, _ = seeded_db
+    save_event_config(db, EventStreamConfig(enabled_event_types=[]))
+    hosts = [(f"bulk-{index}.example.test", 443) for index in range(1_200)]
+    monkeypatch.setattr(
+        "cert_watch.renewal_analytics.detect_renewal_overdue",
+        lambda _db, hostname, *, port: _signal(hostname, f"fp-{hostname}-{port}"),
+    )
+    sent = []
+    _check_renewal_overdue(
+        db,
+        hosts,
+        send_webhook=lambda signal, *_args, **_kwargs: sent.append(signal.hostname),
+    )
+    assert sent == [hostname for hostname, _port in hosts]
+
+
+def test_check_renewal_overdue_suppression_lookup_fails_open(
+    seeded_db, monkeypatch, caplog
+):
+    from cert_watch.scheduler import _check_renewal_overdue
+
+    db, parsed = seeded_db
+    monkeypatch.setattr(
+        "cert_watch.renewal_analytics.detect_renewal_overdue",
+        lambda *_args, **_kwargs: _signal(fingerprint=parsed.fingerprint_sha256),
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.renewal_attempts.endpoint_stall_suppressions",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(sqlite3.OperationalError("lookup failed")),
+    )
+    sent = []
+    with caplog.at_level("ERROR", logger="cert_watch.scheduler"):
+        _check_renewal_overdue(
+            db,
+            [("host.example.com", 443)],
+            send_webhook=lambda *args, **_kwargs: sent.append(args),
+        )
+    assert len(sent) == 1
+    assert "suppression lookup failed" in caplog.text
+
+
 def test_check_renewal_overdue_records_event_but_defers_webhook_claim_until_lease_lapses(
     seeded_db, monkeypatch
 ):

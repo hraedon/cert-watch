@@ -293,6 +293,8 @@ async def update_certificate_owner(
     owner_slack: str = Form(""),
     renewal_method: str = Form(""),
     runbook_url: str = Form(""),
+    renewal_status: str | None = Form(None),
+    renewal_status_seen: str | None = Form(None),
     _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
     if not check_rate_limit(f"cert_owner:{_extract_client_ip(request)}", 30, 60):
@@ -311,6 +313,8 @@ async def update_certificate_owner(
                 owner_slack=owner_slack,
                 renewal_method=renewal_method,
                 runbook_url=runbook_url,
+                renewal_status=renewal_status,
+                renewal_status_seen=renewal_status_seen,
             ),
             auth=acting_auth(request),
             actor=resolve_actor(request),

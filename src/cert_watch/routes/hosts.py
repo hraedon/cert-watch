@@ -221,6 +221,7 @@ async def edit_host_detail(
     scan_interval_hours: str = Form(""),
     threshold_days: str = Form(""),
     renewal_status: str = Form("pending"),
+    renewal_status_seen: str = Form("pending"),
     notes: str = Form(""),
     tags: str = Form(""),
     _auth: str = Depends(write_form_guard),
@@ -240,6 +241,7 @@ async def edit_host_detail(
         "scan_interval_hours": scan_interval_hours,
         "threshold_days": threshold_days,
         "renewal_status": renewal_status,
+        "renewal_status_seen": renewal_status_seen,
         "notes": notes,
         "tags": tags,
     }
@@ -256,6 +258,7 @@ async def edit_host_detail(
                 scan_interval_hours=scan_interval_hours.strip(),
                 threshold_days=threshold_days.strip(),
                 renewal_status=renewal_status,
+                renewal_status_seen=renewal_status_seen,
                 notes=notes,
                 tags=tags,
             ),
@@ -314,6 +317,8 @@ async def update_host_owner(
     owner_slack: str = Form(""),
     renewal_method: str = Form(""),
     runbook_url: str = Form(""),
+    renewal_status: str | None = Form(None),
+    renewal_status_seen: str | None = Form(None),
     _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
     """Update host ownership through the host-namespaced UI adapter."""
@@ -332,6 +337,8 @@ async def update_host_owner(
                 owner_slack=owner_slack,
                 renewal_method=renewal_method,
                 runbook_url=runbook_url,
+                renewal_status=renewal_status,
+                renewal_status_seen=renewal_status_seen,
             ),
             auth=acting_auth(request),
             actor=resolve_actor(request),
@@ -361,6 +368,7 @@ async def update_host_settings(
     scan_interval_hours: str = Form(""),
     threshold_days: str = Form(""),
     renewal_status: str = Form("pending"),
+    renewal_status_seen: str = Form("pending"),
     _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
     """Edit cadence, expiry thresholds, and the operator's renewal report."""
@@ -409,7 +417,12 @@ async def update_host_settings(
         update_host_settings_service(
             db,
             host_id,
-            HostSettingsUpdate(interval, threshold, renewal_status),
+            HostSettingsUpdate(
+                interval,
+                threshold,
+                renewal_status,
+                renewal_status_seen if "renewal_status_seen" in form else renewal_status,
+            ),
             auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),

@@ -118,6 +118,7 @@ def upgrade(conn: sqlite3.Connection) -> None:
         """UPDATE renewal_attempts SET suppresses_stalled=0
            WHERE state='open' AND suppresses_stalled=1
              AND (baseline_lease_claimed=0 OR is_current=0 OR
+                  julianday(lease_expires_at) IS NULL OR
                   julianday(lease_expires_at)<=julianday(?))""",
         (received_at,),
     )

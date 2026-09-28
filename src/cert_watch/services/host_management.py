@@ -62,7 +62,8 @@ class HostNotFoundError(LookupError):
 class HostSettingsUpdate:
     scan_interval_hours: int | None
     threshold_days: int | None
-    renewal_status: str
+    renewal_status: str | None = None
+    renewal_status_seen: str | None = None
 
 
 @dataclass(frozen=True)
@@ -675,8 +676,16 @@ def update_host_settings(
             raise HostValidationError(
                 "Alert threshold must be a positive whole number within the stored range."
             )
-        if update.renewal_status not in {"pending", "in_progress"}:
+        if update.renewal_status is not None and update.renewal_status not in {
+            "pending",
+            "in_progress",
+        }:
             raise HostValidationError("Choose a valid operator-reported renewal status.")
+        if update.renewal_status_seen is not None and update.renewal_status_seen not in {
+            "pending",
+            "in_progress",
+        }:
+            raise HostValidationError("Choose a valid previously seen renewal status.")
         conn = _connect(db_path)
         try:
             begin_immediate(conn)
@@ -700,6 +709,7 @@ def update_host_settings(
                 current_settings(db_path),
                 host_id,
                 update.renewal_status,
+                seen_status=update.renewal_status_seen,
                 auth=auth,
                 actor=actor,
                 source_ip=source_ip,

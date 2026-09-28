@@ -52,7 +52,8 @@ class HostEditUpdate:
     runbook_url: Any = ""
     scan_interval_hours: Any = None
     threshold_days: Any = None
-    renewal_status: Any = "pending"
+    renewal_status: Any = None
+    renewal_status_seen: Any = None
     notes: Any = ""
     tags: Any = ""
 
@@ -92,6 +93,7 @@ def _validate(
             renewal_method=update.renewal_method,
             runbook_url=update.runbook_url,
             renewal_status=update.renewal_status,
+            renewal_status_seen=update.renewal_status_seen,
         )
     )
     for field in (
@@ -100,7 +102,6 @@ def _validate(
         "owner_slack",
         "renewal_method",
         "runbook_url",
-        "renewal_status",
     ):
         if getattr(ownership, field) is None:
             raise HostOwnershipValidationError(field, f"{field} must be a string")
@@ -235,7 +236,8 @@ def edit_host(
                 db_path,
                 current_settings(db_path),
                 target.host_id,
-                ownership.renewal_status or "pending",
+                ownership.renewal_status,
+                seen_status=ownership.renewal_status_seen,
                 auth=auth,
                 actor=actor,
                 source_ip=source_ip,

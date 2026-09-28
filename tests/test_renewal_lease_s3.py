@@ -211,6 +211,10 @@ def test_manual_status_round_trip_creates_and_cancels_attempt(tmp_path: Path) ->
     )
     assert started.renewal_status == "in_progress"
     with _connect(db) as conn:
+        stored_status = conn.execute(
+            "SELECT renewal_status FROM hosts WHERE id=?", (host_id,)
+        ).fetchone()[0]
+        assert stored_status == "in_progress"
         # Deliberately desynchronise the compatibility column: every read and
         # expiry-message hint must still come from the current attempt.
         conn.execute("UPDATE hosts SET renewal_status='pending' WHERE id=?", (host_id,))
@@ -251,6 +255,9 @@ def test_manual_status_round_trip_creates_and_cancels_attempt(tmp_path: Path) ->
             "AND target_id=? ORDER BY ts",
             (host_id,),
         ).fetchall()
+        stored_status = conn.execute(
+            "SELECT renewal_status FROM hosts WHERE id=?", (host_id,)
+        ).fetchone()[0]
     assert tuple(state) == ("cancelled", 0)
     assert [tuple(row) for row in outcomes] == [
         ("started", "applied"),
@@ -258,6 +265,7 @@ def test_manual_status_round_trip_creates_and_cancels_attempt(tmp_path: Path) ->
     ]
     assert len(audits) == 2
     assert '"outcome": "cancelled"' in audits[-1][0]
+    assert stored_status == "pending"
     assert settings.renewal_report_lease_hours == 24
 
 
@@ -470,7 +478,10 @@ def test_migration_0047_preserves_s2_attempts_and_used_baseline(
         runner, "_MIGRATIONS", [item for item in migrations if item[0] <= "0046"]
     )
     runner.run_pending_migrations(db, backup=False)
-    host_ids = {name: uuid.uuid4().hex for name in ("failed", "used", "open", "demoted")}
+    host_ids = {
+        name: uuid.uuid4().hex
+        for name in ("failed", "used", "open", "demoted", "nulllease", "badlease")
+    }
     with _connect(db) as conn:
         for name, host_id in host_ids.items():
             conn.execute(
@@ -480,7 +491,7 @@ def test_migration_0047_preserves_s2_attempts_and_used_baseline(
                 (
                     host_id,
                     f"{name}.example.test",
-                    "pending" if name == "demoted" else "in_progress",
+                    "pending" if name in {"demoted", "nulllease", "badlease"} else "in_progress",
                     NOW.isoformat(),
                 ),
             )
@@ -520,6 +531,8 @@ def test_migration_0047_preserves_s2_attempts_and_used_baseline(
                 1,
                 "demoted-fp",
             ),
+            ("nulllease-a", "nulllease", 1, "open", None, 1, "nulllease-fp"),
+            ("badlease-a", "badlease", 1, "open", "not-a-date", 1, "badlease-fp"),
         )
         for attempt_id, name, current, state, lease, suppresses, fingerprint in attempts:
             conn.execute(
@@ -553,6 +566,7 @@ def test_migration_0047_preserves_s2_attempts_and_used_baseline(
             """SELECT count(*) FROM renewal_attempts
                WHERE state='open' AND suppresses_stalled=1
                  AND (is_current=0 OR
+                      julianday(lease_expires_at) IS NULL OR
                       julianday(lease_expires_at)<=julianday('now'))"""
         ).fetchone()[0]
     by_host: dict[str, list[tuple[object, ...]]] = {}
@@ -565,6 +579,8 @@ def test_migration_0047_preserves_s2_attempts_and_used_baseline(
         ("migration:0047", "open", 1, 0, 0),
     ]
     assert by_host["demoted.example.test"] == [("api_key:s2", "open", 0, 0, 1)]
+    assert by_host["nulllease.example.test"] == [("api_key:s2", "open", 1, 0, 1)]
+    assert by_host["badlease.example.test"] == [("api_key:s2", "open", 1, 0, 1)]
     assert [row[0] for row in audits].count("renewal_report.migration_skip") == 2
     assert [row[0] for row in audits].count("renewal_report.create") == 1
     assert invalid_open == 0

@@ -215,6 +215,9 @@ Edit host</summary>
 
                             <form method="post" action="/hosts/{{CERT_4_ID}}/edit" class="cw-form">
                                 <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
+                                <input type="hidden"
+                                       name="renewal_status_seen"
+                                       value="in_progress">
                                 <div class="cw-form-grid">
                                     <div class="cw-field">
                                         <label class="cw-label" for="host-owner-name">Owner name</label>

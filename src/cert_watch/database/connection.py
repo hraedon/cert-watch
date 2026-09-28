@@ -77,6 +77,26 @@ def _cw_utc_now() -> str:
     return _iso(datetime.now(UTC))
 
 
+def _cw_epoch_ms(value: str | None) -> int | None:
+    """Parse an ISO instant and truncate it to whole Unix milliseconds."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        utc = parsed.astimezone(UTC)
+        epoch = datetime(1970, 1, 1, tzinfo=UTC)
+        delta = utc - epoch
+        return (
+            delta.days * 86_400_000
+            + delta.seconds * 1_000
+            + delta.microseconds // 1_000
+        )
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 class _ThreadConnections:
     """Per-thread connection cache that closes its connections when dropped.
 
@@ -183,6 +203,7 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
     conn.create_function("cw_tag_set", 1, _cw_tag_set, deterministic=True)
     conn.create_function("cw_tags_overlap", -1, _cw_tags_overlap, deterministic=True)
     conn.create_function("cw_utc_now", 0, _cw_utc_now)
+    conn.create_function("cw_epoch_ms", 1, _cw_epoch_ms, deterministic=True)
     from cert_watch.status_rule import register_sql_functions
 
     register_sql_functions(conn)
