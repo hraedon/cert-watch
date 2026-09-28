@@ -30,10 +30,13 @@ established by observing a successor certificate, not by an operator report.
 
 - A scan after the failure report moves the carrying renewal attempt into the
   verified state. Open, verifying, and deployment-warning attempts are eligible
-  for this transition under the ordinary renewal rules. Failure tracking never
-  changes renewal-attempt behavior: reports and scans produce the same state,
-  lease, certificate claim, verification record, and result they would produce
-  if no failure condition were being tracked.
+  for this transition under the ordinary renewal rules. The differential test
+  runs reports, stored successor leaves, manual clears, and randomized sequences
+  against the reducer pinned from the branch's merge base. It compares returned
+  state and effect, stored report effect, and every base attempt column. The one
+  allowed difference is a failed report carrying the correlation of an already
+  verified attempt: it remains `ignored_late`, even after the served leaf
+  changes, because that verified run still owns its correlated reports.
 - A stored scan sees a certificate other than the attempt's baseline and it
   matches the most recent certificate fingerprint named by a failed or
   succeeded report during this failure condition. If no such fingerprint was

@@ -72,6 +72,15 @@ All notable changes to cert-watch are documented in this file.
   when a same-certificate restart is visible but cannot suppress again
   (#118 S3).
 
+### Fixed
+
+- **Verified-correlation late-failure exception:** a failed renewal report
+  carrying an already verified attempt's correlation is now treated as
+  `ignored_late` even when the served leaf has since changed. This fixes the
+  attempt state machine to enforce its documented correlation ownership rule;
+  it is the one deliberate departure from the reducer at this work's merge
+  base (#118 S5).
+
 ### Upgrade notes
 
 - Migration 0046 adds renewal report, attempt/correlation history and
