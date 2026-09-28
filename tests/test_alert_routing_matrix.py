@@ -55,7 +55,6 @@ def _add_leaf(
     host_tags: str = "",
     cert_tags: str = "",
     owner_email: str = "",
-    renewal_status: str = "pending",
     days_valid: int = 5,
 ) -> str:
     """Parse real DER, then persist via the same repositories routing reads."""
@@ -73,7 +72,6 @@ def _add_leaf(
         hostname,
         tags=host_tags,
         owner_email=owner_email,
-        renewal_status=renewal_status,
     )
     repo = SqliteCertificateRepository(db, hostname=hostname, port=443)
     cert_id = repo.add(cert)
