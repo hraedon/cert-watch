@@ -675,7 +675,7 @@ async def delete_host(
             source_ip=resolve_source_ip(request),
             webhook_config=_get_settings(request).build_webhook_config(),
         )
-    except ScopeDeniedError as exc:
+    except (ScopeDeniedError, ManagedHostNotFoundError) as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     logger.info("deleted host %s", host_id)
     return RedirectResponse(url="/", status_code=303)

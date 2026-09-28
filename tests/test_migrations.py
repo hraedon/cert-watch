@@ -226,6 +226,87 @@ def test_migration_0049_does_not_use_changed_attempt_baseline_as_evidence(
     assert rows[1]["rule_due_at"] == failed_at
 
 
+def test_migration_0049_uses_durable_verified_successor_evidence(
+    tmp_path: Path,
+) -> None:
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.migrations.m0049_renewal_failure_marker import upgrade
+
+    db = tmp_path / "failure-verified.sqlite3"
+    init_schema(db)
+    hostname = "verified-successor.example.test"
+    host_id = SqliteHostRepository(db).add(hostname, 443)
+    failed_at = "2026-09-20T00:00:00+00:00"
+    verified_at = "2026-09-20T00:01:00+00:00"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                baseline_fingerprint,verified_fingerprint,suppresses_stalled,
+                received_at,success_received_at,baseline_lease_claimed)
+               VALUES ('attempt',?,1,'test','verified',1,?,?,0,?,?,1)""",
+            (host_id, "a" * 64, "b" * 64, failed_at, verified_at),
+        )
+        conn.execute(
+            """INSERT INTO renewal_reports
+               (report_id,host_id,hostname_snapshot,port_snapshot,outcome,
+                received_at,source,effect,attempt_id)
+               VALUES ('failure',?,?,443,'failed',?,'test','applied','attempt')""",
+            (host_id, hostname, failed_at),
+        )
+        upgrade(conn)
+        row = conn.execute(
+            """SELECT failure_attempt_id,failure_cleared_at,rule_due_at
+               FROM renewal_attempts WHERE attempt_id='attempt'"""
+        ).fetchone()
+
+    assert tuple(row) == ("attempt", verified_at, None)
+
+
+def test_migration_0049_second_direct_run_preserves_manual_clear(
+    tmp_path: Path,
+) -> None:
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.migrations.m0049_renewal_failure_marker import upgrade
+
+    db = tmp_path / "failure-manual-clear.sqlite3"
+    init_schema(db)
+    hostname = "manual-clear.example.test"
+    host_id = SqliteHostRepository(db).add(hostname, 443)
+    failed_at = "2026-09-20T00:00:00+00:00"
+    cleared_at = "2026-09-20T00:02:00+00:00"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                baseline_fingerprint,suppresses_stalled,received_at,
+                baseline_lease_claimed)
+               VALUES ('attempt',?,1,'test','failed',1,?,0,?,1)""",
+            (host_id, "a" * 64, failed_at),
+        )
+        conn.execute(
+            """INSERT INTO renewal_reports
+               (report_id,host_id,hostname_snapshot,port_snapshot,outcome,
+                received_at,source,effect,attempt_id)
+               VALUES ('failure',?,?,443,'failed',?,'test','applied','attempt')""",
+            (host_id, hostname, failed_at),
+        )
+        upgrade(conn)
+        conn.execute(
+            """UPDATE renewal_attempts
+               SET failure_cleared_at=?,closed_reason='manual_clear',rule_due_at=?
+               WHERE attempt_id='attempt'""",
+            (cleared_at, cleared_at),
+        )
+        upgrade(conn)
+        row = conn.execute(
+            """SELECT failure_cleared_at,closed_reason,rule_due_at
+               FROM renewal_attempts WHERE attempt_id='attempt'"""
+        ).fetchone()
+
+    assert tuple(row) == (cleared_at, "manual_clear", cleared_at)
+
+
 def _run_concurrent_migration(
     db_path: str,
     start: Any,

@@ -84,18 +84,23 @@ wake timestamp to renewal attempts. It
 backfills the originating attempt and first retained,
 accepted failed report for every stored failure, then walks each endpoint's
 attempt history to carry the earliest unresolved failure across later attempts.
-Only stored scan history or certificate-lineage evidence recorded after the
-failure and satisfying the S4 baseline/expected-fingerprint predicate ends a
-historical condition; a changed baseline on a later attempt is not evidence.
+Only stored scan history, certificate-lineage evidence, or a later attempt's
+durable verified result satisfying the baseline/expected-fingerprint predicate
+ends a historical condition; a changed baseline on a later attempt is not
+evidence. The backfill cannot infer an observation that was never committed to
+stored scan history, so such a condition remains open for a later scan or an
+operator clear.
 Every still-unresolved stored failure is
 therefore eligible to alert once at the first rule pass after upgrade,
 regardless of its age. It also fills missing historical `not_deployed` raise
 times from the attempt's accepted report time.
 
 The durable condition remains attached to later attempts until stored scan
-evidence verifies a carrying attempt under the S4 fingerprint rule: the leaf
-must differ from a known baseline and, when the report supplied a
-`new_fingerprint`, must equal it. A failure reported before any baseline can be
+evidence shows a leaf different from its baseline. A carrying attempt's own
+`new_fingerprint` takes precedence; otherwise the original failure report's
+expected fingerprint applies, and without either claim any successor clears
+the condition. These condition rules do not alter the carrying attempt's S4
+verification state. A failure reported before any baseline can be
 cleared by scan evidence only when it has an explicit matching
 `new_fingerprint`. Endpoint deletion or an authorized explicit operator clear
 also ends the condition. A start report, lease, bare success claim, lease

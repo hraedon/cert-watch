@@ -102,6 +102,22 @@ def test_delete_host_removes_host_and_certs(tmp_path, reload_app, leaf_pem_file)
     assert rows[0] == 0
 
 
+def test_delete_missing_host_keeps_html_and_api_not_found_contracts(
+    reload_app,
+):
+    app_mod = reload_app()
+    missing = "00000000-0000-0000-0000-000000000000"
+
+    with TestClient(app_mod.app) as client:
+        api = client.delete(f"/api/hosts/{missing}")
+        html = client.post(f"/hosts/{missing}/delete", follow_redirects=False)
+
+    assert api.status_code == 404
+    assert api.json() == {"error": "host not found"}
+    assert html.status_code == 303
+    assert html.headers["location"] == "/?error=host%20not%20found"
+
+
 def test_delete_certificate_removes_leaf_and_chain(tmp_path, reload_app, chain_pem_file):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"

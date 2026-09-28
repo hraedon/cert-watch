@@ -52,7 +52,8 @@ All notable changes to cert-watch are documented in this file.
   digests now include every failure condition open at any point in the period,
   including superseded or since-cleared conditions, plus current **Reported but
   not deployed** transitions, without depending on Event stream retention
-  (#118 S5).
+  (#118 S5). Closing an alert by dedupe key now also resolves provider
+  incidents whose delivery is currently in progress.
 
 ### Changed
 

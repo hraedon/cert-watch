@@ -642,6 +642,8 @@ async def api_delete_host(
         )
     except ScopeDeniedError as exc:
         return _service_error(exc)
+    except ManagedHostNotFoundError as exc:
+        return _service_error(exc, not_found=True)
     if not deleted:
         return JSONResponse(status_code=404, content={"error": "host not found"})
     return JSONResponse(content={"status": "deleted", "id": host_id})

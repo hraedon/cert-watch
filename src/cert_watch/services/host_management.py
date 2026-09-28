@@ -911,22 +911,33 @@ def delete_host(
                     (host_id,),
                 ).fetchall()
             ]
+            attempts = conn.execute(
+                """SELECT attempt_id,failure_attempt_id
+                   FROM renewal_attempts WHERE host_id=?""",
+                (host_id,),
+            ).fetchall()
+            failed_keys = {
+                f"renewal_failed:{row['failure_attempt_id']}"
+                for row in attempts
+                if row["failure_attempt_id"]
+            }
+            attempt_ids = {str(row["attempt_id"]) for row in attempts}
+            endpoint_prefix = (
+                f"renewal_not_deployed:{host['hostname']}:{host['port']}:"
+            )
             renewal_keys = {
-                key
+                str(row["dedupe_key"])
                 for row in conn.execute(
-                    """SELECT attempt_id,failure_attempt_id
-                       FROM renewal_attempts WHERE host_id=?""",
-                    (host_id,),
+                    """SELECT dedupe_key FROM alerts
+                       WHERE alert_type IN ('renewal_failed','renewal_not_deployed')
+                         AND closed_at IS NULL AND dedupe_key IS NOT NULL"""
                 ).fetchall()
-                for key in (
-                    f"renewal_not_deployed:{row['attempt_id']}",
-                    (
-                        f"renewal_failed:{row['failure_attempt_id']}"
-                        if row["failure_attempt_id"]
-                        else None
-                    ),
+                if str(row["dedupe_key"]) in failed_keys
+                or (
+                    str(row["dedupe_key"]).startswith(endpoint_prefix)
+                    and str(row["dedupe_key"]).rsplit(":", 1)[-1]
+                    in attempt_ids
                 )
-                if key is not None
             }
             from cert_watch.database.alert_store import AlertStore
 

@@ -53,7 +53,9 @@ def _backfill_failure_conditions(conn: sqlite3.Connection) -> None:
                    WHERE r.attempt_id=a.attempt_id
                      AND r.outcome='failed'
                      AND r.effect IN ('applied','no_change')) AS accepted_failure_at,
-                  a.new_fingerprint,h.hostname,h.port
+                  a.new_fingerprint,h.hostname,h.port,
+                  a.failure_attempt_id,a.failure_cleared_at,
+                  a.verified_fingerprint,a.success_received_at
            FROM renewal_attempts a
            JOIN hosts h ON h.id=a.host_id
            ORDER BY a.host_id,a.opened_seq"""
@@ -63,6 +65,10 @@ def _backfill_failure_conditions(conn: sqlite3.Connection) -> None:
         by_host.setdefault(str(row[1]), []).append(row)
 
     for attempts in by_host.values():
+        # A prior direct invocation already reconstructed this endpoint. Keep
+        # its runtime state, especially an operator's later manual clear.
+        if any(row[11] is not None for row in attempts):
+            continue
         active_origin: str | None = None
         active_reported_at: str | None = None
         active_baseline: str | None = None
@@ -114,6 +120,19 @@ def _backfill_failure_conditions(conn: sqlite3.Connection) -> None:
                 (active_origin, active_reported_at, active_expected, attempt_id),
             )
             carriers.append(attempt_id)
+            verified_at = _verified_successor_evidence(
+                state=str(row[2]),
+                verified_fingerprint=(str(row[13]) if row[13] else None),
+                observed_at=(
+                    str(row[14]) if row[14] else str(row[6] or row[5])
+                ),
+                baseline=active_baseline,
+                expected=active_expected,
+            )
+            if verified_at is not None:
+                _clear_backfilled_condition(conn, carriers, verified_at)
+                active_origin = active_reported_at = active_baseline = active_expected = None
+                carriers = []
 
         if active_origin is not None and carriers:
             successor_at = _first_successor_evidence(
@@ -177,6 +196,27 @@ def _first_successor_evidence(
         if matches:
             return str(observed_at)
     return None
+
+
+def _verified_successor_evidence(
+    *,
+    state: str,
+    verified_fingerprint: str | None,
+    observed_at: str,
+    baseline: str | None,
+    expected: str | None,
+) -> str | None:
+    """Use S4's durable verified result even when its leaf predates failure."""
+    if state != "verified" or verified_fingerprint is None:
+        return None
+    leaf = verified_fingerprint.lower()
+    if baseline is not None and leaf == baseline:
+        return None
+    if expected is not None and leaf != expected:
+        return None
+    if baseline is None and expected is None:
+        return None
+    return observed_at
 
 
 def _clear_backfilled_condition(

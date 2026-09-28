@@ -269,10 +269,16 @@ def _record_failed_report_on(
             """UPDATE renewal_attempts
                SET failure_attempt_id=?,failure_reported_at=?,
                    failure_cleared_at=NULL,
-                   failure_expected_fingerprint=new_fingerprint,
+                   failure_expected_fingerprint=?,
                    rule_due_at=?
                WHERE attempt_id=?""",
-            (uuid.uuid4().hex, received_at, received_at, attempt_id),
+            (
+                uuid.uuid4().hex,
+                received_at,
+                reported_fingerprint,
+                received_at,
+                attempt_id,
+            ),
         )
         return
     conn.execute(
