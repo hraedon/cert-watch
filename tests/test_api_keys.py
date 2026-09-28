@@ -705,10 +705,12 @@ def test_renewal_report_allowlist_rejects_raw_dot_segment(seeded):
             ("authorization", "Basic YWRtaW46cHc="),
             ("authorization", f"Bearer {raw}"),
         ],
+        lambda raw: [("authorization", raw)],
+        lambda raw: [("authorization", f" Bearer {raw}")],
     ],
     ids=[
         "two-spaces", "tab", "trailing-space", "lowercase-scheme",
-        "uppercase-token-prefix", "duplicate-one-cwk",
+        "uppercase-token-prefix", "duplicate-one-cwk", "no-scheme", "leading-space",
     ],
 )
 @pytest.mark.parametrize("auth_enabled", [True, False], ids=["auth-on", "auth-off"])
