@@ -16,6 +16,7 @@ def upgrade(conn: sqlite3.Connection) -> None:
         "failure_attempt_id": "TEXT",
         "failure_reported_at": "TEXT",
         "failure_cleared_at": "TEXT",
+        "failure_expected_fingerprint": "TEXT",
         "rule_due_at": "TEXT",
     }
     for name, definition in additions.items():
@@ -51,8 +52,10 @@ def _backfill_failure_conditions(conn: sqlite3.Connection) -> None:
                   (SELECT MIN(r.received_at) FROM renewal_reports r
                    WHERE r.attempt_id=a.attempt_id
                      AND r.outcome='failed'
-                     AND r.effect IN ('applied','no_change')) AS accepted_failure_at
+                     AND r.effect IN ('applied','no_change')) AS accepted_failure_at,
+                  a.new_fingerprint,h.hostname,h.port
            FROM renewal_attempts a
+           JOIN hosts h ON h.id=a.host_id
            ORDER BY a.host_id,a.opened_seq"""
     ).fetchall()
     by_host: dict[str, list[tuple[object, ...]]] = {}
@@ -63,6 +66,7 @@ def _backfill_failure_conditions(conn: sqlite3.Connection) -> None:
         active_origin: str | None = None
         active_reported_at: str | None = None
         active_baseline: str | None = None
+        active_expected: str | None = None
         carriers: list[str] = []
         for row in attempts:
             row_baseline = (
@@ -70,24 +74,33 @@ def _backfill_failure_conditions(conn: sqlite3.Connection) -> None:
                 if row[4]
                 else None
             )
-            successor = bool(
-                active_origin
-                and active_baseline is not None
-                and row_baseline is not None
-                and row_baseline != active_baseline
-            )
-            if successor:
-                _clear_backfilled_condition(
-                    conn, carriers, str(row[5])
+            failure_at = str(row[7]) if row[7] else None
+            evidence_cutoff = failure_at or str(row[5])
+            successor_at = (
+                _first_successor_evidence(
+                    conn,
+                    hostname=str(row[9]),
+                    port=int(str(row[10])),
+                    reported_at=active_reported_at,
+                    baseline=active_baseline,
+                    expected=active_expected,
+                    before=evidence_cutoff,
                 )
-                active_origin = active_reported_at = active_baseline = None
+                if active_origin
+                else None
+            )
+            if successor_at is not None:
+                _clear_backfilled_condition(
+                    conn, carriers, successor_at
+                )
+                active_origin = active_reported_at = active_baseline = active_expected = None
                 carriers = []
 
-            failure_at = row[7]
             if active_origin is None and failure_at:
                 active_origin = str(row[0])
-                active_reported_at = str(failure_at)
+                active_reported_at = failure_at
                 active_baseline = row_baseline
+                active_expected = str(row[8]).lower() if row[8] else None
 
             if active_origin is None:
                 continue
@@ -95,25 +108,75 @@ def _backfill_failure_conditions(conn: sqlite3.Connection) -> None:
             conn.execute(
                 """UPDATE renewal_attempts
                    SET failure_attempt_id=?,failure_reported_at=?,
-                       failure_cleared_at=NULL,rule_due_at=NULL
+                       failure_cleared_at=NULL,failure_expected_fingerprint=?,
+                       rule_due_at=NULL
                    WHERE attempt_id=?""",
-                (active_origin, active_reported_at, attempt_id),
+                (active_origin, active_reported_at, active_expected, attempt_id),
             )
             carriers.append(attempt_id)
 
-            if row[2] == "verified":
-                cleared_at = str(row[6] or row[5])
-                _clear_backfilled_condition(conn, carriers, cleared_at)
-                active_origin = active_reported_at = active_baseline = None
-                carriers = []
-
         if active_origin is not None and carriers:
+            successor_at = _first_successor_evidence(
+                conn,
+                hostname=str(attempts[-1][9]),
+                port=int(str(attempts[-1][10])),
+                reported_at=active_reported_at,
+                baseline=active_baseline,
+                expected=active_expected,
+                before=None,
+            )
+            if successor_at is not None:
+                _clear_backfilled_condition(conn, carriers, successor_at)
+                continue
             # One first post-upgrade rule pass raises the unresolved condition
             # from its latest carrier, including a superseding current attempt.
             conn.execute(
                 "UPDATE renewal_attempts SET rule_due_at=? WHERE attempt_id=?",
                 (active_reported_at, carriers[-1]),
             )
+
+
+def _first_successor_evidence(
+    conn: sqlite3.Connection,
+    *,
+    hostname: str,
+    port: int,
+    reported_at: str | None,
+    baseline: str | None,
+    expected: str | None,
+    before: str | None,
+) -> str | None:
+    """Return the first stored scan/lineage observation satisfying S4."""
+    if reported_at is None or (baseline is None and expected is None):
+        return None
+    evidence = conn.execute(
+        """SELECT fingerprint,observed_at FROM (
+               SELECT lower(fingerprint_sha256) AS fingerprint,
+                      scanned_at AS observed_at
+               FROM cert_history
+               WHERE hostname=? AND port=? AND scanned_at>?
+               UNION ALL
+               SELECT lower(COALESCE(c.fingerprint_sha256,next.old_fingerprint)),
+                      cl.created_at
+               FROM certificate_lineage cl
+               LEFT JOIN certificates c ON c.id=cl.new_cert_id
+               LEFT JOIN certificate_lineage next ON next.old_cert_id=cl.new_cert_id
+               WHERE cl.hostname=? AND cl.port=? AND cl.created_at>?
+           )
+           WHERE fingerprint IS NOT NULL
+             AND (? IS NULL OR observed_at<?)
+           ORDER BY observed_at""",
+        (hostname, port, reported_at, hostname, port, reported_at, before, before),
+    ).fetchall()
+    for fingerprint, observed_at in evidence:
+        leaf = str(fingerprint).lower()
+        if expected is not None:
+            matches = leaf == expected and (baseline is None or leaf != baseline)
+        else:
+            matches = baseline is not None and leaf != baseline
+        if matches:
+            return str(observed_at)
+    return None
 
 
 def _clear_backfilled_condition(

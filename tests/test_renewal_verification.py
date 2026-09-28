@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -21,12 +22,14 @@ from cert_watch.renewal_verification import evaluate_after_scan, mark_verificati
 from cert_watch.scan import ScannedEntry, store_scanned
 from cert_watch.scheduler import (
     ScanHistory,
+    Scheduler,
     _host_scan_deadlines,
     _seconds_until_next_rule_pass,
     _seconds_until_next_scan,
     claim_hosts_due_for_scan,
     get_hosts_due_for_scan,
     record_scan_history,
+    wake_scheduler,
 )
 from cert_watch.scheduler_context import SchedulerContext
 from cert_watch.services.host_management import (
@@ -948,6 +951,67 @@ def test_host_delete_resolves_every_sent_alert_type(
         assert delivered[0]["alerts"][0]["status"] == "resolved"
 
 
+def test_host_delete_resolves_orphaned_renewal_alert_after_leaf_change(
+    estate, monkeypatch
+):
+    db, host_id, old_cert_id, _baseline, _settings = estate
+    failed = _post(estate, "failed", NOW)
+    repo = SqliteAlertRepository(db)
+    [alert] = evaluate_renewal_report_alerts(db, repo)
+    with _connect(db) as conn:
+        conn.execute("UPDATE alerts SET status='sent' WHERE id=?", (alert.id,))
+        conn.commit()
+
+    replacement = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    store_scanned(
+        ScannedEntry(
+            host=HOST,
+            port=443,
+            leaf=replacement,
+            chain=[],
+            scanned_at=NOW + timedelta(minutes=5),
+        ),
+        db,
+    )
+    with _connect(db) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM certificates WHERE id=?", (old_cert_id,)
+        ).fetchone()[0] == 0
+
+    delivered = []
+
+    class Response:
+        status = 202
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def send(_url, *, data, **_kwargs):
+        delivered.append(json.loads(data))
+        return Response()
+
+    monkeypatch.setattr("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen", send)
+    assert delete_host(
+        db,
+        host_id,
+        auth=AuthContext.system(),
+        actor="system",
+        source_ip=None,
+        webhook_config=WebhookConfig(
+            "https://alerts.example.test", kind="pagerduty", routing_key="rk"
+        ),
+    )
+    assert failed.attempt_id in (alert.dedupe_key or "")
+    assert [item["event_action"] for item in delivered] == ["resolve"]
+    with _connect(db) as conn:
+        assert conn.execute(
+            "SELECT closed_at FROM alerts WHERE id=?", (alert.id,)
+        ).fetchone()[0] is not None
+
+
 def test_long_custom_cadence_is_capped_by_24_hour_verification(estate):
     db, host_id, _cert_id, _baseline, _settings = estate
     with _connect(db) as conn:
@@ -1495,11 +1559,150 @@ def test_failure_after_manual_clear_opens_new_condition(estate):
     second = _post(estate, "failed", NOW + timedelta(minutes=2))
     [second_alert] = evaluate_renewal_report_alerts(db, repo)
     row = _row(db)
-    assert second.attempt_id != first.attempt_id
-    assert row["failure_attempt_id"] == second.attempt_id
+    assert second.attempt_id == first.attempt_id
+    assert row["failure_attempt_id"] != first.attempt_id
     assert row["failure_reported_at"] == (NOW + timedelta(minutes=2)).isoformat()
     assert row["failure_cleared_at"] is None
     assert second_alert.dedupe_key != first_alert.dedupe_key
+
+
+def test_failure_after_clear_restarts_not_deployed_condition_in_place(estate):
+    db, host_id, _cert_id, _baseline, _settings = estate
+    attempt_id = _attempt(
+        estate, state="not_deployed", not_after=NOW + timedelta(days=2)
+    )
+    repo = SqliteAlertRepository(db)
+    _post(estate, "failed", NOW + timedelta(minutes=1))
+    evaluate_renewal_report_alerts(db, repo)
+    assert clear_renewal_failure(
+        db,
+        host_id,
+        auth=AuthContext.system(),
+        actor="system",
+        source_ip=None,
+        now=NOW + timedelta(minutes=2),
+    )
+    evaluate_renewal_report_alerts(db, repo)
+
+    _post(estate, "failed", NOW + timedelta(minutes=3))
+    evaluate_renewal_report_alerts(db, repo)
+    row = _row(db)
+    with _connect(db) as conn:
+        open_types = {
+            str(alert[0])
+            for alert in conn.execute(
+                "SELECT alert_type FROM alerts WHERE closed_at IS NULL"
+            )
+        }
+        attempts = conn.execute(
+            "SELECT attempt_id,state,is_current FROM renewal_attempts"
+        ).fetchall()
+    assert (row["attempt_id"], row["state"], row["is_current"]) == (
+        attempt_id,
+        "not_deployed",
+        1,
+    )
+    assert len(attempts) == 1
+    assert open_types == {"renewal_failed", "renewal_not_deployed"}
+
+
+def test_carried_failure_keeps_expected_fingerprint_across_third_leaf(estate):
+    db, _host_id, _cert_id, _baseline, settings = estate
+    expected = "a" * 64
+    third = "b" * 64
+    _post(estate, "succeeded", NOW, new_fingerprint=expected)
+    failed = _post(estate, "failed", NOW + timedelta(minutes=1))
+    started = _post(estate, "started", NOW + timedelta(minutes=2))
+    row = _row(db)
+    assert started.attempt_id != failed.attempt_id
+    assert row["new_fingerprint"] is None
+    assert row["failure_expected_fingerprint"] == expected
+
+    result = evaluate_after_scan(
+        db,
+        HOST,
+        443,
+        third,
+        started_at=NOW + timedelta(minutes=10),
+        settings=settings,
+    )
+    row = _row(db)
+    assert result is not None and result.state != "verified"
+    assert row["failure_cleared_at"] is None
+
+
+def test_carrier_reported_fingerprint_overrides_failure_expectation(estate):
+    db, _host_id, _cert_id, _baseline, settings = estate
+    original_expected = "a" * 64
+    carrier_expected = "b" * 64
+    _post(estate, "succeeded", NOW, new_fingerprint=original_expected)
+    _post(estate, "failed", NOW + timedelta(minutes=1))
+    _post(estate, "started", NOW + timedelta(minutes=2))
+    _post(
+        estate,
+        "succeeded",
+        NOW + timedelta(minutes=3),
+        new_fingerprint=carrier_expected,
+    )
+    row = _row(db)
+    assert row["failure_expected_fingerprint"] == original_expected
+    assert row["new_fingerprint"] == carrier_expected
+
+    result = evaluate_after_scan(
+        db,
+        HOST,
+        443,
+        carrier_expected,
+        started_at=NOW + timedelta(minutes=10),
+        settings=settings,
+    )
+    assert result is not None and result.state == "verified"
+    assert _row(db)["failure_cleared_at"] is not None
+
+
+def test_manual_clear_wakes_real_scheduler_alert_pass(estate):
+    db, host_id, _cert_id, _baseline, settings = estate
+    _post(estate, "failed", NOW)
+    repo = SqliteAlertRepository(db)
+    [alert] = evaluate_renewal_report_alerts(db, repo)
+
+    context = SchedulerContext(settings, None, None)
+    alert_passes = 0
+
+    def run_alerts():
+        nonlocal alert_passes
+        alert_passes += 1
+        return evaluate_renewal_report_alerts(db, repo)
+
+    context.run_alerts = run_alerts
+    context.scan_all = lambda: {"scanned": 0}
+    context.maintenance = lambda: None
+    context.maybe_run_weekly_digest = lambda: {}
+    scheduler = Scheduler(context)
+    assert clear_renewal_failure(
+        db,
+        host_id,
+        auth=AuthContext.system(),
+        actor="system",
+        source_ip=None,
+        now=datetime.now(UTC),
+    )
+    scheduler.start()
+    try:
+        wake_scheduler(scheduler)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            with _connect(db) as conn:
+                closed = conn.execute(
+                    "SELECT closed_at FROM alerts WHERE id=?", (alert.id,)
+                ).fetchone()[0]
+            if closed is not None:
+                break
+            time.sleep(0.01)
+        assert closed is not None
+        assert alert_passes >= 1
+    finally:
+        scheduler.stop(timeout=2)
 
 
 def test_pre_scan_failure_keeps_one_provider_incident_across_leaf_changes(

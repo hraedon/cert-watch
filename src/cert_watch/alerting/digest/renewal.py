@@ -92,13 +92,18 @@ def build_renewal_digest(
             (cutoff,),
         ).fetchall()
         failure_rows = conn.execute(
-            """SELECT a.attempt_id AS condition_id,
+            """SELECT a.failure_attempt_id AS condition_id,
                       a.failure_reported_at,a.failure_cleared_at,
                       h.hostname,h.port,h.owner_email
                FROM renewal_attempts a
                JOIN hosts h ON h.id=a.host_id
-               WHERE a.failure_attempt_id=a.attempt_id
+               WHERE a.failure_attempt_id IS NOT NULL
                  AND a.failure_reported_at IS NOT NULL
+                 AND NOT EXISTS (
+                     SELECT 1 FROM renewal_attempts earlier
+                     WHERE earlier.host_id=a.host_id
+                       AND earlier.failure_attempt_id=a.failure_attempt_id
+                       AND earlier.opened_seq<a.opened_seq)
                  AND a.failure_reported_at<=?
                  AND (a.failure_cleared_at IS NULL OR a.failure_cleared_at>=?)
                ORDER BY a.failure_reported_at""",

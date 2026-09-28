@@ -110,7 +110,7 @@ class AlertStore:
         reason: str = "condition closed",
         conn: sqlite3.Connection | None = None,
     ) -> list[Alert]:
-        """Close conditions and return sent rows needing incident resolves.
+        """Close conditions and return triggered rows needing incident resolves.
 
         Pending rows become cancelled. A live claimed row is marked closed but
         keeps its lease; settlement records a completed send or cancels it
@@ -167,7 +167,7 @@ class AlertStore:
             from cert_watch.database.repo import SqliteAlertRepository
             return [
                 SqliteAlertRepository._row_to_alert(row)
-                for row in rows if row["status"] == "sent"
+                for row in rows if row["status"] in {"sending", "sent"}
             ]
 
         if conn is not None:

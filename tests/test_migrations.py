@@ -96,17 +96,24 @@ def test_migration_0049_carries_failure_to_current_attempt_and_clears_once(
     hostname = "failure-carry.example.test"
     host_id = SqliteHostRepository(db).add(hostname, 443)
     baseline = parse_certificate(_make_cert(hostname, days_valid=60).der)
+    successor = parse_certificate(_make_cert(hostname, days_valid=90).der)
     seed_scanned(db, hostname, 443, baseline)
     failed_at = datetime(2026, 9, 20, tzinfo=UTC).isoformat()
     started_at = datetime(2026, 9, 21, tzinfo=UTC).isoformat()
     with _connect(db) as conn:
         conn.execute(
             """INSERT INTO renewal_attempts
-               (attempt_id,host_id,is_current,source,state,opened_seq,
-                baseline_fingerprint,baseline_not_after,suppresses_stalled,
+                (attempt_id,host_id,is_current,source,state,opened_seq,
+                baseline_fingerprint,baseline_not_after,new_fingerprint,suppresses_stalled,
                 received_at,baseline_lease_claimed)
-               VALUES ('failed-origin',?,0,'test','failed',1,?,?,0,?,1)""",
-            (host_id, baseline.fingerprint_sha256, baseline.not_after.isoformat(), failed_at),
+               VALUES ('failed-origin',?,0,'test','failed',1,?,?,?,0,?,1)""",
+            (
+                host_id,
+                baseline.fingerprint_sha256,
+                baseline.not_after.isoformat(),
+                successor.fingerprint_sha256,
+                failed_at,
+            ),
         )
         conn.execute(
             """INSERT INTO renewal_attempts
@@ -126,7 +133,8 @@ def test_migration_0049_carries_failure_to_current_attempt_and_clears_once(
         upgrade(conn)
         conn.commit()
         attempts = conn.execute(
-            """SELECT attempt_id,failure_attempt_id,failure_reported_at,rule_due_at
+            """SELECT attempt_id,failure_attempt_id,failure_reported_at,
+                      failure_expected_fingerprint,rule_due_at
                FROM renewal_attempts ORDER BY opened_seq"""
         ).fetchall()
     assert [row["failure_attempt_id"] for row in attempts] == [
@@ -135,10 +143,13 @@ def test_migration_0049_carries_failure_to_current_attempt_and_clears_once(
     ]
     assert attempts[0]["rule_due_at"] is None
     assert attempts[1]["rule_due_at"] == failed_at
+    assert [row["failure_expected_fingerprint"] for row in attempts] == [
+        successor.fingerprint_sha256,
+        successor.fingerprint_sha256,
+    ]
 
     repo = SqliteAlertRepository(db)
     assert len(evaluate_renewal_report_alerts(db, repo)) == 1
-    successor = parse_certificate(_make_cert(hostname, days_valid=90).der)
     observed_at = datetime(2026, 9, 22, tzinfo=UTC)
     store_scanned(
         ScannedEntry(host=hostname, port=443, leaf=successor, chain=[]), db
@@ -160,6 +171,59 @@ def test_migration_0049_carries_failure_to_current_attempt_and_clears_once(
         ).fetchall()
     assert len(alerts) == 1
     assert alerts[0]["closed_at"] is not None
+
+
+def test_migration_0049_does_not_use_changed_attempt_baseline_as_evidence(
+    tmp_path: Path,
+) -> None:
+    from cert_watch.certificate_model import parse_certificate
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.database.connection import _connect
+    from cert_watch.migrations.m0049_renewal_failure_marker import upgrade
+    from tests._helpers import seed_scanned
+    from tests.conftest import _make_cert
+
+    db = tmp_path / "failure-explicit-predecessor.sqlite3"
+    init_schema(db)
+    hostname = "explicit-predecessor.example.test"
+    host_id = SqliteHostRepository(db).add(hostname, 443)
+    baseline = parse_certificate(_make_cert(hostname, days_valid=60).der)
+    seed_scanned(db, hostname, 443, baseline)
+    failed_at = "2026-09-20T00:00:00+00:00"
+    retry_at = "2026-09-20T00:01:00+00:00"
+    with _connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                baseline_fingerprint,suppresses_stalled,received_at,
+                baseline_lease_claimed)
+               VALUES ('origin',?,0,'test','failed',1,?,0,?,1)""",
+            (host_id, baseline.fingerprint_sha256, failed_at),
+        )
+        conn.execute(
+            """INSERT INTO renewal_reports
+               (report_id,host_id,hostname_snapshot,port_snapshot,outcome,
+                received_at,source,effect,attempt_id)
+               VALUES ('failure',?,?,443,'failed',?,'test','applied','origin')""",
+            (host_id, hostname, failed_at),
+        )
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                baseline_fingerprint,suppresses_stalled,received_at,
+                baseline_lease_claimed)
+               VALUES ('retry',?,1,'test','open',2,?,0,?,1)""",
+            (host_id, "f" * 64, retry_at),
+        )
+        upgrade(conn)
+        rows = conn.execute(
+            """SELECT attempt_id,failure_attempt_id,failure_cleared_at,rule_due_at
+               FROM renewal_attempts ORDER BY opened_seq"""
+        ).fetchall()
+
+    assert [row["failure_attempt_id"] for row in rows] == ["origin", "origin"]
+    assert all(row["failure_cleared_at"] is None for row in rows)
+    assert rows[1]["rule_due_at"] == failed_at
 
 
 def _run_concurrent_migration(

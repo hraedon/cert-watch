@@ -39,9 +39,8 @@ def _verification_reason(attempt: sqlite3.Row, leaf_fingerprint: str | None) -> 
         if attempt["baseline_fingerprint"]
         else None
     )
-    expected = (
-        str(attempt["new_fingerprint"]).lower() if attempt["new_fingerprint"] else None
-    )
+    expected_value = attempt["new_fingerprint"] or attempt["failure_expected_fingerprint"]
+    expected = str(expected_value).lower() if expected_value else None
     if expected is not None:
         if leaf == expected and (baseline is None or leaf != baseline):
             return "reported_fingerprint"
@@ -201,9 +200,8 @@ def evaluate_evidence_on(
         if attempt["baseline_fingerprint"]
         else None
     )
-    expected = (
-        str(attempt["new_fingerprint"]).lower() if attempt["new_fingerprint"] else None
-    )
+    expected_value = attempt["new_fingerprint"] or attempt["failure_expected_fingerprint"]
+    expected = str(expected_value).lower() if expected_value else None
     last_check = _instant(attempt["last_check_at"])
     spaced_check = count_check and (
         last_check is None or started_at >= last_check + timedelta(minutes=5)

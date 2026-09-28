@@ -43,8 +43,9 @@ All notable changes to cert-watch are documented in this file.
   carrying attempt using the same baseline and reported-fingerprint rules as
   successful-report verification, the endpoint
   is deleted, or an authorized operator uses the new HTML/JSON explicit clear
-  action. A later failure after a manual clear starts a new condition and
-  provider incident. Pre-scan failures defer their alert until a leaf exists and
+  action. A later failure after a manual clear restarts a new condition and
+  provider incident on the same renewal attempt without changing its state.
+  Pre-scan failures defer their alert until a leaf exists and
   keep that incident stable across later leaf changes. Failed reports use a
   dedicated rule wake and never schedule a TLS scan. Failures reported after
   `not_deployed` raise both conditions. Renewal
@@ -77,9 +78,9 @@ All notable changes to cert-watch are documented in this file.
   reports. See [UPGRADING.md](UPGRADING.md).
 - Migration 0048 adds renewal-verification evidence fields and short-lived
   endpoint scan claims. See [UPGRADING.md](UPGRADING.md).
-- Migration 0049 adds and backfills the originating attempt and first accepted
-  renewal-failure timestamp, clearing time, and rule-pass wake used by alerts
-  and digests. See [UPGRADING.md](UPGRADING.md).
+- Migration 0049 adds and backfills the failure condition identity, expected
+  fingerprint, first accepted failure timestamp, clearing time, and rule-pass
+  wake used by alerts and digests. See [UPGRADING.md](UPGRADING.md).
 - Migration 0045 adds explicit binding metadata to API keys. Existing keys
   remain bound to all endpoints. See [UPGRADING.md](UPGRADING.md).
 

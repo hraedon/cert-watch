@@ -204,25 +204,33 @@ def _cache_renewal_status(conn: sqlite3.Connection, host_id: str, *, now: dateti
     return status
 
 
-def _open_failure(attempt: sqlite3.Row | None) -> tuple[str | None, str | None]:
+def _open_failure(
+    attempt: sqlite3.Row | None,
+) -> tuple[str | None, str | None, str | None]:
     """Return the endpoint-cycle failure carried by *attempt*, if unresolved."""
     if (
         attempt is None
         or not attempt["failure_reported_at"]
         or attempt["failure_cleared_at"]
     ):
-        return None, None
+        return None, None, None
     return (
         str(attempt["failure_attempt_id"] or attempt["attempt_id"]),
         str(attempt["failure_reported_at"]),
+        (
+            str(attempt["failure_expected_fingerprint"])
+            if attempt["failure_expected_fingerprint"]
+            else None
+        ),
     )
 
 
 def _starts_failure_after_clear(
-    attempt: sqlite3.Row, report: RenewalReportInput, effect: str
+    attempt: sqlite3.Row | None, report: RenewalReportInput, effect: str
 ) -> bool:
     return bool(
-        report.outcome == "failed"
+        attempt is not None
+        and report.outcome == "failed"
         and attempt["failure_reported_at"]
         and attempt["failure_cleared_at"]
         and effect != "ignored_late"
@@ -230,17 +238,63 @@ def _starts_failure_after_clear(
 
 
 def _restart_failure_after_clear(
-    attempt: sqlite3.Row,
+    attempt: sqlite3.Row | None,
     report: RenewalReportInput,
     effect: str,
     *,
     state: str,
     new_attempt: bool,
     attempt_id: str,
-) -> tuple[str, str, bool, str]:
+) -> tuple[str, str, bool, str, bool]:
     if _starts_failure_after_clear(attempt, report, effect):
-        return "failed", "applied", True, uuid.uuid4().hex
-    return state, effect, new_attempt, attempt_id
+        assert attempt is not None
+        # Manual clear ends only the failure condition. A later failure is a
+        # fresh incident on the same renewal attempt; it must not change S4
+        # verification state or make a not-deployed attempt non-current.
+        return str(attempt["state"]), "applied", False, str(attempt["attempt_id"]), True
+    return state, effect, new_attempt, attempt_id, False
+
+
+def _record_failed_report_on(
+    conn: sqlite3.Connection,
+    *,
+    attempt_id: str,
+    state: str,
+    received_at: str,
+    reported_fingerprint: str | None,
+    restarted: bool,
+) -> None:
+    if restarted:
+        conn.execute(
+            """UPDATE renewal_attempts
+               SET failure_attempt_id=?,failure_reported_at=?,
+                   failure_cleared_at=NULL,
+                   failure_expected_fingerprint=new_fingerprint,
+                   rule_due_at=?
+               WHERE attempt_id=?""",
+            (uuid.uuid4().hex, received_at, received_at, attempt_id),
+        )
+        return
+    conn.execute(
+        """UPDATE renewal_attempts
+           SET state=?,suppresses_stalled=0,
+               failure_attempt_id=COALESCE(failure_attempt_id,attempt_id),
+               failure_reported_at=COALESCE(failure_reported_at,?),
+               failure_expected_fingerprint=COALESCE(
+                   failure_expected_fingerprint,new_fingerprint,?),
+               rule_due_at=?,
+               closed_reason=CASE
+                   WHEN ?='failed' THEN 'reported_failed' ELSE closed_reason END
+           WHERE attempt_id=?""",
+        (
+            state,
+            received_at,
+            reported_fingerprint,
+            received_at,
+            state,
+            attempt_id,
+        ),
+    )
 
 
 def write_through_renewal_status_on(
@@ -334,7 +388,7 @@ def write_through_renewal_status_on(
         assert attempt is not None
         attempt_id = str(attempt["attempt_id"])
 
-    failure_attempt_id, failure_reported_at = _open_failure(attempt)
+    failure_attempt_id, failure_reported_at, failure_expected = _open_failure(attempt)
 
     report_id = uuid.uuid4().hex
     cursor = conn.execute(
@@ -375,8 +429,9 @@ def write_through_renewal_status_on(
                (attempt_id,host_id,is_current,source,state,opened_seq,baseline_fingerprint,
                 baseline_not_after,new_fingerprint,lease_expires_at,suppresses_stalled,
                 received_at,next_check_at,closed_reason,baseline_lease_claimed,
-                failure_attempt_id,failure_reported_at,rule_due_at)
-               VALUES (?,?,1,?,'open',?,?,?,NULL,?,?,?,NULL,NULL,?,?,?,?)""",
+                failure_attempt_id,failure_reported_at,failure_expected_fingerprint,
+                rule_due_at)
+               VALUES (?,?,1,?,'open',?,?,?,NULL,?,?,?,NULL,NULL,?,?,?,?,?)""",
             (
                 attempt_id,
                 host_id,
@@ -404,6 +459,7 @@ def write_through_renewal_status_on(
                 claims_baseline,
                 failure_attempt_id,
                 failure_reported_at,
+                failure_expected,
                 failure_reported_at,
             ),
         )
@@ -981,7 +1037,9 @@ def create_report(
                 (target.host_id,),
             ).fetchone()
             attempt = _expire_current_attempt_on(conn, target.host_id, attempt, received=received)
-            carried_failure_id, carried_failure_at = _open_failure(attempt)
+            carried_failure_id, carried_failure_at, carried_failure_expected = (
+                _open_failure(attempt)
+            )
 
             (
                 current_fingerprint,
@@ -1096,7 +1154,8 @@ def create_report(
                 # A manual clear ends the old failure condition. Any later
                 # accepted failure starts a new cycle, even when the ordinary
                 # state/correlation reducer would reuse this attempt.
-                state, effect, new_attempt, attempt_id = _restart_failure_after_clear(
+            state, effect, new_attempt, attempt_id, restarted_failure = (
+                _restart_failure_after_clear(
                     attempt,
                     report,
                     effect,
@@ -1104,6 +1163,7 @@ def create_report(
                     new_attempt=new_attempt,
                     attempt_id=attempt_id,
                 )
+            )
 
             if (
                 new_attempt
@@ -1183,9 +1243,9 @@ def create_report(
                         baseline_not_after,new_fingerprint,lease_expires_at,
                         suppresses_stalled,received_at,next_check_at,closed_reason,
                         success_received_at,failure_attempt_id,failure_reported_at,
-                        rule_due_at,
+                        failure_expected_fingerprint,rule_due_at,
                         baseline_lease_claimed)
-                       VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         attempt_id,
                         target.host_id,
@@ -1196,7 +1256,7 @@ def create_report(
                         baseline_not_after,
                         (
                             report.new_fingerprint
-                            if state == "verifying" and not contradictory
+                            if state in {"failed", "verifying"} and not contradictory
                             else None
                         ),
                         lease,
@@ -1209,28 +1269,21 @@ def create_report(
                         or (attempt_id if state == "failed" else None),
                         carried_failure_at
                         or (received_at if state == "failed" else None),
+                        carried_failure_expected
+                        or (report.new_fingerprint if state == "failed" else None),
                         carried_failure_at
                         or (received_at if state == "failed" else None),
                         claims_baseline,
                     ),
                 )
             elif report.outcome == "failed" and effect in {"applied", "no_change"}:
-                conn.execute(
-                    """UPDATE renewal_attempts
-                       SET state=?,suppresses_stalled=0,
-                           failure_attempt_id=COALESCE(failure_attempt_id,attempt_id),
-                           failure_reported_at=COALESCE(failure_reported_at,?),
-                           rule_due_at=?,
-                           closed_reason=CASE
-                               WHEN ?='failed' THEN 'reported_failed' ELSE closed_reason END
-                       WHERE attempt_id=?""",
-                    (
-                        state,
-                        received_at,
-                        received_at,
-                        state,
-                        attempt_id,
-                    ),
+                _record_failed_report_on(
+                    conn,
+                    attempt_id=attempt_id,
+                    state=state,
+                    received_at=received_at,
+                    reported_fingerprint=report.new_fingerprint,
+                    restarted=restarted_failure,
                 )
             elif (
                 report.outcome == "succeeded"

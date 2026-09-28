@@ -79,12 +79,15 @@ Rollback requires restoring the pre-migration backup.
 
 Migration **0049** (still unreleased, so its backfill is updated in place) adds
 the originating `failure_attempt_id`, `failure_reported_at`,
-`failure_cleared_at`, and a rule-only wake timestamp to renewal attempts. It
+`failure_cleared_at`, the condition's expected fingerprint, and a rule-only
+wake timestamp to renewal attempts. It
 backfills the originating attempt and first retained,
 accepted failed report for every stored failure, then walks each endpoint's
 attempt history to carry the earliest unresolved failure across later attempts.
-A recorded verification or a later attempt whose baseline proves a successor
-ends that historical condition. Every still-unresolved stored failure is
+Only stored scan history or certificate-lineage evidence recorded after the
+failure and satisfying the S4 baseline/expected-fingerprint predicate ends a
+historical condition; a changed baseline on a later attempt is not evidence.
+Every still-unresolved stored failure is
 therefore eligible to alert once at the first rule pass after upgrade,
 regardless of its age. It also fills missing historical `not_deployed` raise
 times from the attempt's accepted report time.

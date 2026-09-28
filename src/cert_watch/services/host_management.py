@@ -898,6 +898,11 @@ def delete_host(
         try:
             begin_immediate(conn)
             ensure_write_scope_on(conn, auth, host_id=host_id)
+            host = conn.execute(
+                "SELECT hostname,port FROM hosts WHERE id=?", (host_id,)
+            ).fetchone()
+            if host is None:
+                raise HostNotFoundError("host not found")
             cert_ids = [
                 str(row["id"])
                 for row in conn.execute(
@@ -906,12 +911,37 @@ def delete_host(
                     (host_id,),
                 ).fetchall()
             ]
-            if cert_ids:
-                from cert_watch.database.alert_store import AlertStore
+            renewal_keys = {
+                key
+                for row in conn.execute(
+                    """SELECT attempt_id,failure_attempt_id
+                       FROM renewal_attempts WHERE host_id=?""",
+                    (host_id,),
+                ).fetchall()
+                for key in (
+                    f"renewal_not_deployed:{row['attempt_id']}",
+                    (
+                        f"renewal_failed:{row['failure_attempt_id']}"
+                        if row["failure_attempt_id"]
+                        else None
+                    ),
+                )
+                if key is not None
+            }
+            from cert_watch.database.alert_store import AlertStore
 
-                closed_sent = AlertStore(db_path, initialize=False).close_for_cert_ids(
+            alert_store = AlertStore(db_path, initialize=False)
+            if cert_ids:
+                closed_sent = alert_store.close_for_cert_ids(
                     cert_ids, conn=conn, reason="endpoint deleted"
                 )
+            closed_sent.extend(
+                alert_store.close_keys(
+                    renewal_keys,
+                    conn=conn,
+                    reason="endpoint deleted",
+                )
+            )
             deleted = SqliteHostRepository(db_path).delete(host_id, conn=conn)
             audit_event = record_audit(
                 db_path,
