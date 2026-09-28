@@ -419,6 +419,71 @@ def test_explicit_recent_predecessor_is_baseline_and_verifies_at_acceptance(esta
     )
 
 
+def test_explicit_stale_predecessor_is_not_used_as_baseline(estate):
+    db, _host_id, _cert_id, baseline, settings = estate
+    successor = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    store_scanned(ScannedEntry(host=HOST, port=443, leaf=successor, chain=[]), db)
+    _set_lineage_observed_at(db, NOW - timedelta(days=3))
+    auth = AuthContext.renewal_report_key(
+        "key", principal_id="key", binding="all", bound_tags=()
+    )
+    result, _ = create_report(
+        db,
+        settings,
+        resolve_target(db, auth, cert_fingerprint=baseline),
+        RenewalReportInput("succeeded", None, "tool", None, None, None),
+        auth=auth,
+        actor="api_key:key",
+        source_ip=None,
+        idempotency_key=None,
+        body_sha256="stale-explicit-predecessor",
+        now=NOW,
+    )
+    row = _row(db)
+    assert result.state == "verifying"
+    assert row["baseline_fingerprint"] == successor.fingerprint_sha256
+
+
+def test_explicit_predecessor_is_not_used_after_flap(estate):
+    db, _host_id, _cert_id, baseline, settings = estate
+    with _connect(db) as conn:
+        baseline_der = bytes(
+            conn.execute(
+                "SELECT raw_der FROM certificates WHERE lower(fingerprint_sha256)=?",
+                (baseline.lower(),),
+            ).fetchone()[0]
+        )
+    successor = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    store_scanned(ScannedEntry(host=HOST, port=443, leaf=successor, chain=[]), db)
+    store_scanned(
+        ScannedEntry(
+            host=HOST,
+            port=443,
+            leaf=parse_certificate(baseline_der),
+            chain=[],
+        ),
+        db,
+    )
+    auth = AuthContext.renewal_report_key(
+        "key", principal_id="key", binding="all", bound_tags=()
+    )
+    result, _ = create_report(
+        db,
+        settings,
+        resolve_target(db, auth, cert_fingerprint=successor.fingerprint_sha256),
+        RenewalReportInput("succeeded", None, "tool", None, None, None),
+        auth=auth,
+        actor="api_key:key",
+        source_ip=None,
+        idempotency_key=None,
+        body_sha256="explicit-predecessor-flap",
+        now=NOW,
+    )
+    row = _row(db)
+    assert result.state == "verifying"
+    assert row["baseline_fingerprint"] == baseline
+
+
 @pytest.mark.parametrize(
     ("report_fingerprint", "reason"),
     [(None, "observed_successor"), ("successor", "reported_fingerprint")],
@@ -576,6 +641,30 @@ def test_verified_attempt_accepts_and_verifies_a_later_cycle(estate):
         settings=settings,
     )
     assert _row(db)["state"] == "verified"
+
+
+def test_verified_attempt_without_recorded_leaf_accepts_explicit_new_cycle(estate):
+    db, _host_id, _cert_id, _baseline, _settings = estate
+    first, deployed = _verified_first_cycle(estate)
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE renewal_attempts SET verified_fingerprint=NULL WHERE attempt_id=?",
+            (first.attempt_id,),
+        )
+        conn.commit()
+
+    replacement = parse_certificate(_make_cert(HOST, days_valid=120).der)
+    second = _post(
+        estate,
+        "succeeded",
+        NOW + timedelta(hours=1),
+        new_fingerprint=replacement.fingerprint_sha256,
+    )
+    row = _row(db)
+    assert (second.state, second.effect) == ("verifying", "applied")
+    assert second.attempt_id != first.attempt_id
+    assert row["baseline_fingerprint"] == deployed.fingerprint_sha256
+    assert row["new_fingerprint"] == replacement.fingerprint_sha256
 
 
 def test_verified_attempt_later_failed_deploy_raises(estate):

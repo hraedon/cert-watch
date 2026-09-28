@@ -442,11 +442,17 @@ def _report_baseline(
     received: datetime,
     use_current_predecessor: bool,
 ) -> tuple[str | None, str | None]:
-    """Choose explicit target evidence or a safe, recent predecessor."""
-    candidate = target.baseline_fingerprint
-    explicit_cutoff = (received - timedelta(days=7)).isoformat()
+    """Choose a safe, recent predecessor or the currently served leaf."""
+    candidate = (
+        target.baseline_fingerprint.lower() if target.baseline_fingerprint else None
+    )
+    requested_predecessor = (
+        candidate if candidate is not None and candidate != current_fingerprint else None
+    )
     observation_cutoff = (received - timedelta(hours=24)).isoformat()
-    if use_current_predecessor and current_fingerprint is not None:
+    if current_fingerprint is not None and (
+        use_current_predecessor or requested_predecessor is not None
+    ):
         predecessor = conn.execute(
             """SELECT lower(cl.old_fingerprint) AS fingerprint,
                       COALESCE(
@@ -462,6 +468,7 @@ def _report_baseline(
                WHERE cl.hostname=? AND cl.port=?
                  AND lower(current.fingerprint_sha256)=?
                  AND cl.old_fingerprint IS NOT NULL AND cl.created_at>=?
+                 AND (? IS NULL OR lower(cl.old_fingerprint)=?)
                  AND NOT EXISTS (
                      SELECT 1 FROM certificate_lineage flap
                      WHERE flap.hostname=cl.hostname AND flap.port=cl.port
@@ -480,6 +487,8 @@ def _report_baseline(
                 target.port,
                 current_fingerprint,
                 observation_cutoff,
+                requested_predecessor,
+                requested_predecessor,
                 current_fingerprint,
                 current_fingerprint,
                 current_fingerprint,
@@ -489,17 +498,6 @@ def _report_baseline(
             return str(predecessor["fingerprint"]), (
                 str(predecessor["not_after"]) if predecessor["not_after"] else None
             )
-    if candidate is None or candidate == current_fingerprint:
-        return current_fingerprint, current_not_after
-    recent = conn.execute(
-        """SELECT 1 FROM certificate_lineage cl
-           JOIN certificates c ON c.id=cl.new_cert_id
-           WHERE cl.hostname=? AND cl.port=? AND lower(cl.old_fingerprint)=?
-             AND lower(c.fingerprint_sha256)=? AND cl.created_at>=? LIMIT 1""",
-        (target.hostname, target.port, candidate, current_fingerprint, explicit_cutoff),
-    ).fetchone()
-    if recent is not None:
-        return candidate, target.baseline_not_after
     return current_fingerprint, current_not_after
 
 
@@ -749,10 +747,13 @@ def _reduce_verified_success(
         if attempt["verified_fingerprint"]
         else None
     )
+    comparison_leaf = verified_leaf or baseline_fingerprint
     explicit_new_leaf = bool(
         report.new_fingerprint
-        and verified_leaf
-        and report.new_fingerprint.lower() != verified_leaf
+        and (
+            comparison_leaf is None
+            or report.new_fingerprint.lower() != comparison_leaf.lower()
+        )
     )
     succeeded_at = datetime.fromisoformat(
         str(attempt["success_received_at"] or attempt["received_at"])

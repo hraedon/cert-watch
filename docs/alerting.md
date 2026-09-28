@@ -54,13 +54,15 @@ correlation identifier are never copied into the alert or its delivery.
 
 #### S4 verification rules
 
-- A bare success can use the current leaf's predecessor as its baseline only
-  when that replacement was observed in the last 24 hours, the current leaf
-  has never appeared as an old lineage fingerprint on the endpoint, and no
-  earlier attempt has verified or used the current leaf as its baseline.
+- Any success, whether it addresses the endpoint by hostname or by an explicit
+  `cert_fingerprint`, can use the current leaf's predecessor as its baseline
+  only when that replacement was observed in the last 24 hours, the current
+  leaf has never appeared as an old lineage fingerprint on the endpoint, and
+  no earlier attempt has verified or used the current leaf as its baseline.
   This applies after any terminal attempt. Send `new_fingerprint` for exact
-  verification; an explicit `cert_fingerprint` predecessor target still uses
-  the seven-day target lookup window.
+  verification. An explicit predecessor target still has a seven-day endpoint
+  lookup window, but that wider addressing window does not change the baseline
+  rules.
 - A verified attempt owns late reports with its correlation. Bare successes
   and new correlations received within 24 hours of its accepted success are
   also duplicates. After that window, or when `new_fingerprint` names a leaf

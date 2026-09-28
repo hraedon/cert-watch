@@ -63,14 +63,15 @@ Accepted reports return status 202:
 ```
 
 Send `new_fingerprint` whenever the automation knows the certificate it meant
-to deploy. That is the exact verification target. For a bare `succeeded`
-report, cert-watch can recognize a successor that was scanned before the
-report only when its replacement lineage was observed in the preceding 24
-hours, the endpoint has not flapped back to that leaf, and no earlier attempt
-has already verified or used that leaf as its baseline. Otherwise the served
-leaf becomes the new attempt's baseline and a later scan must observe a change.
-An explicit `cert_fingerprint` target naming the replaced certificate retains
-the seven-day target-lookup behavior described above.
+to deploy. That is the exact verification target. For any `succeeded` report,
+cert-watch can use a replaced certificate as the attempt baseline only when
+its replacement by the current leaf was observed in the preceding 24 hours,
+the endpoint has not previously replaced that current leaf (a flap), and no
+earlier attempt has verified or used the current leaf as its baseline.
+Otherwise the served leaf becomes the new attempt's baseline and a later scan
+must observe a change. An explicit `cert_fingerprint` naming a replaced
+certificate retains the seven-day endpoint lookup behavior described above;
+that wider addressing window does not change the baseline rules.
 
 A first report whose `new_fingerprint` equals the baseline is stored with
 `"effect":"no_change"` and returns `"state":null`, because no attempt exists.
