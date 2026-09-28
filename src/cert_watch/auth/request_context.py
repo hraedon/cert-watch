@@ -41,10 +41,9 @@ logger = logging.getLogger("cert_watch.auth.request_context")
 class BearerCredentials(NamedTuple):
     """A strictly parsed Authorization header.
 
-    cert-watch accepts exactly one ``Authorization`` field containing an
-    exact-case ``Bearer`` scheme, one ASCII space, and a whitespace-free
-    token.  Keeping this parser shared prevents the report-key precheck,
-    API-key authentication, and metrics authentication from disagreeing.
+    cert-watch API keys accept exactly one ``Authorization`` field containing
+    an exact-case ``Bearer`` scheme, one ASCII space, and a whitespace-free
+    token. The metrics token retains its older, independent parsing contract.
     """
 
     token: str | None = None
@@ -71,6 +70,14 @@ def parse_bearer_credentials(request: Request) -> BearerCredentials:
     if not token or any(char.isspace() for char in token):
         return BearerCredentials(malformed=True)
     return BearerCredentials(token=token)
+
+
+def _contains_cert_watch_key(request: Request) -> bool:
+    """Return whether any raw Authorization value names the ``cwk_`` family."""
+    return any(
+        name.lower() == b"authorization" and b"cwk_" in value.lower()
+        for name, value in request.scope.get("headers", ())
+    )
 
 
 def _is_auth_enabled(request: Request) -> bool:
@@ -134,10 +141,12 @@ def check_metrics_token(request: Request) -> bool:
     metrics_token = _metrics_token(request)
     if not metrics_token:
         return True
-    credentials = parse_bearer_credentials(request)
-    return credentials.token is not None and hmac.compare_digest(
-        credentials.token, metrics_token
-    )
+    # This deliberately preserves the metrics credential contract from before
+    # renewal-report keys introduced their stricter, capability-specific parser.
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        return hmac.compare_digest(auth_header[7:], metrics_token)
+    return False
 
 
 def metrics_token_configured(request: Request) -> bool:
@@ -163,6 +172,9 @@ _RENEWAL_REPORT_FORBIDDEN = "forbidden for this key"
 
 
 def _is_renewal_report_route(request: Request) -> bool:
+    # S2 must enforce bindings against this same raw-path allowlist. Deploying
+    # report routes below a path prefix/root_path is not supported yet: the raw
+    # request path will not match and the capability fails closed.
     raw_path = request.scope.get("raw_path")
     if not isinstance(raw_path, bytes):
         raw_path = request.scope.get("path", "").encode("utf-8")
@@ -336,12 +348,15 @@ async def auth_middleware(
     # allowlist. Inspect them before public-path routing so every other path,
     # including static files and unknown routes, has one indistinguishable
     # refusal. Existing key scopes retain their normal route behaviour.
-    credentials = parse_bearer_credentials(request)
-    if credentials.malformed:
-        return JSONResponse(
-            content={"error": "malformed authorization"}, status_code=401
-        )
-    if credentials.token and credentials.token.startswith("cwk_"):
+    credentials = BearerCredentials()
+    if _contains_cert_watch_key(request):
+        credentials = parse_bearer_credentials(request)
+        if credentials.malformed or not (
+            credentials.token and credentials.token.startswith("cwk_")
+        ):
+            return JSONResponse(
+                content={"error": "malformed authorization"}, status_code=401
+            )
         api_ctx = authenticate_api_key(
             request, _request_db_path(request), renewal_report_only=True
         )

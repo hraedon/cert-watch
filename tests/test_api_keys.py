@@ -697,18 +697,23 @@ def test_renewal_report_allowlist_rejects_raw_dot_segment(seeded):
     "authorization_headers",
     [
         lambda raw: [("authorization", f"Bearer  {raw}")],
-        lambda raw: [("authorization", f"Bearer \t{raw}")],
+        lambda raw: [("authorization", f"Bearer\t{raw}")],
         lambda raw: [("authorization", f"Bearer {raw} ")],
         lambda raw: [("authorization", f"bearer {raw}")],
+        lambda raw: [("authorization", f"Bearer {raw.upper()}")],
         lambda raw: [
-            ("authorization", f"Bearer {raw}"),
+            ("authorization", "Basic YWRtaW46cHc="),
             ("authorization", f"Bearer {raw}"),
         ],
     ],
-    ids=["two-spaces", "tab", "trailing-space", "lowercase", "two-headers"],
+    ids=[
+        "two-spaces", "tab", "trailing-space", "lowercase-scheme",
+        "uppercase-token-prefix", "duplicate-one-cwk",
+    ],
 )
+@pytest.mark.parametrize("auth_enabled", [True, False], ids=["auth-on", "auth-off"])
 def test_malformed_authorization_is_rejected_everywhere(
-    reload_app, authorization_headers,
+    reload_app, authorization_headers, auth_enabled,
 ):
     from fastapi.testclient import TestClient
 
@@ -716,8 +721,16 @@ def test_malformed_authorization_is_rejected_everywhere(
     from cert_watch.config import Settings
 
     app_mod = reload_app(
-        CERT_WATCH_LOCAL_ADMIN_USER="admin",
-        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("pw-for-tests-1"),
+        **(
+            {
+                "CERT_WATCH_LOCAL_ADMIN_USER": "admin",
+                "CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH": _scrypt_hash(
+                    "pw-for-tests-1"
+                ),
+            }
+            if auth_enabled
+            else {}
+        )
     )
     db = Settings.from_env().db_path
     init_schema(db)
@@ -730,13 +743,67 @@ def test_malformed_authorization_is_rejected_everywhere(
         responses = [
             client.get(path, headers=headers, follow_redirects=False)
             for path in (
-                "/", "/api/certificates", "/api/renewal-reports",
-                "/healthz", "/static/css/cw.css", "/login",
+                "/", "/api/hosts", "/api/renewal-reports",
+                "/healthz", "/readyz", "/static/css/cw.css", "/login",
             )
         ]
 
     assert {(response.status_code, response.content) for response in responses} == {
         (401, b'{"error":"malformed authorization"}')
+    }
+
+
+@pytest.mark.parametrize("auth_enabled", [True, False], ids=["auth-on", "auth-off"])
+@pytest.mark.parametrize(
+    "authorization_headers",
+    [
+        [("authorization", "Basic YWRtaW46cHc=")],
+        [("authorization", "bearer idp-access-token")],
+        [
+            ("authorization", "Basic YWRtaW46cHc="),
+            ("authorization", "bearer idp-access-token"),
+        ],
+    ],
+    ids=["basic", "lowercase-idp-bearer", "duplicate-non-cwk"],
+)
+def test_non_cwk_authorization_preserves_origin_behavior(
+    reload_app, auth_enabled, authorization_headers,
+):
+    """Non-cwk credentials are invisible to the report-key precheck."""
+    from fastapi.testclient import TestClient
+
+    from cert_watch.auth.local_admin import _scrypt_hash
+
+    env = (
+        {
+            "CERT_WATCH_LOCAL_ADMIN_USER": "admin",
+            "CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH": _scrypt_hash("pw-for-tests-1"),
+        }
+        if auth_enabled
+        else {}
+    )
+    app_mod = reload_app(**env)
+    paths = ("/healthz", "/readyz", "/login", "/", "/api/hosts")
+
+    with TestClient(app_mod.app) as client:
+        baseline = {
+            path: client.get(path, follow_redirects=False) for path in paths
+        }
+        actual = {
+            path: client.get(
+                path,
+                headers=authorization_headers,
+                follow_redirects=False,
+            )
+            for path in paths
+        }
+
+    assert {
+        path: (response.status_code, response.headers.get("location"))
+        for path, response in actual.items()
+    } == {
+        path: (response.status_code, response.headers.get("location"))
+        for path, response in baseline.items()
     }
 
 
@@ -892,7 +959,10 @@ def test_verify_rejects_cross_family_or_binding_corruption(
     assert repo.verify_key(raw) is None
 
 
-@pytest.mark.parametrize("corruption", ["empty-tags", "unknown-binding"])
+@pytest.mark.parametrize(
+    "corruption",
+    ["empty-tags", "unknown-binding", "too-many-tags", "invisible-tag"],
+)
 def test_corrupt_renewal_report_binding_is_unauthenticated(reload_app, corruption):
     from fastapi.testclient import TestClient
 
@@ -915,9 +985,19 @@ def test_corrupt_renewal_report_binding_is_unauthenticated(reload_app, corruptio
             conn.execute(
                 "UPDATE api_keys SET binding = 'future' WHERE id = ?", (entry.id,)
             )
-        else:
+        elif corruption == "empty-tags":
             conn.execute(
                 "UPDATE api_keys SET bound_tags = '' WHERE id = ?", (entry.id,)
+            )
+        elif corruption == "too-many-tags":
+            conn.execute(
+                "UPDATE api_keys SET bound_tags = ? WHERE id = ?",
+                (",".join(f"tag-{index}" for index in range(21)), entry.id),
+            )
+        else:
+            conn.execute(
+                "UPDATE api_keys SET bound_tags = ? WHERE id = ?",
+                ("prod,\u200b", entry.id),
             )
         conn.commit()
 

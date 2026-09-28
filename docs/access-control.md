@@ -145,6 +145,10 @@ checked live on each report request and cannot be edited. Revoke the key and
 create another to change its binding. A key can bind at most 20 tags, each at
 most 64 characters and containing at least one visible character.
 
+The report-key allowlist compares the raw request path. Deploying cert-watch
+under a URL path prefix or ASGI `root_path` is not supported for report keys
+yet; those credentials fail closed instead of reaching the report routes.
+
 Create keys for systems, not people, and revoke them when they are no longer needed.
 Creating, listing and revoking keys needs an administrator's browser session,
 so an API key can't mint more keys, not even an `admin` key. A key keeps
