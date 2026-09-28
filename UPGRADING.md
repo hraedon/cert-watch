@@ -23,7 +23,7 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
-## Upgrading from 1.1.0
+## Upgrading from 1.1.0 to 1.1.1
 
 API-key audit actors now use the stable `api_key:<id>` format instead of the
 key's display name. The display name is retained as `api_key_name` in the
@@ -42,8 +42,9 @@ and are not escaped for structured formats such as form encoding.
 
 After this version, a generic webhook template that starts with `{` after
 leading BOMs and whitespace but is not valid JSON after neutral substitution
-is refused when saved and at send time. This is the only delivery behaviour
-change for existing templates; startup logs a warning naming the generic
+is refused when saved and at send time, as is a JSON template with any
+unquoted placeholder other than `{{threshold_days}}`. This is the only
+delivery behaviour change for existing templates; startup logs a warning naming the generic
 channel when an environment-provided or previously saved template would be
 refused.
 
