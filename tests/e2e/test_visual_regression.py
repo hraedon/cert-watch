@@ -75,6 +75,7 @@ _MASKS = [
     ".cw-ver",
     "#cw-health",
     ".cw-home-foot span:nth-child(2)",  # Next run crosses at the configured schedule.
+    ".cw-home-strip",  # Twelve calendar weeks roll at each UTC week boundary.
 ]
 
 # Empty-state pages with stable layout (no certs/dates seeded).
@@ -159,8 +160,8 @@ def test_add_drawer_visual(
 # masked alongside the standard volatile chrome.
 # ---------------------------------------------------------------------------
 
-_POPULATED_MASKS = [*_MASKS, "tbody td:nth-child(4)"]  # Expires column (dates + relative strings)
-_HOME_POPULATED_MASKS = [*_MASKS, ".cw-home-state", ".cw-home-foot", ".cw-home-strip"]
+_POPULATED_MASKS = [*_MASKS, "tbody td:nth-child(3)"]  # Condition column (dates + relative strings)
+_HOME_POPULATED_MASKS = [*_MASKS, ".cw-home-state", ".cw-home-foot"]
 
 
 @pytest.fixture(scope="module")
