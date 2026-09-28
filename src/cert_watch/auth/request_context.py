@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+import re
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -72,10 +73,17 @@ def parse_bearer_credentials(request: Request) -> BearerCredentials:
     return BearerCredentials(token=token)
 
 
+# A cert-watch key is the credential itself (optionally after a scheme word),
+# never a substring: a JWT or metrics token that happens to contain "cwk_"
+# must keep origin behaviour instead of tripping the strict parser.
+_CERT_WATCH_KEY_CREDENTIAL = re.compile(rb"^\s*(?:\S+\s+)?cwk_", re.IGNORECASE)
+
+
 def _contains_cert_watch_key(request: Request) -> bool:
-    """Return whether any raw Authorization value names the ``cwk_`` family."""
+    """Return whether any raw Authorization value presents a ``cwk_`` key."""
     return any(
-        name.lower() == b"authorization" and b"cwk_" in value.lower()
+        name.lower() == b"authorization"
+        and _CERT_WATCH_KEY_CREDENTIAL.match(value) is not None
         for name, value in request.scope.get("headers", ())
     )
 

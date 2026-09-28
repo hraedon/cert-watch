@@ -763,8 +763,17 @@ def test_malformed_authorization_is_rejected_everywhere(
             ("authorization", "Basic YWRtaW46cHc="),
             ("authorization", "bearer idp-access-token"),
         ],
+        # Review R3-1: "cwk_" inside a token is not a cert-watch key.
+        [("authorization", "Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4cwk_eSJ9.c2ln")],
+        [("authorization", "bearer idp-token-CWk_suffix")],
     ],
-    ids=["basic", "lowercase-idp-bearer", "duplicate-non-cwk"],
+    ids=[
+        "basic",
+        "lowercase-idp-bearer",
+        "duplicate-non-cwk",
+        "jwt-containing-cwk",
+        "token-containing-cwk-any-case",
+    ],
 )
 def test_non_cwk_authorization_preserves_origin_behavior(
     reload_app, auth_enabled, authorization_headers,
