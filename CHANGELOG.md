@@ -79,7 +79,12 @@ All notable changes to cert-watch are documented in this file.
   `ignored_late` even when the served leaf has since changed. This fixes the
   attempt state machine to enforce its documented correlation ownership rule;
   it is the one deliberate departure from the reducer at this work's merge
-  base (#118 S5).
+  base. A differential test runs reports, direct stored-leaf evidence, manual
+  clears, compatibility status writes, and generated restart sequences against
+  merge-base copies of both the report and verification reducers. It compares
+  returned state and effect, stored report effect, and every base attempt
+  column, and stops a sequence when it records that one allowed difference
+  (#118 S5).
 
 ### Upgrade notes
 

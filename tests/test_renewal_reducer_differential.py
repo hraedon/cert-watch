@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 import sqlite3
+import sys
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import closing
@@ -22,9 +24,7 @@ from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.config import Settings
 from cert_watch.database import SqliteHostRepository, init_schema
 from cert_watch.database.connection import _connect, close_connections
-from cert_watch.scan import ScannedEntry, store_scanned
 from cert_watch.services import renewal_reports
-from tests._helpers import seed_scanned
 from tests.conftest import _make_cert
 from tests.fixtures.main_renewal_reducer import renewal_verification as main_verification
 from tests.fixtures.main_renewal_reducer.services import renewal_reports as main_reports
@@ -86,7 +86,7 @@ class Side:
 
 
 def _sequences() -> tuple[tuple[Action, ...], ...]:
-    """Return Opus's 67 sequences plus explicit manual-clear restarts."""
+    """Return the reviewed corpus plus broader generated state-machine paths."""
     sequences: list[list[Action]] = [
         [("succeeded", "run-1", "A", 0), ("store", None, "A", 10), ("failed", "run-1", None, 20)],
         [("succeeded", "run-1", None, 0), ("store", None, "A", 10), ("failed", "run-1", None, 20)],
@@ -154,6 +154,40 @@ def _sequences() -> tuple[tuple[Action, ...], ...]:
             ],
         ]
     )
+
+    # Every generated case deliberately covers the operations omitted by the
+    # original corpus: stored successors, compatibility writes, manual clears,
+    # and a failure-condition restart after clear. Vary the surrounding
+    # reports and timings without making the differential expensive enough to
+    # discourage running it locally.
+    for seed in range(10):
+        rng = random.Random(seed)
+        for _ in range(13):
+            minute = 0
+            sequence = []
+            for _ in range(rng.randint(1, 3)):
+                minute += rng.choice((1, 5, 30, 600))
+                sequence.append(
+                    (
+                        rng.choice(("started", "failed", "succeeded")),
+                        rng.choice((None, "g0", "g1")),
+                        rng.choice((None, "A", "B")),
+                        minute,
+                    )
+                )
+            minute += rng.choice((1, 5, 30))
+            sequence.append(("store", None, rng.choice(("A", "B")), minute))
+            minute += rng.choice((1, 5, 30))
+            sequence.append(("legacy_in_progress", None, None, minute))
+            minute += rng.choice((1, 5, 30))
+            sequence.append(("failed", rng.choice((None, "g0", "g1")), None, minute))
+            minute += rng.choice((1, 5, 30))
+            sequence.append(("clear", None, None, minute))
+            minute += rng.choice((1, 5, 30))
+            sequence.append(("failed", rng.choice((None, "g0", "g1")), None, minute))
+            minute += rng.choice((1, 5, 30))
+            sequence.append(("legacy_pending", None, None, minute))
+            sequences.append(sequence)
     return tuple(tuple(sequence) for sequence in sequences)
 
 
@@ -166,7 +200,9 @@ def differential_seed(tmp_path_factory: pytest.TempPathFactory) -> DifferentialS
     db = root / "seed.sqlite3"
     init_schema(db)
     SqliteHostRepository(db).add(HOST, 443, tags="prod")
-    seed_scanned(db, HOST, 443, parse_certificate(_make_cert(HOST, days_valid=60).der))
+    initial_leaf = parse_certificate(_make_cert(HOST, days_valid=60).der)
+    assert isinstance(initial_leaf, Certificate)
+    _store_leaf_sql(db, initial_leaf, NOW - timedelta(days=1), "seed")
     leaves = {
         name: parse_certificate(_make_cert(HOST, days_valid=days).der)
         for name, days in (("A", 90), ("B", 120))
@@ -183,9 +219,11 @@ def test_vendored_main_reducers_have_recorded_merge_base_hashes() -> None:
     assert observed == VENDORED_SHA256
 
 
-def test_sequence_corpus_contains_opus_67_and_manual_clear_paths() -> None:
-    assert len(SEQUENCES) == 70
-    assert sum(action[0] == "clear" for sequence in SEQUENCES for action in sequence) >= 2
+def test_sequence_corpus_contains_reviewed_and_generated_paths() -> None:
+    assert len(SEQUENCES) == 200
+    generated = SEQUENCES[70:]
+    for required in ("clear", "legacy_in_progress", "legacy_pending", "store"):
+        assert all(any(action[0] == required for action in sequence) for sequence in generated)
 
 
 def _auth() -> AuthContext:
@@ -258,6 +296,67 @@ def _current_fingerprint(db: Path) -> str:
     return str(row[0])
 
 
+def _store_leaf_sql(db: Path, leaf: Certificate, instant: datetime, identity: object) -> None:
+    """Seed scan evidence without executing either branch's scan-storage code."""
+    created_at = instant.astimezone(UTC).isoformat()
+    leaf_id = f"differential-leaf-{identity}"
+    with _connect(db) as conn:
+        previous = conn.execute(
+            """SELECT id,fingerprint_sha256 FROM certificates
+               WHERE hostname=? AND port=? AND is_leaf=1 AND source='scanned'
+               ORDER BY created_at DESC,rowid DESC LIMIT 1""",
+            (HOST, 443),
+        ).fetchone()
+        if previous is not None:
+            conn.execute("DELETE FROM certificates WHERE parent_cert_id=?", (previous["id"],))
+        conn.execute(
+            "DELETE FROM certificates WHERE hostname=? AND port=? AND is_leaf=1",
+            (HOST, 443),
+        )
+        conn.execute(
+            """INSERT INTO certificates
+               (id,subject,issuer,not_before,not_after,san_dns_names,
+                fingerprint_sha256,raw_der,source,hostname,port,is_leaf,
+                parent_cert_id,chain_valid,replaces_cert_id,created_at,updated_at,tags)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                leaf_id,
+                leaf.subject,
+                leaf.issuer,
+                leaf.not_before.astimezone(UTC).isoformat(),
+                leaf.not_after.astimezone(UTC).isoformat(),
+                json.dumps(leaf.san_dns_names),
+                leaf.fingerprint_sha256,
+                leaf.raw_der,
+                "scanned",
+                HOST,
+                443,
+                1,
+                None,
+                None,
+                str(previous["id"]) if previous is not None else None,
+                created_at,
+                created_at,
+                "prod",
+            ),
+        )
+        if previous is not None and previous["fingerprint_sha256"] != leaf.fingerprint_sha256:
+            conn.execute(
+                """INSERT OR IGNORE INTO certificate_lineage
+                   (old_cert_id,new_cert_id,hostname,port,created_at,old_fingerprint)
+                   VALUES (?,?,?,?,?,?)""",
+                (
+                    previous["id"],
+                    leaf_id,
+                    HOST,
+                    443,
+                    created_at,
+                    previous["fingerprint_sha256"],
+                ),
+            )
+        conn.commit()
+
+
 def _clear_overlay(side: Side, instant: datetime) -> None:
     if not side.overlay:
         return
@@ -285,16 +384,7 @@ def _run_action(
         if kind == "store":
             assert leaf_name is not None
             leaf = leaves[leaf_name]
-            store_scanned(
-                ScannedEntry(
-                    host=HOST,
-                    port=443,
-                    leaf=leaf,
-                    chain=[],
-                    scanned_at=instant,
-                ),
-                side.db,
-            )
+            _store_leaf_sql(side.db, leaf, instant, index)
             result = side.verification.evaluate_after_scan(
                 side.db,
                 HOST,
@@ -320,6 +410,25 @@ def _run_action(
             side.reports.expire_renewal_leases(side.db, now=instant)
         elif kind == "clear":
             _clear_overlay(side, instant)
+        elif kind.startswith("legacy_"):
+            status = kind.removeprefix("legacy_")
+            with _connect(side.db) as conn:
+                row = conn.execute(
+                    "SELECT id FROM hosts WHERE hostname=? AND port=?", (HOST, 443)
+                ).fetchone()
+                assert row is not None
+                side.reports.write_through_renewal_status_on(
+                    conn,
+                    side.db,
+                    side.settings,
+                    str(row["id"]),
+                    status,
+                    auth=AuthContext.system(),
+                    actor="system",
+                    source_ip=None,
+                    now=instant,
+                )
+                conn.commit()
         else:
             report = side.reports.RenewalReportInput(
                 kind,
@@ -329,18 +438,25 @@ def _run_action(
                 leaves[leaf_name].fingerprint_sha256 if leaf_name else None,
                 None,
             )
-            result, replayed = side.reports.create_report(
-                side.db,
-                side.settings,
-                side.target,
-                report,
-                auth=_auth(),
-                actor="api_key:differential",
-                source_ip="192.0.2.20",
-                idempotency_key=None,
-                body_sha256=f"differential-{index}",
-                now=instant,
+            # The vendored report reducer imports verification inside the
+            # acceptance call. Redirect that one import to its vendored peer,
+            # then restore sys.modules before the overlay side runs.
+            verification_modules = (
+                {"cert_watch.renewal_verification": side.verification} if not side.overlay else {}
             )
+            with patch.dict(sys.modules, verification_modules):
+                result, replayed = side.reports.create_report(
+                    side.db,
+                    side.settings,
+                    side.target,
+                    report,
+                    auth=_auth(),
+                    actor="api_key:differential",
+                    source_ip="192.0.2.20",
+                    idempotency_key=None,
+                    body_sha256=f"differential-{index}",
+                    now=instant,
+                )
             assert not replayed
             returned = (result.state, result.effect, str(result.attempt_id))
             stored_effect = _latest_report_effect(side.db, str(result.report_id))
@@ -384,26 +500,10 @@ def _is_exact_allowed_divergence(
     )
 
 
-def _strip_failure_overlay(db: Path) -> None:
-    with _connect(db) as conn:
-        conn.execute(
-            """UPDATE renewal_attempts
-               SET failure_attempt_id=NULL,failure_reported_at=NULL,
-                   failure_cleared_at=NULL,failure_expected_fingerprint=NULL,
-                   rule_due_at=NULL"""
-        )
-        conn.commit()
-
-
-def _resynchronize_main_to_allowed_exception(
-    main: Side, overlay: Side, *, step_index: int
-) -> None:
-    close_connections()
-    _clone(overlay.db, main.db)
-    _strip_failure_overlay(main.db)
-    next_id = (step_index + 1) * 1_000_000
-    main.ids = (uuid.UUID(int=value) for value in range(next_id, next_id + 100_000))
-    overlay.ids = (uuid.UUID(int=value) for value in range(next_id, next_id + 100_000))
+@dataclass(frozen=True)
+class AllowedDivergence:
+    step_index: int
+    action: Action
 
 
 def _assert_sequence_matches(
@@ -412,7 +512,7 @@ def _assert_sequence_matches(
     actions: Sequence[Action],
     *,
     mutate_overlay: Callable[[Side], None] | None = None,
-) -> None:
+) -> AllowedDivergence | None:
     main = _side(
         seed,
         tmp_path / "origin-main.sqlite3",
@@ -443,23 +543,44 @@ def _assert_sequence_matches(
             actual = _run_action(overlay, action, seed.leaves, index)
             if actual == expected:
                 continue
-            if allowed and _is_exact_allowed_divergence(
-                expected, actual, before_overlay
-            ):
-                _resynchronize_main_to_allowed_exception(
-                    main, overlay, step_index=index
-                )
-                continue
+            if allowed and _is_exact_allowed_divergence(expected, actual, before_overlay):
+                return AllowedDivergence(index, action)
             assert actual == expected, f"differential mismatch at step {index}: {action}"
     finally:
         close_connections()
+    return None
 
 
 @pytest.mark.parametrize("sequence_index", range(len(SEQUENCES)))
 def test_failure_overlay_matches_pinned_main_reducer(
-    differential_seed: DifferentialSeed, tmp_path: Path, sequence_index: int
+    differential_seed: DifferentialSeed,
+    tmp_path: Path,
+    sequence_index: int,
+    request: pytest.FixtureRequest,
 ) -> None:
-    _assert_sequence_matches(differential_seed, tmp_path, SEQUENCES[sequence_index])
+    divergence = _assert_sequence_matches(differential_seed, tmp_path, SEQUENCES[sequence_index])
+    if divergence is not None:
+        request.node.user_properties.append(
+            (
+                "allowed_divergence",
+                f"step={divergence.step_index} action={divergence.action!r}",
+            )
+        )
+
+
+def test_allowed_divergence_records_and_ends_the_sequence(
+    differential_seed: DifferentialSeed, tmp_path: Path
+) -> None:
+    actions: tuple[Action, ...] = (
+        ("succeeded", "owned-run", "A", 0),
+        ("store", None, "A", 10),
+        ("failed", "owned-run", None, 20),
+        ("invalid-tail-must-not-run", None, None, 30),
+    )
+
+    assert _assert_sequence_matches(differential_seed, tmp_path, actions) == (
+        AllowedDivergence(2, actions[2])
+    )
 
 
 def test_differential_self_check_catches_plain_repeated_start_regression(
@@ -489,6 +610,40 @@ def test_differential_self_check_catches_plain_repeated_start_regression(
             differential_seed,
             tmp_path,
             (("started", None, None, 0), ("started", None, None, 10)),
+            mutate_overlay=install_mutant,
+        )
+
+
+def test_differential_self_check_catches_acceptance_verification_regression(
+    differential_seed: DifferentialSeed, tmp_path: Path
+) -> None:
+    def install_mutant(side: Side) -> None:
+        original_create = side.reports.create_report
+        original_evaluate = side.verification.evaluate_evidence_on
+
+        def stop_acceptance_verification(*args: Any, **kwargs: Any) -> Any:
+            if not kwargs["count_check"]:
+                attempt = args[1]
+                return side.verification.VerificationResult(
+                    str(attempt["state"]), attempt["next_check_at"], None
+                )
+            return original_evaluate(*args, **kwargs)
+
+        def create_with_mutant(*args: Any, **kwargs: Any) -> Any:
+            with patch.object(
+                side.verification,
+                "evaluate_evidence_on",
+                stop_acceptance_verification,
+            ):
+                return original_create(*args, **kwargs)
+
+        side.reports = _ModuleProxy(side.reports, create_report=create_with_mutant)
+
+    with pytest.raises(AssertionError, match="differential mismatch"):
+        _assert_sequence_matches(
+            differential_seed,
+            tmp_path,
+            (("store", None, "A", 0), ("succeeded", None, "A", 5)),
             mutate_overlay=install_mutant,
         )
 
