@@ -692,9 +692,23 @@ def update_host_settings(
             )
             if cursor.rowcount == 0:
                 raise HostNotFoundError("host not found")
+            from cert_watch.config import current_settings
+            from cert_watch.services.renewal_reports import write_through_renewal_status_on
+
+            derived_status, renewal_audit = write_through_renewal_status_on(
+                conn,
+                db_path,
+                current_settings(db_path),
+                host_id,
+                update.renewal_status,
+                auth=auth,
+                actor=actor,
+                source_ip=source_ip,
+            )
             row = conn.execute("SELECT * FROM hosts WHERE id = ?", (host_id,)).fetchone()
             assert row is not None
             updated = repo._row_to_host(row)
+            updated.renewal_status = derived_status
             audit_event = record_audit(
                 db_path,
                 actor=actor,
@@ -714,6 +728,7 @@ def update_host_settings(
             conn.rollback()
             raise
     export_audit(audit_event)
+    export_audit(renewal_audit)
     assert updated is not None
     return updated
 

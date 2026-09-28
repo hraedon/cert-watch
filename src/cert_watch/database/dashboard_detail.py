@@ -11,6 +11,7 @@ from cert_watch.database.connection import _connect, _row_to_cert
 from cert_watch.database.dashboard_rows import _build_dashboard_rows
 from cert_watch.database.dashboard_unified import _build_unified_from_dash
 from cert_watch.database.posture import get_posture_for_cert
+from cert_watch.database.renewal_attempts import host_projection_sql
 from cert_watch.database.repo import HostEntry, SqliteHostRepository
 from cert_watch.database.schema import init_schema
 
@@ -55,7 +56,8 @@ def get_stored_certificate_detail_records(
         host_row = None
         if hostname:
             host_row = conn.execute(
-                "SELECT * FROM hosts WHERE hostname = ? AND port = ?",
+                f"SELECT {host_projection_sql('h')} FROM hosts h "
+                "WHERE h.hostname = ? AND h.port = ?",
                 (hostname, port),
             ).fetchone()
     return StoredCertificateDetailRecords(
@@ -124,7 +126,9 @@ def get_pending_host_detail_records(
     """Load a registered host and its latest scan result."""
     init_schema(db_path)
     with _connect(db_path) as conn:
-        host_row = conn.execute("SELECT * FROM hosts WHERE id = ?", (host_id,)).fetchone()
+        host_row = conn.execute(
+            f"SELECT {host_projection_sql('h')} FROM hosts h WHERE h.id = ?", (host_id,)
+        ).fetchone()
         if host_row is None:
             return None
     return PendingHostDetailRecords(
@@ -178,7 +182,8 @@ def get_cert_detail(db_path: str | Path, cert_id: str) -> dict[str, Any] | None:
         scan_rows = []
         if leaf["hostname"]:
             host_rows = conn.execute(
-                "SELECT * FROM hosts WHERE hostname = ? AND port = ?",
+                f"SELECT {host_projection_sql('h')} FROM hosts h "
+                "WHERE h.hostname = ? AND h.port = ?",
                 (leaf["hostname"], leaf["port"]),
             ).fetchall()
             scan_rows = conn.execute(

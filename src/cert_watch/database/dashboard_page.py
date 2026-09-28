@@ -26,6 +26,7 @@ from cert_watch.database.dashboard_unified import (
     _build_pending_entries,
     _build_unified_for_leaf_ids,
 )
+from cert_watch.database.renewal_attempts import host_projection_sql
 from cert_watch.database.schema import init_schema
 from cert_watch.status_model import (
     AxisSettings,
@@ -185,6 +186,7 @@ def inventory_candidates_sql(
         " LEFT JOIN endpoint_renewal_analytics ra ON ra.hostname = h.hostname"
         " AND ra.port = h.port"
         f" AND ra.classifier_version = {CLASSIFIER_VERSION}"
+        " LEFT JOIN renewal_attempts rat ON rat.host_id=h.id AND rat.is_current=1"
         if need_renewal
         else ""
     )
@@ -208,21 +210,31 @@ def inventory_candidates_sql(
         " NULL AS monitoring_error, NULL AS monitoring_first_failed"
     )
     renewal_col = (
-        "cw_renewal_state(h.hostname, h.port, h.renewal_method, h.renewal_status,"
-        " c.not_after, EXISTS(SELECT 1 FROM certificates succ"
+        "cw_renewal_state(h.hostname, h.port, h.renewal_method, c.not_after,"
+        " EXISTS(SELECT 1 FROM certificates succ"
         " WHERE succ.replaces_cert_id = c.id AND succ.id != c.id),"
-        " COALESCE(ra.classification, 'unknown')) AS renewal"
+        " COALESCE(ra.classification, 'unknown'),rat.state,rat.lease_expires_at,"
+        " COALESCE(rat.suppresses_stalled,0)) AS renewal"
         if need_renewal
         else "NULL AS renewal"
     )
     pending_renewal_col = (
-        "cw_renewal_state(h.hostname, h.port, h.renewal_method, h.renewal_status,"
-        " NULL, 0, COALESCE(ra.classification, 'unknown')) AS renewal"
+        "cw_renewal_state(h.hostname, h.port, h.renewal_method,NULL,0,"
+        " COALESCE(ra.classification, 'unknown'),rat.state,rat.lease_expires_at,"
+        " COALESCE(rat.suppresses_stalled,0)) AS renewal"
         if need_renewal
         else "NULL AS renewal"
     )
     renewal_analytics_col = (
         "COALESCE(ra.classification, 'unknown')" if need_renewal else "'unknown'"
+    )
+    renewal_attempt_cols = (
+        "rat.state AS renewal_attempt_state,"
+        " rat.lease_expires_at AS renewal_lease_expires_at,"
+        " COALESCE(rat.suppresses_stalled,0) AS renewal_suppresses_stalled"
+        if need_renewal
+        else "NULL AS renewal_attempt_state,NULL AS renewal_lease_expires_at,"
+        " 0 AS renewal_suppresses_stalled"
     )
     delivery_col = (
         delivery_state_sql("c", "h", delivery_settings)
@@ -266,6 +278,7 @@ def inventory_candidates_sql(
                    h.scan_interval_hours AS monitoring_interval_hours,
                    {renewal_col},
                    {renewal_analytics_col} AS renewal_analytics,
+                   {renewal_attempt_cols},
                    EXISTS(SELECT 1 FROM certificates succ
                        WHERE succ.replaces_cert_id = c.id AND succ.id != c.id)
                        AS has_successor,
@@ -322,6 +335,7 @@ def inventory_candidates_sql(
                    h.scan_interval_hours AS monitoring_interval_hours,
                    {pending_renewal_col},
                    {renewal_analytics_col} AS renewal_analytics,
+                   {renewal_attempt_cols},
                    0 AS has_successor,
                    {pending_delivery_col} AS delivery,
                    {pending_routing_gap_col} AS routing_gap,
@@ -381,6 +395,9 @@ def inventory_candidates_sql(
                    NULL AS monitoring_interval_hours,
                    'unknown' AS renewal,
                    'unknown' AS renewal_analytics,
+                   NULL AS renewal_attempt_state,
+                   NULL AS renewal_lease_expires_at,
+                   0 AS renewal_suppresses_stalled,
                    0 AS has_successor,
                    {uploaded_delivery_col} AS delivery,
                    {uploaded_routing_gap_col} AS routing_gap,
@@ -481,7 +498,7 @@ def build_inventory_entries(
     for chunk in _chunks(leaf_ids):
         ph = ",".join("?" * len(chunk))
         host_rows += conn.execute(
-            f"""SELECT DISTINCT h.* FROM hosts h JOIN certificates c
+            f"""SELECT DISTINCT {host_projection_sql('h')} FROM hosts h JOIN certificates c
                 ON c.hostname = h.hostname AND c.port = h.port
                 WHERE c.id IN ({ph})""",
             chunk,
@@ -489,7 +506,9 @@ def build_inventory_entries(
     pending_hosts: list[Any] = []
     for chunk in _chunks(pending_ids):
         ph = ",".join("?" * len(chunk))
-        pending_hosts += conn.execute(f"SELECT * FROM hosts WHERE id IN ({ph})", chunk).fetchall()
+        pending_hosts += conn.execute(
+            f"SELECT {host_projection_sql('h')} FROM hosts h WHERE h.id IN ({ph})", chunk
+        ).fetchall()
     pairs = sorted({(h["hostname"], h["port"]) for h in [*host_rows, *pending_hosts]})
     scan_rows: list[Any] = []
     for chunk in _chunks(pairs):
@@ -550,6 +569,9 @@ def build_inventory_entries(
             "overall_state",
             "hostname",
             "port",
+            "renewal_attempt_state",
+            "renewal_lease_expires_at",
+            "renewal_suppresses_stalled",
         ):
             if key in keys:
                 entry["effective_days" if key == "eff_days" else key] = candidate[key]
@@ -570,11 +592,21 @@ def build_inventory_entries(
                 hostname=str(entry.get("hostname") or ""),
                 port=int(entry.get("port") or 0),
                 renewal_method=str(entry.get("renewal_method") or ""),
-                operator_status=str(entry.get("renewal_status") or ""),
                 not_after=str(entry.get("not_after")) if entry.get("not_after") else None,
                 has_successor=bool(entry.get("has_successor")),
                 context=axes,
                 analytics=str(entry.get("renewal_analytics") or "unknown"),
+                attempt_state=(
+                    str(entry.get("renewal_attempt_state"))
+                    if entry.get("renewal_attempt_state")
+                    else None
+                ),
+                lease_expires_at=(
+                    str(entry.get("renewal_lease_expires_at"))
+                    if entry.get("renewal_lease_expires_at")
+                    else None
+                ),
+                suppresses_stalled=bool(entry.get("renewal_suppresses_stalled")),
             )
             entry["renewal"] = renewal
             entry["renewal_source"] = source

@@ -35,7 +35,7 @@ from cert_watch.database.users_roles import (
 )
 from cert_watch.policy import PolicyViolation
 from cert_watch.routing_report import build_routing_report
-from tests._helpers import seed_certificate
+from tests._helpers import mark_renewal_in_progress, seed_certificate
 
 HOST = "matrix.example.test"
 PORT = 443
@@ -102,12 +102,9 @@ def test_renewal_stalled_matrix_fires_once_per_fingerprint(tmp_path):
     assert evaluate_renewal_window(db, repo, 30) == []
     assert _count(db, "renewal_stalled") == 1
 
-    with _connect(db) as conn:
-        conn.execute(
-            "UPDATE hosts SET renewal_status = 'in_progress' WHERE hostname = ?",
-            (HOST,),
-        )
-        conn.commit()
+    host = SqliteHostRepository(db).get_by_endpoint(HOST, PORT)
+    assert host is not None
+    mark_renewal_in_progress(db, host.id)
     assert evaluate_renewal_window(db, repo, 30) == []
     assert _count(db, "renewal_stalled") == 1
     with _connect(db) as conn:
@@ -115,7 +112,7 @@ def test_renewal_stalled_matrix_fires_once_per_fingerprint(tmp_path):
             "SELECT closed_at FROM alerts WHERE id = ?", (alert.id,)
         ).fetchone()[0]
         conn.execute(
-            "UPDATE hosts SET renewal_status = 'pending' WHERE hostname = ?", (HOST,)
+            "UPDATE renewal_attempts SET state = 'cancelled' WHERE host_id = ?", (host.id,)
         )
         conn.commit()
     assert closed is not None

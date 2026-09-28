@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from cert_watch.database.schema import init_schema
+from cert_watch.status_model import RENEWAL_STATES
 
 if TYPE_CHECKING:
     from cert_watch.database.chain_status_cache import StatusContext
@@ -183,17 +184,7 @@ def list_fleet_pivot(
         )
         renewal_states = group.pop("_renewal")
         group["renewal"] = next(
-            (
-                state
-                for state in (
-                    "stalled",
-                    "in_progress",
-                    "manual",
-                    "automation_configured",
-                    "unknown",
-                )
-                if state in renewal_states
-            ),
+            (state for state in RENEWAL_STATES if state in renewal_states),
             "unknown",
         )
         delivery_states = group.pop("_delivery")

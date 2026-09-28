@@ -1,0 +1,363 @@
+"""S3 contracts: leased stall suppression and write-through compatibility."""
+
+from __future__ import annotations
+
+import re
+import uuid
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+
+from cert_watch.alerting.rules.expiry import evaluate_all_certs
+from cert_watch.alerting.rules.renewal import evaluate_renewal_window
+from cert_watch.auth.rbac import AuthContext
+from cert_watch.auth.scope import ScopeDeniedError
+from cert_watch.certificate_model import Certificate
+from cert_watch.config import Settings
+from cert_watch.database import SqliteAlertRepository, SqliteHostRepository, init_schema
+from cert_watch.database.connection import _connect
+from cert_watch.services.host_management import HostSettingsUpdate, update_host_settings
+from cert_watch.services.renewal_reports import write_through_renewal_status_on
+from tests._helpers import seed_certificate
+
+NOW = datetime(2026, 9, 27, 12, tzinfo=UTC)
+HOST = "lease.example.test"
+
+
+def _seed_stalled(tmp_path: Path, name: str = "lease.sqlite3") -> tuple[Path, str]:
+    db = tmp_path / name
+    init_schema(db)
+    host_id = SqliteHostRepository(db).add(HOST, 443)
+    cert = Certificate(
+        subject=f"CN={HOST}",
+        issuer="CN=Test CA",
+        not_before=NOW - timedelta(days=60),
+        not_after=datetime.now(UTC) + timedelta(days=10),
+        fingerprint_sha256="baseline-fingerprint",
+    )
+    seed_certificate(db, cert, cert_id="lease-cert", hostname=HOST, port=443)
+    return db, host_id
+
+
+def _attempt(
+    db: Path,
+    host_id: str,
+    state: str,
+    *,
+    lease: datetime | None,
+    suppresses: bool,
+) -> None:
+    with _connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,baseline_fingerprint,
+                baseline_not_after,new_fingerprint,lease_expires_at,suppresses_stalled,
+                received_at,next_check_at,closed_reason)
+               VALUES (?, ?, 1, 'user:test', ?, 1, 'baseline-fingerprint', ?, NULL, ?, ?, ?,
+                       NULL, NULL)""",
+            (
+                uuid.uuid4().hex,
+                host_id,
+                state,
+                (NOW + timedelta(days=10)).isoformat(),
+                lease.isoformat() if lease else None,
+                int(suppresses),
+                NOW.isoformat(),
+            ),
+        )
+        conn.commit()
+
+
+@pytest.mark.parametrize(
+    ("state", "lease", "suppresses", "is_suppressed"),
+    [
+        (None, None, False, False),
+        ("open", NOW + timedelta(hours=1), True, True),
+        ("open", NOW + timedelta(hours=1), False, False),
+        ("open", NOW - timedelta(seconds=1), True, False),
+        ("abandoned", NOW + timedelta(hours=1), True, False),
+        ("failed", NOW + timedelta(hours=1), True, False),
+        ("verifying", NOW + timedelta(hours=1), True, False),
+        ("not_deployed", NOW + timedelta(hours=1), True, False),
+        ("verified", NOW + timedelta(hours=1), True, False),
+        ("cancelled", NOW + timedelta(hours=1), True, False),
+    ],
+)
+def test_renewal_stalled_characterises_every_attempt_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    state: str | None,
+    lease: datetime | None,
+    suppresses: bool,
+    is_suppressed: bool,
+) -> None:
+    db, host_id = _seed_stalled(tmp_path, f"{state or 'none'}.sqlite3")
+    if state is not None:
+        _attempt(db, host_id, state, lease=lease, suppresses=suppresses)
+    monkeypatch.setattr(
+        "cert_watch.alerting.rules.renewal.datetime",
+        type("Clock", (), {"now": staticmethod(lambda tz=None: NOW)}),
+    )
+    alerts = SqliteAlertRepository(db)
+    expiry = evaluate_all_certs(db, alerts)
+    assert [(item.cert_id, item.alert_type) for item in expiry] == [
+        ("lease-cert", "expiry_warning")
+    ]
+    created = evaluate_renewal_window(db, alerts, 30)
+    assert (created == []) is is_suppressed
+
+
+def _run_rule_pass(tmp_path: Path, scenario: str) -> set[tuple[str, str]]:
+    db = tmp_path / f"alerts-{scenario}.sqlite3"
+    init_schema(db)
+    repo = SqliteHostRepository(db)
+    now = datetime.now(UTC)
+    for index, days in enumerate((-2, 5, 20, 80)):
+        hostname = f"estate-{index}.example.test"
+        host_id = repo.add(hostname, 443)
+        seed_certificate(
+            db,
+            Certificate(
+                subject=f"CN={hostname}",
+                issuer="CN=Test CA",
+                not_before=now - timedelta(days=30),
+                not_after=now + timedelta(days=days),
+                fingerprint_sha256=f"fingerprint-{index}",
+            ),
+            cert_id=f"cert-{index}",
+            hostname=hostname,
+            port=443,
+        )
+        if scenario != "none":
+            state = "failed" if scenario == "failed" else "open"
+            lease = now - timedelta(hours=1) if scenario == "lapsed" else now + timedelta(hours=1)
+            _attempt(
+                db,
+                host_id,
+                state,
+                lease=lease,
+                suppresses=scenario in {"live", "lapsed"},
+            )
+    alerts = SqliteAlertRepository(db)
+    evaluate_all_certs(db, alerts)
+    evaluate_renewal_window(db, alerts, 30)
+    return {(alert.cert_id, alert.alert_type) for alert in alerts.list_all()}
+
+
+def test_full_alert_pass_never_changes_expiry_sets_for_report_states(tmp_path: Path) -> None:
+    results = {
+        name: _run_rule_pass(tmp_path, name)
+        for name in ("none", "live", "lapsed", "failed")
+    }
+    expiry = {
+        name: {item for item in alerts if item[1] in {"expiry_warning", "expired"}}
+        for name, alerts in results.items()
+    }
+    assert expiry["none"] == expiry["live"] == expiry["lapsed"] == expiry["failed"]
+    assert results["live"] != results["none"]
+
+
+def test_expiry_layers_never_reference_report_tables() -> None:
+    root = Path(__file__).parents[1] / "src" / "cert_watch"
+    guarded = (
+        root / "alerting" / "rules" / "expiry.py",
+        root / "database" / "alert_store.py",
+        root / "database" / "cert_ops.py",
+    )
+    for path in guarded:
+        text = path.read_text()
+        assert "renewal_attempts" not in text
+        assert "renewal_reports" not in text
+
+
+def test_legacy_column_has_no_runtime_sql_read() -> None:
+    root = Path(__file__).parents[1] / "src" / "cert_watch"
+    forbidden = re.compile(r"SELECT[^\n]*\brenewal_status\b", re.I)
+    hits = []
+    for path in root.rglob("*.py"):
+        if "migrations" in path.parts:
+            continue
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            if forbidden.search(line):
+                hits.append(f"{path.relative_to(root)}:{number}")
+            if (
+                path.relative_to(root).parts[0] in {"database", "alerting"}
+                and re.search(r"\b(?:h|rh)\.renewal_status\b", line)
+            ):
+                hits.append(f"{path.relative_to(root)}:{number}")
+    assert hits == []
+
+
+def test_manual_status_round_trip_creates_and_cancels_attempt(tmp_path: Path) -> None:
+    db, host_id = _seed_stalled(tmp_path)
+    auth = AuthContext.from_tier(
+        "writer", "operator", principal_id="key-id", principal_kind="api-key"
+    )
+    settings = Settings(db_path=db, data_dir=tmp_path)
+    started = update_host_settings(
+        db,
+        host_id,
+        HostSettingsUpdate(None, None, "in_progress"),
+        auth=auth,
+        actor="api_key:key-id",
+        source_ip=None,
+    )
+    assert started.renewal_status == "in_progress"
+    with _connect(db) as conn:
+        # Deliberately desynchronise the compatibility column: every read and
+        # expiry-message hint must still come from the current attempt.
+        conn.execute("UPDATE hosts SET renewal_status='pending' WHERE id=?", (host_id,))
+        conn.commit()
+        attempt = conn.execute(
+            "SELECT state,source,suppresses_stalled FROM renewal_attempts WHERE host_id=?",
+            (host_id,),
+        ).fetchone()
+        report = conn.execute(
+            "SELECT outcome,source,effect FROM renewal_reports WHERE host_id=? ORDER BY seq",
+            (host_id,),
+        ).fetchall()
+    assert SqliteHostRepository(db).get(host_id).renewal_status == "in_progress"  # type: ignore[union-attr]
+    [expiry] = evaluate_all_certs(db, SqliteAlertRepository(db))
+    assert "(renewal in progress)" in expiry.message
+    assert tuple(attempt) == ("open", "api_key:key-id", 1)
+    assert [tuple(row) for row in report] == [("started", "api_key:key-id", "applied")]
+
+    cleared = update_host_settings(
+        db,
+        host_id,
+        HostSettingsUpdate(None, None, "pending"),
+        auth=auth,
+        actor="api_key:key-id",
+        source_ip=None,
+    )
+    assert cleared.renewal_status == "pending"
+    with _connect(db) as conn:
+        state = conn.execute(
+            "SELECT state,suppresses_stalled FROM renewal_attempts WHERE host_id=?",
+            (host_id,),
+        ).fetchone()
+        outcomes = conn.execute(
+            "SELECT outcome,effect FROM renewal_reports WHERE host_id=? ORDER BY seq", (host_id,)
+        ).fetchall()
+        audits = conn.execute(
+            "SELECT detail FROM audit_log WHERE action='renewal_report.create' "
+            "AND target_id=? ORDER BY ts",
+            (host_id,),
+        ).fetchall()
+    assert tuple(state) == ("cancelled", 0)
+    assert [tuple(row) for row in outcomes] == [
+        ("started", "applied"),
+        ("cancelled", "applied"),
+    ]
+    assert len(audits) == 2
+    assert '"outcome": "cancelled"' in audits[-1][0]
+    assert settings.renewal_report_lease_hours == 24
+
+
+def test_pending_cancels_a_failed_attempt(tmp_path: Path) -> None:
+    db, host_id = _seed_stalled(tmp_path)
+    _attempt(db, host_id, "failed", lease=None, suppresses=False)
+    result = update_host_settings(
+        db,
+        host_id,
+        HostSettingsUpdate(None, None, "pending"),
+        auth=AuthContext.system(),
+        actor="system",
+        source_ip=None,
+    )
+    assert result.renewal_status == "pending"
+    with _connect(db) as conn:
+        attempt = conn.execute(
+            "SELECT state,closed_reason FROM renewal_attempts WHERE host_id=?", (host_id,)
+        ).fetchone()
+        report = conn.execute(
+            "SELECT outcome,effect FROM renewal_reports WHERE host_id=?", (host_id,)
+        ).fetchone()
+    assert tuple(attempt) == ("cancelled", "manual_cancelled")
+    assert tuple(report) == ("cancelled", "applied")
+
+
+def test_restart_same_leaf_is_visible_but_never_suppresses_twice(tmp_path: Path) -> None:
+    db, host_id = _seed_stalled(tmp_path)
+    auth = AuthContext.system()
+    for status in ("in_progress", "pending", "in_progress"):
+        result = update_host_settings(
+            db,
+            host_id,
+            HostSettingsUpdate(None, None, status),
+            auth=auth,
+            actor="system",
+            source_ip=None,
+        )
+    assert result.renewal_status == "in_progress"
+    with _connect(db) as conn:
+        current = conn.execute(
+            "SELECT state,suppresses_stalled FROM renewal_attempts "
+            "WHERE host_id=? AND is_current=1",
+            (host_id,),
+        ).fetchone()
+    assert tuple(current) == ("open", 0)
+    assert evaluate_renewal_window(db, SqliteAlertRepository(db), 30)
+
+
+def test_renewal_report_key_cannot_cancel_an_attempt(tmp_path: Path) -> None:
+    db, host_id = _seed_stalled(tmp_path)
+    update_host_settings(
+        db,
+        host_id,
+        HostSettingsUpdate(None, None, "in_progress"),
+        auth=AuthContext.system(),
+        actor="system",
+        source_ip=None,
+    )
+    auth = AuthContext.renewal_report_key(
+        "reporter", principal_id="report-key", binding="all", bound_tags=()
+    )
+    with _connect(db) as conn, pytest.raises(ScopeDeniedError):
+        write_through_renewal_status_on(
+            conn,
+            db,
+            Settings(db_path=db, data_dir=tmp_path),
+            host_id,
+            "pending",
+            auth=auth,
+            actor="api_key:report-key",
+            source_ip=None,
+        )
+
+
+def test_migration_0047_backfills_baseline_lease_and_audit_idempotently(
+    tmp_path: Path,
+) -> None:
+    from cert_watch.migrations.m0047_renewal_status_leases import upgrade
+
+    db, host_id = _seed_stalled(tmp_path)
+    with _connect(db) as conn:
+        conn.execute("UPDATE hosts SET renewal_status='in_progress' WHERE id=?", (host_id,))
+        conn.execute(
+            """INSERT OR REPLACE INTO kv_store(key,value,updated_at)
+               VALUES ('renewal_report_lease_hours','12',?)""",
+            (NOW.isoformat(),),
+        )
+        upgrade(conn)
+        upgrade(conn)
+        attempt = conn.execute(
+            """SELECT source,state,baseline_fingerprint,lease_expires_at,suppresses_stalled,
+                      received_at
+               FROM renewal_attempts WHERE host_id=? AND source='migration:0047'""",
+            (host_id,),
+        ).fetchall()
+        reports = conn.execute(
+            "SELECT outcome FROM renewal_reports WHERE host_id=? AND source='migration:0047'",
+            (host_id,),
+        ).fetchall()
+        audits = conn.execute(
+            "SELECT actor FROM audit_log WHERE target_id=? AND actor='migration:0047'",
+            (host_id,),
+        ).fetchall()
+    assert len(attempt) == len(reports) == len(audits) == 1
+    assert tuple(attempt[0][:3]) == ("migration:0047", "open", "baseline-fingerprint")
+    assert attempt[0][4] == 1
+    received = datetime.fromisoformat(attempt[0][5])
+    assert datetime.fromisoformat(attempt[0][3]) - received == timedelta(hours=12)

@@ -10,16 +10,43 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from cert_watch.auth.rbac import AuthContext
 from cert_watch.certificate_model import Certificate
+from cert_watch.config import Settings
 from cert_watch.database import SqliteCertificateRepository, SqliteHostRepository
+from cert_watch.database.connection import _connect
 from cert_watch.database.schema import init_schema
 from cert_watch.scan import ScannedEntry, store_scanned
+from cert_watch.services.renewal_reports import write_through_renewal_status_on
 
 
 def seed_host(db_path: str | Path, hostname: str, port: int = 443) -> None:
     """Add a host row using the repository helper."""
     init_schema(db_path)
     SqliteHostRepository(db_path).add(hostname, port)
+
+
+def mark_renewal_in_progress(
+    db_path: str | Path,
+    host_id: str,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Create the leased attempt represented by the compatibility status."""
+    path = Path(db_path)
+    with _connect(path) as conn:
+        write_through_renewal_status_on(
+            conn,
+            path,
+            Settings(db_path=path, data_dir=path.parent),
+            host_id,
+            "in_progress",
+            auth=AuthContext.system(),
+            actor="system",
+            source_ip=None,
+            now=now,
+        )
+        conn.commit()
 
 
 def seed_certificate(

@@ -99,16 +99,32 @@ def test_current_candidates_match_evaluation_without_reading_or_writing_alerts(t
 
 
 def test_renewal_stalled_suppressed_when_in_progress(tmp_path):
-    """Regression (WI-124 #11): suppress renewal_stalled when operator flagged it."""
+    """A live report lease suppresses only the renewal-stalled rule."""
     from cert_watch.alerting import evaluate_renewal_window
+    from cert_watch.auth.rbac import AuthContext
+    from cert_watch.config import Settings
     from cert_watch.database import SqliteAlertRepository, SqliteHostRepository
+    from cert_watch.database.connection import _connect
+    from cert_watch.services.renewal_reports import write_through_renewal_status_on
 
     db = str(tmp_path / "t.sqlite3")
     _insert_cert(db, cid="stalled-ip", days_valid=20, hostname="ip.example.com")
-    SqliteHostRepository(db).add(hostname="ip.example.com", port=443, renewal_status="in_progress")
+    host_id = SqliteHostRepository(db).add(hostname="ip.example.com", port=443)
+    with _connect(db) as conn:
+        write_through_renewal_status_on(
+            conn,
+            db,
+            Settings(db_path=db, data_dir=tmp_path),
+            host_id,
+            "in_progress",
+            auth=AuthContext.system(),
+            actor="system",
+            source_ip=None,
+        )
+        conn.commit()
     alert_repo = SqliteAlertRepository(db)
     created = evaluate_renewal_window(db, alert_repo, 30)
-    assert created == [], "in_progress renewal_status should suppress alert"
+    assert created == [], "a live suppressing lease should suppress the stalled alert"
 
 
 def test_renewal_stalled_not_suppressed_by_legacy_renewed_value(tmp_path):

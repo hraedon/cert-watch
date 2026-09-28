@@ -6,13 +6,15 @@ uncovered: the scheduler path that detects an overdue cert, emits the event, and
 delivers the webhook — including the retry-on-transient-failure behaviour.
 """
 import sqlite3
+import uuid
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
 
 from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.config import Settings
-from cert_watch.database import init_schema
+from cert_watch.database import SqliteHostRepository, init_schema
 from cert_watch.renewal_analytics import RenewalOverdueSignal
 from cert_watch.scheduler import Scheduler
 from cert_watch.scheduler_context import SchedulerContext
@@ -48,6 +50,8 @@ def seeded_db(tmp_path, self_signed_leaf):
     parsed = parse_certificate(self_signed_leaf.der)
     assert isinstance(parsed, Certificate)
     db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    SqliteHostRepository(db).add("host.example.com", 443)
     seed_certificate(db, parsed, hostname="host.example.com", port=443)
     return db, parsed
 
@@ -251,3 +255,60 @@ def test_check_renewal_overdue_db_path_none_is_noop(runtime):
     with patch("cert_watch.renewal_webhook.send_renewal_webhook") as send:
         runtime._check_renewal_overdue(None, [("host.example.com", 443)])
     send.assert_not_called()
+
+
+def test_check_renewal_overdue_records_event_but_defers_webhook_claim_until_lease_lapses(
+    seeded_db, monkeypatch
+):
+    from cert_watch.database.connection import _connect
+    from cert_watch.scheduler import _check_renewal_overdue
+
+    db, parsed = seeded_db
+    instant = datetime.now(UTC).replace(microsecond=0)
+    with _connect(db) as conn:
+        host_id = conn.execute(
+            "SELECT id FROM hosts WHERE hostname='host.example.com' AND port=443"
+        ).fetchone()[0]
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,baseline_fingerprint,
+                baseline_not_after,new_fingerprint,lease_expires_at,suppresses_stalled,
+                received_at,next_check_at,closed_reason)
+               VALUES (?, ?, 1, 'user:test', 'open', 1, ?, NULL, NULL, ?, 1, ?, NULL, NULL)""",
+            (
+                uuid.uuid4().hex,
+                host_id,
+                parsed.fingerprint_sha256,
+                (instant + timedelta(hours=1)).isoformat(),
+                instant.isoformat(),
+            ),
+        )
+        conn.commit()
+    signal = _signal(fingerprint=parsed.fingerprint_sha256)
+    monkeypatch.setattr(
+        "cert_watch.renewal_analytics.detect_renewal_overdue", lambda *a, **k: signal
+    )
+    sent = []
+    _check_renewal_overdue(
+        db,
+        [("host.example.com", 443)],
+        now=lambda: instant,
+        send_webhook=lambda *a, **k: sent.append(a),
+    )
+    with _connect(db) as conn:
+        assert conn.execute("SELECT count(*) FROM event_log").fetchone()[0] == 1
+        firings = conn.execute("SELECT dedupe_key FROM rule_firings").fetchall()
+    assert sent == []
+    assert len(firings) == 1
+    assert str(firings[0][0]).endswith(":event")
+
+    _check_renewal_overdue(
+        db,
+        [("host.example.com", 443)],
+        now=lambda: instant + timedelta(hours=2),
+        send_webhook=lambda *a, **k: sent.append(a),
+    )
+    assert len(sent) == 1
+    with _connect(db) as conn:
+        keys = {str(row[0]) for row in conn.execute("SELECT dedupe_key FROM rule_firings")}
+    assert any(key.endswith(":webhook") for key in keys)

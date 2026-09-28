@@ -11,14 +11,17 @@ step.
 |---|---|---|
 | **Expiry warning** | A certificate crosses an expiry threshold (see below). | Once per threshold. The next threshold is a new alert. |
 | **Expired** | A certificate has expired. | Once. |
-| **Renewal stalled** | A certificate is inside its renewal window (`CERT_WATCH_RENEWAL_WINDOW_DAYS`, 30 by default) and no successor has appeared. | Once per certificate, until a successor appears or someone marks the renewal in progress. The weekly renewal digest is the reminder. |
+| **Renewal stalled** | A certificate is inside its renewal window (`CERT_WATCH_RENEWAL_WINDOW_DAYS`, 30 by default) and no successor has appeared. | Once per certificate, paused during the first live renewal-attempt lease for that served certificate. The weekly renewal digest is the reminder. |
 | **Policy violation** | A scan finds a critical or warning finding from the posture policy, such as SHA-1, short keys or an old TLS version. | Once while the violation persists. If it clears and comes back, again. |
 | **Drift** | A scan sees a high-severity change: a new issuer, a smaller key, a signature downgrade to SHA-1, a TLS version downgrade, or a posture-grade drop. Turn off with `CERT_WATCH_DRIFT_ALERTS=0`. | Each drift is its own alert. |
 
 Every endpoint is tracked separately. A wildcard certificate served by five
 hosts produces an alert for each of them, routed to each host's owner.
-Marking a renewal **in progress** suppresses only the renewal-stalled condition;
-it never suppresses expiry warnings or expired alerts. Renewal completion is
+Marking a renewal **in progress** opens a time-limited attempt. Its first lease
+for that endpoint and served certificate suppresses only the renewal-stalled
+condition and the automation-facing `renewal_needed` webhook; the overdue event
+is still recorded. It never suppresses expiry warnings or expired alerts.
+Repeated starts do not extend or re-grant the lease. Renewal completion is
 established by observing a successor certificate, not by an operator report.
 
 ### Expiry thresholds

@@ -910,6 +910,16 @@ def _check_renewal_overdue(
                                 suppression_keys=(firing, legacy_firing),
                             )
                     if send_webhook is not None:
+                        from cert_watch.database.renewal_attempts import (
+                            endpoint_stall_suppression_active,
+                        )
+
+                        if endpoint_stall_suppression_active(
+                            db_path, signal.hostname, port, now=current
+                        ):
+                            # Leave the independent webhook claim untouched so
+                            # the nudge becomes due as soon as the lease lapses.
+                            continue
                         claimed = store.claim_rule_firing(
                             webhook_key,
                             now=current,

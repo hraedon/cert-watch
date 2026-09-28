@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from cert_watch.auth.rbac import AuthContext
 from cert_watch.certificate_model import Certificate
 from cert_watch.config import Settings
 from cert_watch.database import SqliteAlertGroupRepository, SqliteHostRepository, init_schema
@@ -14,6 +15,7 @@ from cert_watch.database.chain_status_cache import StatusContext, prepare_status
 from cert_watch.database.connection import _connect
 from cert_watch.database.dashboard_page import list_dashboard_page
 from cert_watch.scheduler import ScanHistory, record_scan_history
+from cert_watch.services.renewal_reports import write_through_renewal_status_on
 from cert_watch.status_model import (
     AxisSettings,
     StatusModelContext,
@@ -60,9 +62,20 @@ def _seed(tmp_path, db_name: str = "four-axis.sqlite3"):
     ids: dict[str, str] = {}
     for index, (host, tag, days, method, operator) in enumerate(specs):
         ids[host] = hosts.add(host, 443, tags=tag, renewal_method=method)
-        with _connect(db) as conn:
-            conn.execute("UPDATE hosts SET renewal_status = ? WHERE id = ?", (operator, ids[host]))
-            conn.commit()
+        if operator == "in_progress":
+            with _connect(db) as conn:
+                write_through_renewal_status_on(
+                    conn,
+                    db,
+                    Settings(db_path=db, data_dir=tmp_path),
+                    ids[host],
+                    operator,
+                    auth=AuthContext.system(),
+                    actor="system",
+                    source_ip=None,
+                    now=NOW,
+                )
+                conn.commit()
         if days is not None:
             replace_scanned(db, host, 443, _cert(host, days, f"fp-{index}"), [], True)
 
@@ -317,12 +330,18 @@ def test_monitoring_boundaries_future_evidence_and_failure_since():
 
 
 def test_renewal_precedence_window_edges_and_successor():
-    assert renewal_state("manual", "in_progress", True, "likely-automated") == (
+    lease = (NOW + timedelta(hours=1)).isoformat()
+    assert renewal_state(
+        "manual", False, "likely-automated", "open", lease, True, now=NOW
+    ) == (
         "in_progress",
-        "operator_report",
+        "renewal_attempt",
     )
-    assert renewal_state("acme", "pending", True, "manual") == ("stalled", "renewal_window")
-    assert renewal_state("manual", "pending", False, "likely-automated") == (
+    assert renewal_state("acme", True, "manual", "open", lease, False, now=NOW) == (
+        "stalled",
+        "renewal_window",
+    )
+    assert renewal_state("manual", False, "likely-automated", now=NOW) == (
         "manual",
         "renewal_method",
     )
@@ -339,7 +358,6 @@ def test_renewal_precedence_window_edges_and_successor():
             hostname="edge.example.test",
             port=443,
             renewal_method="acme",
-            operator_status="pending",
             not_after=at_edge,
             has_successor=False,
             context=context,
@@ -351,7 +369,6 @@ def test_renewal_precedence_window_edges_and_successor():
             hostname="edge.example.test",
             port=443,
             renewal_method="acme",
-            operator_status="pending",
             not_after=at_edge,
             has_successor=True,
             context=context,
@@ -363,7 +380,6 @@ def test_renewal_precedence_window_edges_and_successor():
             hostname="edge.example.test",
             port=443,
             renewal_method="",
-            operator_status="pending",
             not_after=before_window,
             has_successor=False,
             context=context,

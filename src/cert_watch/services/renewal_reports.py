@@ -14,7 +14,11 @@ from typing import Any
 
 from cert_watch.audit import export_audit, record_audit
 from cert_watch.auth.guards import renewal_report_binding
-from cert_watch.auth.scope import ensure_write_scope_on, may_reveal_routing_identities
+from cert_watch.auth.scope import (
+    ScopeDeniedError,
+    ensure_write_scope_on,
+    may_reveal_routing_identities,
+)
 from cert_watch.config import Settings
 from cert_watch.database import get_write_lock
 from cert_watch.database.connection import _connect, begin_immediate
@@ -163,9 +167,168 @@ def resolve_target(
 
 def _source(auth: Any) -> str:
     principal_id = str(getattr(auth, "principal_id", "") or "")
-    if getattr(auth, "principal_kind", "") == "renewal-report" and principal_id:
+    if getattr(auth, "principal_kind", "") in {"api-key", "renewal-report"} and principal_id:
         return f"api_key:{principal_id}"
     return f"user:{principal_id or getattr(auth, 'username', '')}"
+
+
+def write_through_renewal_status_on(
+    conn: sqlite3.Connection,
+    db_path: str | Path,
+    settings: Settings,
+    host_id: str,
+    status: str,
+    *,
+    auth: Any,
+    actor: str,
+    source_ip: str | None,
+    now: datetime | None = None,
+) -> tuple[str, dict[str, Any] | None]:
+    """Apply the compatibility ``renewal_status`` write inside its caller's transaction.
+
+    The host-writing service owns ``BEGIN IMMEDIATE`` and its other audit row.
+    This helper repeats the authoritative host-scope check, reduces the same
+    attempt tables as report ingestion, and returns an audit event for export
+    only after the caller commits.
+    """
+    if status not in {"pending", "in_progress"}:
+        raise ValueError("invalid renewal status")
+    if status == "pending" and getattr(auth, "principal_kind", "") == "renewal-report":
+        raise ScopeDeniedError("renewal-report keys cannot cancel renewal attempts")
+    ensure_write_scope_on(conn, auth, host_id=host_id)
+    host = conn.execute(
+        "SELECT id,hostname,port FROM hosts WHERE id=?", (host_id,)
+    ).fetchone()
+    if host is None:
+        raise RenewalReportNotFoundError("endpoint not found")
+    received = (now or datetime.now(UTC)).astimezone(UTC)
+    received_at = received.isoformat()
+    attempt = conn.execute(
+        "SELECT * FROM renewal_attempts WHERE host_id=? AND is_current=1", (host_id,)
+    ).fetchone()
+
+    outcome = "started" if status == "in_progress" else "cancelled"
+    if outcome == "cancelled" and (
+        attempt is None
+        or str(attempt["state"]) not in {"open", "failed", "verifying", "not_deployed"}
+    ):
+        return "pending", None
+
+    baseline_fingerprint, baseline_not_after = _current_leaf(conn, host_id)
+    effect = "applied"
+    new_attempt = False
+    if outcome == "started":
+        if (
+            attempt is not None
+            and attempt["state"] == "open"
+            and attempt["lease_expires_at"]
+            and str(attempt["lease_expires_at"]) <= received_at
+        ):
+            conn.execute(
+                "UPDATE renewal_attempts SET state='abandoned',suppresses_stalled=0,"
+                "closed_reason='lease_expired' WHERE attempt_id=?",
+                (attempt["attempt_id"],),
+            )
+            attempt = conn.execute(
+                "SELECT * FROM renewal_attempts WHERE host_id=? AND is_current=1", (host_id,)
+            ).fetchone()
+        if attempt is not None and attempt["state"] == "open":
+            attempt_id = str(attempt["attempt_id"])
+            effect = "duplicate"
+        else:
+            attempt_id = uuid.uuid4().hex
+            new_attempt = True
+    else:
+        assert attempt is not None
+        attempt_id = str(attempt["attempt_id"])
+
+    report_id = uuid.uuid4().hex
+    cursor = conn.execute(
+        """INSERT INTO renewal_reports
+           (report_id,host_id,hostname_snapshot,port_snapshot,outcome,message,tool,
+            correlation_id,new_fingerprint,occurred_at,received_at,source,effect,attempt_id)
+           VALUES (?,?,?,?,?,NULL,NULL,NULL,NULL,NULL,?,?,?,?)""",
+        (
+            report_id,
+            host_id,
+            host["hostname"],
+            host["port"],
+            outcome,
+            received_at,
+            _source(auth),
+            effect,
+            attempt_id,
+        ),
+    )
+    if cursor.lastrowid is None:  # pragma: no cover - SQLite INSERT contract
+        raise RuntimeError("renewal report insert returned no sequence")
+    if new_attempt:
+        conn.execute(
+            "UPDATE renewal_attempts SET is_current=0 WHERE host_id=? AND is_current=1",
+            (host_id,),
+        )
+        suppresses = int(
+            conn.execute(
+                """SELECT 1 FROM renewal_attempts
+                   WHERE host_id=? AND baseline_fingerprint IS ?
+                     AND lease_expires_at IS NOT NULL LIMIT 1""",
+                (host_id, baseline_fingerprint),
+            ).fetchone()
+            is None
+        )
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,baseline_fingerprint,
+                baseline_not_after,new_fingerprint,lease_expires_at,suppresses_stalled,
+                received_at,next_check_at,closed_reason)
+               VALUES (?,?,1,?,'open',?,?,?,NULL,?,?,?,NULL,NULL)""",
+            (
+                attempt_id,
+                host_id,
+                _source(auth),
+                int(cursor.lastrowid),
+                baseline_fingerprint,
+                baseline_not_after,
+                (received + renewal_lease_for(
+                    RenewalTarget(
+                        host_id,
+                        str(host["hostname"]),
+                        int(host["port"]),
+                        "",
+                        "",
+                        baseline_fingerprint,
+                        baseline_not_after,
+                    ),
+                    settings,
+                )).isoformat(),
+                suppresses,
+                received_at,
+            ),
+        )
+    elif outcome == "cancelled":
+        conn.execute(
+            """UPDATE renewal_attempts SET state='cancelled',suppresses_stalled=0,
+               closed_reason='manual_cancelled' WHERE attempt_id=?""",
+            (attempt_id,),
+        )
+
+    audit_event = record_audit(
+        db_path,
+        actor=actor,
+        action="renewal_report.create",
+        target_type="host",
+        target_id=host_id,
+        detail={
+            "attempt_id": attempt_id,
+            "effect": effect,
+            "outcome": outcome,
+            "report_id": report_id,
+            "source": _source(auth),
+        },
+        source_ip=source_ip,
+        conn=conn,
+    )
+    return ("in_progress" if outcome == "started" else "pending"), audit_event
 
 
 def _current_leaf(conn: sqlite3.Connection, host_id: str) -> tuple[str | None, str | None]:

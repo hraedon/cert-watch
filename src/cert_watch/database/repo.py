@@ -21,6 +21,7 @@ from cert_watch.database.connection import (
     begin_immediate,
     parse_san_dns_names,
 )
+from cert_watch.database.renewal_attempts import host_projection_sql
 from cert_watch.host_validation import canonical_hostname
 
 # ---------- dataclasses ----------
@@ -830,7 +831,9 @@ class SqliteHostRepository:
 
     def list_all(self) -> list[HostEntry]:
         with _connect(self.db_path) as conn:
-            rows = conn.execute("SELECT * FROM hosts ORDER BY added_at").fetchall()
+            rows = conn.execute(
+                f"SELECT {host_projection_sql('h')} FROM hosts h ORDER BY h.added_at"
+            ).fetchall()
         return [self._row_to_host(r) for r in rows]
 
     def list_scoped(
@@ -848,11 +851,11 @@ class SqliteHostRepository:
             return self.list_all()
         from cert_watch.database.dashboard import _add_effective_tag_filter
 
-        sql = "SELECT * FROM hosts WHERE 1=1"
+        sql = f"SELECT {host_projection_sql('h')} FROM hosts h WHERE 1=1"
         sql, params = _add_effective_tag_filter(
-            sql, [], scope_tags, col_cert=None, col_host="tags"
+            sql, [], scope_tags, col_cert=None, col_host="h.tags"
         )
-        sql += " ORDER BY added_at"
+        sql += " ORDER BY h.added_at"
         with _connect(self.db_path) as conn:
             rows = conn.execute(sql, params).fetchall()
         return [self._row_to_host(r) for r in rows]
@@ -869,7 +872,7 @@ class SqliteHostRepository:
             owner_name=dict(r).get("owner_name", ""),
             owner_email=dict(r).get("owner_email", ""),
             owner_slack=dict(r).get("owner_slack", ""),
-            renewal_status=dict(r).get("renewal_status", "pending"),
+            renewal_status=dict(r).get("derived_renewal_status", "pending"),
             renewal_method=dict(r).get("renewal_method", ""),
             runbook_url=dict(r).get("runbook_url", ""),
             notes=dict(r).get("notes", ""),
@@ -882,7 +885,8 @@ class SqliteHostRepository:
         """Return a paginated slice of hosts ordered by `added_at`."""
         with _connect(self.db_path) as conn:
             rows = conn.execute(
-                "SELECT * FROM hosts ORDER BY added_at LIMIT ? OFFSET ?",
+                f"SELECT {host_projection_sql('h')} FROM hosts h "
+                "ORDER BY h.added_at LIMIT ? OFFSET ?",
                 (limit, offset),
             ).fetchall()
         return [self._row_to_host(r) for r in rows]
@@ -900,13 +904,17 @@ class SqliteHostRepository:
             return None
         with _connect(self.db_path) as conn:
             r = conn.execute(
-                "SELECT * FROM hosts WHERE hostname = ? AND port = ?", (hostname, port)
+                f"SELECT {host_projection_sql('h')} FROM hosts h "
+                "WHERE h.hostname = ? AND h.port = ?", (hostname, port)
             ).fetchone()
         return self._row_to_host(r) if r else None
 
     def get(self, host_id: str) -> HostEntry | None:
         with _connect(self.db_path) as conn:
-            r = conn.execute("SELECT * FROM hosts WHERE id = ?", (host_id,)).fetchone()
+            r = conn.execute(
+                f"SELECT {host_projection_sql('h')} FROM hosts h WHERE h.id = ?",
+                (host_id,),
+            ).fetchone()
         if not r:
             return None
         return self._row_to_host(r)

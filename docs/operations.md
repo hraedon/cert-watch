@@ -119,13 +119,16 @@ Every page counts the estate with the same definitions.
   is never labelled Healthy or OK overall, even when its last certificate's
   condition is `ok`. Uploaded files use `not_monitored`: they have no endpoint
   scan lifecycle and are excluded from monitoring counts and filters.
-- **Renewal** — precedence is `in_progress` when an operator reported that
-  host state; then `stalled` when the current leaf is inside the configured
-  renewal window with no successor; then `automation_configured` for an ACME
+- **Renewal** — `stalled` takes precedence when the current leaf is inside the
+  configured renewal window with no successor and has no live suppressing
+  lease. `in_progress` means the current attempt is open and its immutable
+  lease has not elapsed; then `automation_configured` applies for an ACME
   or cert-manager method; then `manual` for a manual method. If the method is
   unset, renewal analytics may supply `automation_configured` from
   `likely-automated` or `manual` from its manual classification; otherwise the
-  state is `unknown`. The model records which source made the decision.
+  state is `unknown`. A restart on the same served certificate remains visible
+  through the compatibility API but ranks as stalled because it cannot receive
+  a second suppressing lease. The model records which source made the decision.
 - **Delivery** — per-certificate recipients and matched groups come from the
   same `alerting.routing` resolver that snapshots a queued alert. SMTP lists
   the global plus routed recipients and is deliverable only when its relay,

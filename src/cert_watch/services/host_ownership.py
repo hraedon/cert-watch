@@ -33,6 +33,7 @@ from cert_watch.services.certificate_identity import (
     ensure_not_superseded,
     refuse_if_superseded,
 )
+from cert_watch.services.renewal_reports import write_through_renewal_status_on
 
 VALID_RENEWAL_METHODS = frozenset({"", "acme", "cert-manager", "manual"})
 VALID_RENEWAL_STATUSES = frozenset({"pending", "in_progress"})
@@ -273,6 +274,21 @@ def update_host_ownership(
             updated = persist_host_ownership(conn, host_id, **detail)
             if updated is None:
                 raise HostNotFoundError("host not found")
+            renewal_audit = None
+            if update.renewal_status is not None:
+                from cert_watch.config import current_settings
+
+                derived_status, renewal_audit = write_through_renewal_status_on(
+                    conn,
+                    db_path,
+                    current_settings(db_path),
+                    host_id,
+                    update.renewal_status,
+                    auth=auth,
+                    actor=actor,
+                    source_ip=source_ip,
+                )
+                updated.renewal_status = derived_status
             audit_event = record_audit(
                 db_path,
                 actor=actor,
@@ -288,6 +304,7 @@ def update_host_ownership(
             conn.rollback()
             raise
     export_audit(audit_event)
+    export_audit(renewal_audit)
 
     return HostOwnership(
         host_id=host_id,

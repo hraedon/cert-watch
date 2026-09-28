@@ -102,3 +102,8 @@ baseline. Idempotency records expire after seven days.
 Deleting an endpoint deletes its reports, attempt and correlation history, and
 idempotency records, so re-adding the same address does not inherit private
 history.
+
+The legacy host `renewal_status` field is write-through: `in_progress` creates
+a `started` report and `pending` cancels active work. Responses still return
+`in_progress` exactly when a current attempt is open, without consulting the
+stored compatibility column.

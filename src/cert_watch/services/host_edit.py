@@ -32,6 +32,7 @@ from cert_watch.services.host_ownership import (
     resolve_host_ownership_target,
     validate_host_ownership,
 )
+from cert_watch.services.renewal_reports import write_through_renewal_status_on
 from cert_watch.services.resource_metadata import (
     MAX_NOTES_LENGTH,
     ResourceMetadataValidationError,
@@ -227,9 +228,22 @@ def edit_host(
                 raise HostNotFoundError("host not found")
             if named_cert and not persist_certificate_tags(conn, named_cert, normalized_tags):
                 raise HostNotFoundError("certificate not found")
+            from cert_watch.config import current_settings
+
+            derived_status, renewal_audit = write_through_renewal_status_on(
+                conn,
+                db_path,
+                current_settings(db_path),
+                target.host_id,
+                ownership.renewal_status or "pending",
+                auth=auth,
+                actor=actor,
+                source_ip=source_ip,
+            )
             row = conn.execute("SELECT * FROM hosts WHERE id = ?", (target.host_id,)).fetchone()
             assert row is not None
             updated = SqliteHostRepository(db_path)._row_to_host(row)
+            updated.renewal_status = derived_status
             event = record_audit(
                 db_path,
                 actor=actor,
@@ -257,6 +271,7 @@ def edit_host(
             conn.rollback()
             raise
     export_audit(event)
+    export_audit(renewal_audit)
     return HostEditResult(
         updated,
         tuple(parse_tags(normalized_tags)),

@@ -34,6 +34,7 @@ from cert_watch.database import (
     init_schema,
 )
 from cert_watch.scheduler import ScanHistory, record_scan_history
+from tests._helpers import mark_renewal_in_progress
 from tests.e2e._seed import seed_demo_certs
 
 _GOLDEN_DIR = Path(__file__).with_name("golden") / "pages"
@@ -78,13 +79,12 @@ def _seed_characterization_estate(data_dir: Path, *, now: datetime) -> tuple[str
     seed_demo_certs(data_dir, now=now)
     db = data_dir / "cert-watch.sqlite3"
     hosts = SqliteHostRepository(db)
-    hosts.add(
+    mail_host_id = hosts.add(
         "mail.demo.test",
         tags="production, mail",
         scan_interval_hours=12,
         owner_name="Messaging Team",
         owner_email="messaging@example.test",
-        renewal_status="in_progress",
         renewal_method="manual",
         runbook_url="https://runbooks.example.test/mail-tls",
         notes="Renew through the messaging runbook.",
@@ -108,6 +108,13 @@ def _seed_characterization_estate(data_dir: Path, *, now: datetime) -> tuple[str
             "UPDATE certificates SET source = 'scanned', hostname = ?, port = ?, "
             "tags = ? WHERE id = ?",
             ("mail.demo.test", 443, "leaf-tag", scanned["id"]),
+        )
+        conn.commit()
+    mark_renewal_in_progress(db, mail_host_id, now=now)
+    with _connect(db) as conn:
+        conn.execute(
+            "DELETE FROM audit_log WHERE action = 'renewal_report.create' AND target_id = ?",
+            (mail_host_id,),
         )
         conn.commit()
     record_scan_history(

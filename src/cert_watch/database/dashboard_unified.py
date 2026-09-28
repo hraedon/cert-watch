@@ -15,6 +15,7 @@ from typing import Any
 
 from cert_watch.database.connection import _connect
 from cert_watch.database.dashboard_rows import _build_dashboard_rows
+from cert_watch.database.renewal_attempts import host_projection_sql
 from cert_watch.database.schema import init_schema
 from cert_watch.filters import subject_cn
 from cert_watch.tags import format_tags, merge_tags
@@ -58,7 +59,7 @@ def _build_unified_from_dash(
             "owner_name": dict(h).get("owner_name", ""),
             "owner_email": dict(h).get("owner_email", ""),
             "owner_slack": dict(h).get("owner_slack", ""),
-            "renewal_status": dict(h).get("renewal_status", "pending"),
+            "renewal_status": dict(h).get("derived_renewal_status", "pending"),
             "renewal_method": dict(h).get("renewal_method", ""),
             "runbook_url": dict(h).get("runbook_url", ""),
             "notes": dict(h).get("notes", ""),
@@ -140,7 +141,7 @@ def _build_pending_entries(host_rows: list[Any], scan_rows: list[Any]) -> list[d
             "owner_name": dict(h).get("owner_name", ""),
             "owner_email": dict(h).get("owner_email", ""),
             "owner_slack": dict(h).get("owner_slack", ""),
-            "renewal_status": dict(h).get("renewal_status", "pending"),
+            "renewal_status": dict(h).get("derived_renewal_status", "pending"),
             "renewal_method": dict(h).get("renewal_method", ""),
             "runbook_url": dict(h).get("runbook_url", ""),
             "notes": dict(h).get("notes", ""),
@@ -287,11 +288,14 @@ def _load_unified_filtered(
                 # The filter clause is ``h.``-prefixed for the EXISTS subqueries
                 # below, so the alias is required here too (the owner and
                 # renewal-method drill-downs raised "no such column").
-                f"SELECT * FROM hosts h WHERE {host_where} ORDER BY added_at",
+                f"SELECT {host_projection_sql('h')} FROM hosts h "
+                f"WHERE {host_where} ORDER BY h.added_at",
                 host_params,
             ).fetchall()
         else:
-            host_rows = conn.execute("SELECT * FROM hosts ORDER BY added_at").fetchall()
+            host_rows = conn.execute(
+                f"SELECT {host_projection_sql('h')} FROM hosts h ORDER BY h.added_at"
+            ).fetchall()
 
         if host_where:
             exists_clause = (
