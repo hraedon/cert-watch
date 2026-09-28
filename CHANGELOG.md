@@ -15,13 +15,38 @@ All notable changes to cert-watch are documented in this file.
   and malformed or duplicate Authorization headers are rejected consistently
   across every route (#118 S1).
 
+### Upgrade notes
+
+- Migration 0045 adds explicit binding metadata to API keys. Existing keys
+  remain bound to all endpoints. See [UPGRADING.md](UPGRADING.md).
+
+## [1.1.1] - 2026-09-27
+
+Security and correctness fixes; no new features. Generic webhook templates now
+escape certificate-derived text, unknown API key scopes are rejected, and
+API-key audit actors change format -- read [UPGRADING.md](UPGRADING.md) if
+you consume audit events or use a custom generic webhook template. One schema
+migration (0044).
+
+### Security
+
+- A scoped writer could not save *Edit host* on a certificate carrying another
+  team's tag without stripping it. Host and certificate tag forms and APIs,
+  including *Edit host*, now accept tags outside the writer's scope only when
+  they are resubmitted unchanged, including their stored spelling; such a
+  writer still cannot add, remove or re-case them, and the check is repeated
+  inside the write transaction (#138).
+- Expected-issuer writes re-check scope inside their transaction and commit
+  atomically with their audit row (#138).
 - Generic JSON webhook templates now JSON-escape certificate-derived values
   for one string level. JSON mode requires a `{`-leading template whose neutral
   rendering is an object; bracketed, placeholder-only and form-looking
   templates remain plain text. Leading BOMs and whitespace are ignored,
   substitutions are single-pass, and invalid object-looking templates are
-  refused with a startup warning for existing configuration. Slack, Discord
-  and Teams payloads neutralize untrusted mention and link markup.
+  refused with a startup warning for existing configuration. In JSON
+  templates only `{{threshold_days}}` may appear unquoted. Slack, Discord and
+  Teams payloads neutralize untrusted mention and link markup, and the
+  built-in Alertmanager preset now uses the `alertmanager` channel kind.
 - API keys with an unknown or corrupt scope are now rejected as
   unauthenticated instead of silently receiving viewer access.
 - Audit events created by API keys now identify the actor as `api_key:<id>`
@@ -46,8 +71,6 @@ All notable changes to cert-watch are documented in this file.
 
 ### Upgrade notes
 
-- Migration 0045 adds explicit binding metadata to API keys. Existing keys
-  remain bound to all endpoints. See [UPGRADING.md](UPGRADING.md).
 - Migration 0044 versions and backfills persisted renewal classifications and
   replaces the certificate-history insert trigger. See
   [UPGRADING.md](UPGRADING.md).
@@ -90,11 +113,6 @@ are hidden from read-only callers; read [UPGRADING.md](UPGRADING.md) first.
   the writable ones. A scoped writer cannot remove the last tag through which
   they can write the resource, which would otherwise hand it to a read-only
   tier (#126 S4).
-- Host and certificate tag forms and APIs, including *Edit host*, now permit a
-  scoped writer to resubmit tags outside their writable scope only when those
-  tags remain unchanged, including their stored spelling. Such a writer still
-  cannot add, remove or re-case those tags (#138).
-- Expected-issuer writes now commit atomically with their audit row (#138).
 
 ### Added
 
