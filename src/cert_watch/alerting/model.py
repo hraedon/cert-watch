@@ -57,7 +57,9 @@ def provider_incident_key(alert_type: str, dedupe_key: str | None) -> str:
     """Keep legacy provider identity except for attempt-scoped renewal alerts."""
     if alert_type not in {"renewal_not_deployed", "renewal_failed"}:
         return ""
-    return hashlib.sha256((dedupe_key or "").encode()).hexdigest()
+    if not dedupe_key:
+        raise ValueError(f"{alert_type} requires a provider dedupe key")
+    return hashlib.sha256(dedupe_key.encode()).hexdigest()
 
 
 @dataclass(frozen=True)

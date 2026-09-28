@@ -132,7 +132,6 @@ def _host_scan_deadlines(
                    MAX(CASE WHEN sh.status = 'success' THEN sh.scanned_at END) as last_scan,
                    MAX(sh.scanned_at) as last_attempt,
                    a.next_check_at,
-                   a.success_received_at,
                    claim.claim_expires_at
             FROM hosts h
             LEFT JOIN scan_history sh
@@ -142,7 +141,7 @@ def _host_scan_deadlines(
                   AND a.state IN ('verifying','not_deployed')
             LEFT JOIN host_scan_claims claim ON claim.host_id=h.id
             GROUP BY h.id,h.hostname,h.port,h.scan_interval_hours,
-                     a.next_check_at,a.success_received_at,claim.claim_expires_at
+                     a.next_check_at,claim.claim_expires_at
             """
         ).fetchall()
 
@@ -199,12 +198,9 @@ def _host_scan_deadlines(
         )
         if verification is not None:
             deadline = min(deadline, verification)
-            success_received = (
-                timestamp(r["success_received_at"], r["hostname"], "renewal success")
-                if r["success_received_at"] else None
-            )
-            immediate_exception = success_received is not None and verification == success_received
-            if attempt is not None and not immediate_exception:
+            # Reports request an immediate check by storing ``next_check_at=now``.
+            # Actual scans, never report times, enforce the endpoint-wide floor.
+            if attempt is not None:
                 deadline = max(deadline, attempt + timedelta(minutes=5))
         claim_expires = (
             timestamp(r["claim_expires_at"], r["hostname"], "scan claim")

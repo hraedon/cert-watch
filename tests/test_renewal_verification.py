@@ -24,6 +24,7 @@ from cert_watch.scheduler import (
     _host_scan_deadlines,
     _seconds_until_next_scan,
     claim_hosts_due_for_scan,
+    get_hosts_due_for_scan,
     record_scan_history,
 )
 from cert_watch.services.host_management import delete_host
@@ -273,7 +274,8 @@ def test_report_storm_limits_immediate_check_to_one_per_five_minutes(estate):
         attempts.add(result.attempt_id)
     assert len(attempts) == 1
     row = _row(db)
-    assert datetime.fromisoformat(row["next_check_at"]) >= NOW + timedelta(minutes=5)
+    assert row["next_check_at"] == NOW.isoformat()
+    assert row["success_received_at"] == NOW.isoformat()
 
 
 def _post(estate, outcome, at, *, new_fingerprint=None):
@@ -322,9 +324,7 @@ def test_baseline_fingerprint_claim_is_stored_but_never_applied(estate):
     db, _host_id, _cert_id, baseline, _settings = estate
     result = _post(estate, "succeeded", NOW, new_fingerprint=baseline)
     assert (result.state, result.effect) == ("open", "no_change")
-    row = _row(db)
-    assert row["new_fingerprint"] is None
-    assert row["success_received_at"] is None
+    assert _row(db) is None
     with _connect(db) as conn:
         report = conn.execute(
             "SELECT new_fingerprint,effect FROM renewal_reports WHERE report_id=?",
@@ -340,11 +340,37 @@ def test_claim_cannot_close_not_deployed(estate):
     assert _row(db)["state"] == "not_deployed"
 
 
+def test_nonqualifying_mismatch_cannot_demote_not_deployed(estate):
+    db, _host_id, _cert_id, _baseline, settings = estate
+    _attempt(estate, state="not_deployed", expected="f" * 64)
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE renewal_attempts SET verification_reason='baseline_still_served',"
+            "last_check_at=? WHERE is_current=1",
+            (NOW.isoformat(),),
+        )
+        conn.commit()
+    evaluate_after_scan(
+        db,
+        HOST,
+        443,
+        "d" * 64,
+        started_at=NOW + timedelta(minutes=2),
+        settings=settings,
+    )
+    row = _row(db)
+    assert (row["state"], row["verification_reason"]) == (
+        "not_deployed",
+        "baseline_still_served",
+    )
+
+
 def test_cross_attempt_scan_floor_and_single_immediate_exception(estate):
     db, _host_id, _cert_id, _baseline, _settings = estate
     record_scan_history(db, ScanHistory(HOST, 443, "success", scanned_at=NOW))
     _post(estate, "succeeded", NOW + timedelta(seconds=1))
-    assert _seconds_until_next_scan(db, 6, 0, now=NOW + timedelta(seconds=1)) == 0
+    assert _seconds_until_next_scan(db, 6, 0, now=NOW + timedelta(seconds=1)) == 299
+    assert get_hosts_due_for_scan(db, now=NOW + timedelta(minutes=5)) == [(HOST, 443)]
     record_scan_history(
         db, ScanHistory(HOST, 443, "success", scanned_at=NOW + timedelta(seconds=2))
     )
@@ -352,6 +378,17 @@ def test_cross_attempt_scan_floor_and_single_immediate_exception(estate):
     _post(estate, "started", NOW + timedelta(minutes=1, seconds=1))
     _post(estate, "succeeded", NOW + timedelta(minutes=1, seconds=2))
     assert _seconds_until_next_scan(db, 6, 0, now=NOW + timedelta(minutes=1, seconds=3)) >= 239
+
+
+def test_repeat_success_does_not_move_anchor_or_pending_check(estate):
+    db, _host_id, _cert_id, _baseline, _settings = estate
+    _post(estate, "succeeded", NOW)
+    _post(estate, "succeeded", NOW + timedelta(minutes=4))
+    row = _row(db)
+    assert (row["success_received_at"], row["next_check_at"]) == (
+        NOW.isoformat(),
+        NOW.isoformat(),
+    )
 
 
 def test_explicit_recent_predecessor_is_baseline_and_verifies_at_acceptance(estate):
@@ -378,6 +415,67 @@ def test_explicit_recent_predecessor_is_baseline_and_verifies_at_acceptance(esta
         "verified",
         "observed_successor",
     )
+
+
+@pytest.mark.parametrize(
+    ("report_fingerprint", "reason"),
+    [(None, "observed_successor"), ("successor", "reported_fingerprint")],
+)
+def test_hostname_success_uses_recent_lineage_predecessor(
+    estate, report_fingerprint, reason
+):
+    db, _host_id, _cert_id, baseline, settings = estate
+    successor = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    store_scanned(ScannedEntry(host=HOST, port=443, leaf=successor, chain=[]), db)
+    auth = AuthContext.renewal_report_key(
+        "key", principal_id="key", binding="all", bound_tags=()
+    )
+    result, _ = create_report(
+        db,
+        settings,
+        resolve_target(db, auth, hostname=HOST, port=443),
+        RenewalReportInput(
+            "succeeded",
+            None,
+            "tool",
+            None,
+            successor.fingerprint_sha256 if report_fingerprint else None,
+            None,
+        ),
+        auth=auth,
+        actor="api_key:key",
+        source_ip=None,
+        idempotency_key=None,
+        body_sha256=f"hostname-{report_fingerprint}",
+        now=NOW,
+    )
+    row = _row(db)
+    assert row["baseline_fingerprint"] == baseline
+    assert (result.state, row["verification_reason"]) == ("verified", reason)
+
+
+def test_expired_attempt_scheduler_rechecks_on_fifteen_minute_grid(estate):
+    db, _host_id, _cert_id, baseline, settings = estate
+    _attempt(estate, not_after=NOW - timedelta(minutes=1))
+    record_scan_history(
+        db, ScanHistory(HOST, 443, "success", scanned_at=NOW - timedelta(hours=1))
+    )
+
+    assert get_hosts_due_for_scan(db, now=NOW) == [(HOST, 443)]
+    record_scan_history(db, ScanHistory(HOST, 443, "success", scanned_at=NOW))
+    evaluate_after_scan(db, HOST, 443, baseline, started_at=NOW, settings=settings)
+    assert get_hosts_due_for_scan(db, now=NOW + timedelta(minutes=4, seconds=59)) == []
+    assert get_hosts_due_for_scan(db, now=NOW + timedelta(minutes=5)) == [(HOST, 443)]
+    first = NOW + timedelta(minutes=5)
+    record_scan_history(db, ScanHistory(HOST, 443, "success", scanned_at=first))
+    evaluate_after_scan(db, HOST, 443, baseline, started_at=first, settings=settings)
+
+    assert get_hosts_due_for_scan(db, now=NOW + timedelta(minutes=19, seconds=59)) == []
+    assert get_hosts_due_for_scan(db, now=NOW + timedelta(minutes=20)) == [(HOST, 443)]
+    second = NOW + timedelta(minutes=20)
+    record_scan_history(db, ScanHistory(HOST, 443, "success", scanned_at=second))
+    evaluate_after_scan(db, HOST, 443, baseline, started_at=second, settings=settings)
+    assert get_hosts_due_for_scan(db, now=NOW + timedelta(minutes=35)) == [(HOST, 443)]
 
 
 def test_no_baseline_with_expected_fingerprint_is_bounded(tmp_path):
@@ -463,14 +561,17 @@ def test_unattempted_host_honors_pending_verification_check(tmp_path):
 
 @pytest.mark.parametrize("kind", ["pagerduty", "alertmanager"])
 @pytest.mark.parametrize("alert_type", ["expiry_warning", "renewal_not_deployed"])
-def test_host_delete_resolves_every_sent_alert_type(estate, monkeypatch, kind, alert_type):
+@pytest.mark.parametrize("status", ["sending", "sent"])
+def test_host_delete_resolves_every_sent_alert_type(
+    estate, monkeypatch, kind, alert_type, status
+):
     db, host_id, cert_id, _baseline, _settings = estate
     dedupe_key = f"{alert_type}:attempt" if alert_type == "renewal_not_deployed" else "expiry:key"
     alert = Alert(
         cert_id=cert_id,
         trigger_cert_id=cert_id,
         alert_type=alert_type,
-        status="sent",
+        status=status,
         message="condition",
         hostname=HOST,
         subject=f"CN={HOST}",

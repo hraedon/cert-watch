@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cert_watch.alerting import WebhookConfig, send_webhook
-from cert_watch.alerting.model import OutboundMessage
+from cert_watch.alerting.model import OutboundMessage, provider_incident_key
 from cert_watch.alerting.transports.adapters import (
     _PAGERDUTY_EVENTS_URL,
     AlertmanagerAdapter,
@@ -134,6 +134,12 @@ def test_attempt_scoped_alert_provider_key_is_sha256(alert_type):
     )
     assert message.incident_key == hashlib.sha256(dedupe_key.encode()).hexdigest()
     assert len(message.incident_key) == 64
+
+
+@pytest.mark.parametrize("dedupe_key", [None, ""])
+def test_attempt_scoped_alert_requires_nonempty_provider_key(dedupe_key):
+    with pytest.raises(ValueError, match="requires a provider dedupe key"):
+        provider_incident_key("renewal_not_deployed", dedupe_key)
 
 
 # ---------------------------------------------------------------------------

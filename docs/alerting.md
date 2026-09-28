@@ -27,11 +27,11 @@ established by observing a successor certificate, not by an operator report.
 
 ### Renewal verification
 
-A `succeeded` report queues one immediate scan, limited to one such exception
-per endpoint per five minutes. Every later verification check stays at least
-five minutes after that endpoint's last actual scan. The immediate scan can verify a fast
+A `succeeded` report that enters verification queues one immediate check; repeat
+reports cannot move it. Scheduler eligibility keeps every check at least five
+minutes after that endpoint's last actual scan. The first check can verify a fast
 deployment, but an unchanged result does not count toward an alert until the
-configured grace period after the latest accepted success report has elapsed
+configured grace period after the report that entered verification has elapsed
 (`CERT_WATCH_RENEWAL_VERIFY_GRACE_MINUTES`,
 5 minutes by default, range 5–15). Later checks use the expiry of the leaf that
 was serving when the attempt opened:

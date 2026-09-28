@@ -440,12 +440,36 @@ def _report_baseline(
     current_not_after: str | None,
     *,
     received: datetime,
+    use_current_predecessor: bool,
 ) -> tuple[str | None, str | None]:
     """Keep a target's recent predecessor as the attempt baseline."""
     candidate = target.baseline_fingerprint
+    cutoff = (received - timedelta(days=7)).isoformat()
+    if use_current_predecessor and current_fingerprint is not None:
+        predecessor = conn.execute(
+            """SELECT lower(cl.old_fingerprint) AS fingerprint,
+                      COALESCE(
+                          (SELECT old.not_after FROM certificates old
+                           WHERE old.id=cl.old_cert_id),
+                          (SELECT ch.not_after FROM cert_history ch
+                           WHERE ch.hostname=cl.hostname AND ch.port=cl.port
+                             AND lower(ch.fingerprint_sha256)=lower(cl.old_fingerprint)
+                           ORDER BY ch.scanned_at DESC LIMIT 1)
+                      ) AS not_after
+               FROM certificate_lineage cl
+               JOIN certificates current ON current.id=cl.new_cert_id
+               WHERE cl.hostname=? AND cl.port=?
+                 AND lower(current.fingerprint_sha256)=?
+                 AND cl.old_fingerprint IS NOT NULL AND cl.created_at>=?
+               ORDER BY cl.created_at DESC LIMIT 1""",
+            (target.hostname, target.port, current_fingerprint, cutoff),
+        ).fetchone()
+        if predecessor is not None:
+            return str(predecessor["fingerprint"]), (
+                str(predecessor["not_after"]) if predecessor["not_after"] else None
+            )
     if candidate is None or candidate == current_fingerprint:
         return current_fingerprint, current_not_after
-    cutoff = (received - timedelta(days=7)).isoformat()
     recent = conn.execute(
         """SELECT 1 FROM certificate_lineage cl
            JOIN certificates c ON c.id=cl.new_cert_id
@@ -458,35 +482,13 @@ def _report_baseline(
     return current_fingerprint, current_not_after
 
 
-def _next_success_check_on(
-    conn: sqlite3.Connection,
-    host_id: str,
-    received: datetime,
-    *,
-    outcome: str,
-    contradictory: bool,
-) -> datetime:
-    """Grant at most one immediate verification check per endpoint per five minutes."""
-    if outcome != "succeeded" or contradictory:
-        return received
-    previous = conn.execute(
-        """SELECT MAX(success_received_at) FROM renewal_attempts
-           WHERE host_id=? AND success_received_at IS NOT NULL""",
-        (host_id,),
-    ).fetchone()[0]
-    if not previous:
-        return received
-    previous_at = datetime.fromisoformat(str(previous))
-    if previous_at.tzinfo is None:
-        previous_at = previous_at.replace(tzinfo=UTC)
-    return max(received, previous_at.astimezone(UTC) + timedelta(minutes=5))
-
-
 def _initial_evidence_on(
     conn: sqlite3.Connection,
     target: RenewalTarget,
     report: RenewalReportInput,
     received: datetime,
+    *,
+    use_current_predecessor: bool,
 ) -> tuple[str | None, str | None, str | None]:
     current_fingerprint, current_not_after = _current_leaf(conn, target.host_id)
     baseline_fingerprint, baseline_not_after = _report_baseline(
@@ -495,6 +497,7 @@ def _initial_evidence_on(
         current_fingerprint,
         current_not_after,
         received=received,
+        use_current_predecessor=use_current_predecessor,
     )
     if (
         report.outcome == "succeeded"
@@ -557,7 +560,7 @@ def _preserve_contradictory_attempt(
     if not contradictory:
         return state, new_attempt, attempt_id, effect
     if attempt is None:
-        return "open", new_attempt, attempt_id, "no_change"
+        return "open", False, attempt_id, "no_change"
     return str(attempt["state"]), False, str(attempt["attempt_id"]), "no_change"
 
 
@@ -637,6 +640,34 @@ def _expire_current_attempt_on(
     return attempt
 
 
+def _update_succeeded_attempt_on(
+    conn: sqlite3.Connection,
+    attempt_id: str,
+    report: RenewalReportInput,
+    *,
+    state: str,
+    prior_state: str | None,
+    received_at: str,
+) -> None:
+    """Apply a success without moving an existing verification anchor/check."""
+    fingerprint_sql = "?" if prior_state == "failed" else "COALESCE(new_fingerprint,?)"
+    if state == "verifying" and prior_state != "verifying":
+        conn.execute(
+            f"""UPDATE renewal_attempts SET state=?,suppresses_stalled=0,
+                      new_fingerprint={fingerprint_sql},
+                      success_received_at=?,next_check_at=?,closed_reason=NULL
+               WHERE attempt_id=?""",
+            (state, report.new_fingerprint, received_at, received_at, attempt_id),
+        )
+        return
+    conn.execute(
+        f"""UPDATE renewal_attempts SET state=?,suppresses_stalled=0,
+                  new_fingerprint={fingerprint_sql}
+           WHERE attempt_id=?""",
+        (state, report.new_fingerprint, attempt_id),
+    )
+
+
 def create_report(
     db_path: str | Path,
     settings: Settings,
@@ -703,14 +734,19 @@ def create_report(
                     conn.rollback()
                     return RenewalReportResult(**saved), True
 
-            current_fingerprint, baseline_fingerprint, baseline_not_after = _initial_evidence_on(
-                conn, target, report, received
-            )
             attempt = conn.execute(
                 "SELECT * FROM renewal_attempts WHERE host_id=? AND is_current=1",
                 (target.host_id,),
             ).fetchone()
             attempt = _expire_current_attempt_on(conn, target.host_id, attempt, received=received)
+
+            current_fingerprint, baseline_fingerprint, baseline_not_after = _initial_evidence_on(
+                conn,
+                target,
+                report,
+                received,
+                use_current_predecessor=attempt is None and report.outcome == "succeeded",
+            )
 
             new_attempt = attempt is None
             prior_state = str(attempt["state"]) if attempt is not None else None
@@ -719,13 +755,6 @@ def create_report(
                 and report.new_fingerprint
                 and baseline_fingerprint
                 and report.new_fingerprint.lower() == baseline_fingerprint.lower()
-            )
-            success_check_at = _next_success_check_on(
-                conn,
-                target.host_id,
-                received,
-                outcome=report.outcome,
-                contradictory=contradictory,
             )
             effect = "applied"
             state = {
@@ -819,8 +848,8 @@ def create_report(
 
             # Preserve the report for audit/history, but a claimed fingerprint
             # that is the baseline is not renewal evidence and changes no live
-            # attempt. A first-ever contradictory report gets an open history
-            # row so its report retains a concrete attempt identity.
+            # attempt. A first-ever contradictory report is report history only;
+            # it must not create an unleased open attempt.
             state, new_attempt, attempt_id, effect = _preserve_contradictory_attempt(
                 attempt,
                 contradictory=contradictory,
@@ -885,7 +914,7 @@ def create_report(
                         lease,
                         suppresses,
                         received_at,
-                        success_check_at.isoformat() if state == "verifying" else None,
+                        received_at if state == "verifying" else None,
                         None if state in {"open", "verifying"} else "reported_failed",
                         received_at if state == "verifying" else None,
                         claims_baseline,
@@ -902,20 +931,13 @@ def create_report(
                 and effect in {"applied", "no_change"}
                 and not contradictory
             ):
-                fingerprint_sql = "?" if prior_state == "failed" else "COALESCE(new_fingerprint,?)"
-                conn.execute(
-                    f"""UPDATE renewal_attempts SET state=?,suppresses_stalled=0,
-                              new_fingerprint={fingerprint_sql},
-                              success_received_at=?,next_check_at=?,
-                              closed_reason=NULL
-                       WHERE attempt_id=?""",
-                    (
-                        state,
-                        report.new_fingerprint,
-                        received_at,
-                        success_check_at.isoformat(),
-                        attempt_id,
-                    ),
+                _update_succeeded_attempt_on(
+                    conn,
+                    attempt_id,
+                    report,
+                    state=state,
+                    prior_state=prior_state,
+                    received_at=received_at,
                 )
 
             if (
@@ -934,7 +956,11 @@ def create_report(
 
             _cache_renewal_status(conn, target.host_id, now=received)
 
-            if report.correlation_id and effect != "ignored_late":
+            if (
+                report.correlation_id
+                and effect != "ignored_late"
+                and (attempt is not None or new_attempt)
+            ):
                 conn.execute(
                     """INSERT INTO renewal_attempt_correlations
                        (host_id,source,correlation_id,attempt_id,created_at)

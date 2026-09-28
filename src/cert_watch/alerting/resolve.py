@@ -43,7 +43,9 @@ def resolve_webhook_for_renewed_cert(
     seen: set[str] = set()
     resolved = 0
     for alert in cert_alerts:
-        if alert.status != "sent":
+        # A sending row may already have opened its provider incident before
+        # endpoint deletion wins the database race.
+        if alert.status not in {"sending", "sent"}:
             continue
         key = alert.dedupe_key or f"{alert.alert_type}:{alert.threshold_days}"
         if key in seen:

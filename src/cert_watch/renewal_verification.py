@@ -173,7 +173,11 @@ def evaluate_evidence_on(
                 None if baseline is None else _following_check(attempt, started_at, settings)
             )
         else:
-            state = "verifying"
+            # Once raised, only observed successor evidence can close the
+            # condition. Reports and non-qualifying checks cannot demote it.
+            state = "not_deployed" if state == "not_deployed" else "verifying"
+            if state == "not_deployed":
+                reason = str(attempt["verification_reason"] or "") or None
             next_check = _following_check(attempt, started_at, settings)
             if not spaced_check and last_check is not None:
                 next_check = max(next_check, last_check + timedelta(minutes=5))
