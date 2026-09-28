@@ -318,7 +318,10 @@ def _seconds_until_next_rule_pass(
     current = (now or datetime.now(UTC)).astimezone(UTC)
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT MIN(rule_due_at) FROM renewal_attempts WHERE rule_due_at IS NOT NULL"
+            """SELECT MIN(rule_due_at) FROM renewal_attempts
+               WHERE is_current=1 AND rule_due_at IS NOT NULL
+                 AND ((failure_reported_at IS NOT NULL AND failure_cleared_at IS NULL)
+                      OR state IN ('verifying','not_deployed'))"""
         ).fetchone()
     value = row[0] if row else None
     if value is None:

@@ -92,18 +92,16 @@ def build_renewal_digest(
             (cutoff,),
         ).fetchall()
         failure_rows = conn.execute(
-            """SELECT COALESCE(a.failure_attempt_id,a.attempt_id) AS condition_id,
-                      MIN(a.failure_reported_at) AS failure_reported_at,
-                      MAX(a.failure_cleared_at) AS failure_cleared_at,
+            """SELECT a.attempt_id AS condition_id,
+                      a.failure_reported_at,a.failure_cleared_at,
                       h.hostname,h.port,h.owner_email
                FROM renewal_attempts a
                JOIN hosts h ON h.id=a.host_id
-               WHERE a.failure_reported_at IS NOT NULL
-               GROUP BY condition_id,a.host_id,h.hostname,h.port,h.owner_email
-               HAVING MIN(a.failure_reported_at)<=?
-                  AND (MAX(a.failure_cleared_at) IS NULL
-                       OR MAX(a.failure_cleared_at)>=?)
-               ORDER BY MIN(a.failure_reported_at)""",
+               WHERE a.failure_attempt_id=a.attempt_id
+                 AND a.failure_reported_at IS NOT NULL
+                 AND a.failure_reported_at<=?
+                 AND (a.failure_cleared_at IS NULL OR a.failure_cleared_at>=?)
+               ORDER BY a.failure_reported_at""",
             (current.isoformat(), cutoff),
         ).fetchall()
         not_deployed_rows = conn.execute(

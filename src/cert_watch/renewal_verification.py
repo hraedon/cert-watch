@@ -29,6 +29,28 @@ class VerificationResult:
     reason: str | None
 
 
+def _verification_reason(attempt: sqlite3.Row, leaf_fingerprint: str | None) -> str | None:
+    """Return the one scan-evidence decision shared by every verification path."""
+    if leaf_fingerprint is None:
+        return None
+    leaf = leaf_fingerprint.lower()
+    baseline = (
+        str(attempt["baseline_fingerprint"]).lower()
+        if attempt["baseline_fingerprint"]
+        else None
+    )
+    expected = (
+        str(attempt["new_fingerprint"]).lower() if attempt["new_fingerprint"] else None
+    )
+    if expected is not None:
+        if leaf == expected and (baseline is None or leaf != baseline):
+            return "reported_fingerprint"
+        return None
+    if baseline is not None and leaf != baseline:
+        return "observed_successor"
+    return None
+
+
 def observe_failure_successor_on(
     conn: sqlite3.Connection,
     hostname: str,
@@ -46,21 +68,22 @@ def observe_failure_successor_on(
              AND a.failure_cleared_at IS NULL""",
         (hostname, port),
     ).fetchone()
-    if attempt is None or not attempt["baseline_fingerprint"]:
+    if attempt is None:
         return False
     leaf = leaf_fingerprint.lower()
-    if leaf == str(attempt["baseline_fingerprint"]).lower():
+    reason = _verification_reason(attempt, leaf)
+    if reason is None:
         return False
     instant = observed_at.astimezone(UTC).isoformat()
     origin = str(attempt["failure_attempt_id"] or attempt["attempt_id"])
     conn.execute(
         """UPDATE renewal_attempts
            SET state='verified',suppresses_stalled=0,
-               verification_reason='observed_successor',next_check_at=NULL,
-               closed_reason='observed_successor',verified_fingerprint=?,
+               verification_reason=?,next_check_at=NULL,
+               closed_reason=?,verified_fingerprint=?,
                failure_cleared_at=COALESCE(failure_cleared_at,?),rule_due_at=?
            WHERE attempt_id=?""",
-        (leaf, instant, instant, attempt["attempt_id"]),
+        (reason, reason, leaf, instant, instant, attempt["attempt_id"]),
     )
     conn.execute(
         """UPDATE renewal_attempts
@@ -194,11 +217,9 @@ def evaluate_evidence_on(
 
     reason: str | None = None
     next_check: datetime | None = None
-    successor = leaf is not None and leaf != baseline
-    if successor and expected is not None and leaf == expected:
-        state, reason = "verified", "reported_fingerprint"
-    elif successor and baseline is not None and expected is None:
-        state, reason = "verified", "observed_successor"
+    verification_reason = _verification_reason(attempt, leaf)
+    if verification_reason is not None:
+        state, reason = "verified", verification_reason
     elif failure_open and state not in {"open", "verifying", "not_deployed"}:
         # Failure-only states have no verification scan cadence.  An ordinary
         # stored scan may still prove the successor and close the condition,

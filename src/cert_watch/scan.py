@@ -447,7 +447,15 @@ def _stage_resolve_pending_alerts(
         ).fetchone()
     if row:
         old_leaf_id = row["id"]
-        pending = SqliteAlertRepository(repo_path).list_for_cert(old_leaf_id)
+        pending = [
+            alert
+            for alert in SqliteAlertRepository(repo_path).list_for_cert(old_leaf_id)
+            # This condition belongs to the endpoint renewal cycle. Its rule
+            # owns the eventual resolve; a leaf replacement alone may not be
+            # sufficient evidence (no baseline, or an expected-fingerprint
+            # mismatch), and resolving here would churn the provider incident.
+            if alert.alert_type != "renewal_failed"
+        ]
     return pending, old_leaf_id
 
 

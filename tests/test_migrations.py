@@ -77,6 +77,91 @@ def test_migration_0049_backfills_first_accepted_failure(tmp_path: Path) -> None
     )
 
 
+def test_migration_0049_carries_failure_to_current_attempt_and_clears_once(
+    tmp_path: Path,
+) -> None:
+    from cert_watch.alerting.rules.renewal_reports import evaluate_renewal_report_alerts
+    from cert_watch.certificate_model import parse_certificate
+    from cert_watch.config import Settings
+    from cert_watch.database import SqliteAlertRepository, SqliteHostRepository
+    from cert_watch.database.connection import _connect
+    from cert_watch.migrations.m0049_renewal_failure_marker import upgrade
+    from cert_watch.renewal_verification import evaluate_after_scan
+    from cert_watch.scan import ScannedEntry, store_scanned
+    from tests._helpers import seed_scanned
+    from tests.conftest import _make_cert
+
+    db = tmp_path / "failure-carry.sqlite3"
+    init_schema(db)
+    hostname = "failure-carry.example.test"
+    host_id = SqliteHostRepository(db).add(hostname, 443)
+    baseline = parse_certificate(_make_cert(hostname, days_valid=60).der)
+    seed_scanned(db, hostname, 443, baseline)
+    failed_at = datetime(2026, 9, 20, tzinfo=UTC).isoformat()
+    started_at = datetime(2026, 9, 21, tzinfo=UTC).isoformat()
+    with _connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                baseline_fingerprint,baseline_not_after,suppresses_stalled,
+                received_at,baseline_lease_claimed)
+               VALUES ('failed-origin',?,0,'test','failed',1,?,?,0,?,1)""",
+            (host_id, baseline.fingerprint_sha256, baseline.not_after.isoformat(), failed_at),
+        )
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                baseline_fingerprint,baseline_not_after,suppresses_stalled,
+                received_at,baseline_lease_claimed)
+               VALUES ('retry',?,1,'test','open',2,?,?,0,?,0)""",
+            (host_id, baseline.fingerprint_sha256, baseline.not_after.isoformat(), started_at),
+        )
+        conn.execute(
+            """INSERT INTO renewal_reports
+               (report_id,host_id,hostname_snapshot,port_snapshot,outcome,
+                received_at,source,effect,attempt_id)
+               VALUES ('failure-report',?,?,443,'failed',?,'test','applied','failed-origin')""",
+            (host_id, hostname, failed_at),
+        )
+        upgrade(conn)
+        conn.commit()
+        attempts = conn.execute(
+            """SELECT attempt_id,failure_attempt_id,failure_reported_at,rule_due_at
+               FROM renewal_attempts ORDER BY opened_seq"""
+        ).fetchall()
+    assert [row["failure_attempt_id"] for row in attempts] == [
+        "failed-origin",
+        "failed-origin",
+    ]
+    assert attempts[0]["rule_due_at"] is None
+    assert attempts[1]["rule_due_at"] == failed_at
+
+    repo = SqliteAlertRepository(db)
+    assert len(evaluate_renewal_report_alerts(db, repo)) == 1
+    successor = parse_certificate(_make_cert(hostname, days_valid=90).der)
+    observed_at = datetime(2026, 9, 22, tzinfo=UTC)
+    store_scanned(
+        ScannedEntry(host=hostname, port=443, leaf=successor, chain=[]), db
+    )
+    result = evaluate_after_scan(
+        db,
+        hostname,
+        443,
+        successor.fingerprint_sha256,
+        started_at=observed_at,
+        settings=Settings(db_path=db, data_dir=tmp_path),
+    )
+    assert result is not None and result.state == "verified"
+    assert evaluate_renewal_report_alerts(db, repo) == []
+    assert evaluate_renewal_report_alerts(db, repo) == []
+    with _connect(db) as conn:
+        alerts = conn.execute(
+            "SELECT closed_at FROM alerts WHERE alert_type='renewal_failed'"
+        ).fetchall()
+    assert len(alerts) == 1
+    assert alerts[0]["closed_at"] is not None
+
+
 def _run_concurrent_migration(
     db_path: str,
     start: Any,

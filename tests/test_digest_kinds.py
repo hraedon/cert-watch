@@ -364,6 +364,41 @@ def test_failure_digest_includes_period_overlap_and_excludes_prior_clear(tmp_pat
     }
 
 
+def test_failure_digest_uses_origin_condition_lifetime(tmp_path) -> None:
+    db = tmp_path / "digest-condition-lifetime.sqlite3"
+    init_schema(db)
+    host_id = SqliteHostRepository(db).add("condition-lifetime.example.test", 443)
+    reported = NOW - timedelta(days=20)
+    origin_cleared = NOW - timedelta(days=8)
+    carrier_cleared = NOW - timedelta(days=2)
+    with _connect(db) as conn:
+        for attempt_id, opened_seq, cleared_at in (
+            ("origin", 1, origin_cleared),
+            ("carrier", 2, carrier_cleared),
+        ):
+            conn.execute(
+                """INSERT INTO renewal_attempts
+                   (attempt_id,host_id,is_current,source,state,opened_seq,
+                    suppresses_stalled,received_at,baseline_lease_claimed,
+                    failure_attempt_id,failure_reported_at,failure_cleared_at)
+                   VALUES (?,?,?,?,?,?,0,?,1,'origin',?,?)""",
+                (
+                    attempt_id,
+                    host_id,
+                    int(attempt_id == "carrier"),
+                    "test",
+                    "failed",
+                    opened_seq,
+                    reported.isoformat(),
+                    reported.isoformat(),
+                    cleared_at.isoformat(),
+                ),
+            )
+        conn.commit()
+
+    assert build_renewal_digest(db, cadence_days=7, now=NOW) == []
+
+
 def test_not_deployed_digest_falls_back_when_raised_at_is_null(tmp_path) -> None:
     db = tmp_path / "digest-null-raised.sqlite3"
     init_schema(db)

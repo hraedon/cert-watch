@@ -40,10 +40,14 @@ All notable changes to cert-watch are documented in this file.
   The attempt that first reports the failure supplies the stable provider key;
   later started, manual in-progress, and succeeded attempts carry the same
   condition and incident. It closes only when stored scan evidence verifies a
-  carrying attempt or observes a successor to the failed baseline, the endpoint
+  carrying attempt using the same baseline and reported-fingerprint rules as
+  successful-report verification, the endpoint
   is deleted, or an authorized operator uses the new HTML/JSON explicit clear
-  action. Failed reports use a dedicated rule wake and never schedule a TLS
-  scan. Failures reported after `not_deployed` raise both conditions. Renewal
+  action. A later failure after a manual clear starts a new condition and
+  provider incident. Pre-scan failures defer their alert until a leaf exists and
+  keep that incident stable across later leaf changes. Failed reports use a
+  dedicated rule wake and never schedule a TLS scan. Failures reported after
+  `not_deployed` raise both conditions. Renewal
   digests now include every failure condition open at any point in the period,
   including superseded or since-cleared conditions, plus current **Reported but
   not deployed** transitions, without depending on Event stream retention

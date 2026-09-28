@@ -218,6 +218,31 @@ def _open_failure(attempt: sqlite3.Row | None) -> tuple[str | None, str | None]:
     )
 
 
+def _starts_failure_after_clear(
+    attempt: sqlite3.Row, report: RenewalReportInput, effect: str
+) -> bool:
+    return bool(
+        report.outcome == "failed"
+        and attempt["failure_reported_at"]
+        and attempt["failure_cleared_at"]
+        and effect != "ignored_late"
+    )
+
+
+def _restart_failure_after_clear(
+    attempt: sqlite3.Row,
+    report: RenewalReportInput,
+    effect: str,
+    *,
+    state: str,
+    new_attempt: bool,
+    attempt_id: str,
+) -> tuple[str, str, bool, str]:
+    if _starts_failure_after_clear(attempt, report, effect):
+        return "failed", "applied", True, uuid.uuid4().hex
+    return state, effect, new_attempt, attempt_id
+
+
 def write_through_renewal_status_on(
     conn: sqlite3.Connection,
     db_path: str | Path,
@@ -441,16 +466,17 @@ def clear_renewal_failure(
                 (cleared_at, cleared_at, host_id),
             )
             changed = cursor.rowcount > 0
-            audit_event = record_audit(
-                db_path,
-                actor=actor,
-                action="renewal_failure.clear",
-                target_type="host",
-                target_id=host_id,
-                detail={"cleared": changed, "closed_reason": "manual_clear"},
-                source_ip=source_ip,
-                conn=conn,
-            )
+            if changed:
+                audit_event = record_audit(
+                    db_path,
+                    actor=actor,
+                    action="renewal_failure.clear",
+                    target_type="host",
+                    target_id=host_id,
+                    detail={"cleared": True, "closed_reason": "manual_clear"},
+                    source_ip=source_ip,
+                    conn=conn,
+                )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -1066,6 +1092,18 @@ def create_report(
                 else:
                     new_attempt = True
                     attempt_id = uuid.uuid4().hex
+
+                # A manual clear ends the old failure condition. Any later
+                # accepted failure starts a new cycle, even when the ordinary
+                # state/correlation reducer would reuse this attempt.
+                state, effect, new_attempt, attempt_id = _restart_failure_after_clear(
+                    attempt,
+                    report,
+                    effect,
+                    state=state,
+                    new_attempt=new_attempt,
+                    attempt_id=attempt_id,
+                )
 
             if (
                 new_attempt

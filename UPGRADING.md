@@ -77,19 +77,27 @@ Rollback requires restoring the pre-migration backup.
 
 ### Migration 0049
 
-Migration **0049** adds the originating `failure_attempt_id`,
-`failure_reported_at`, `failure_cleared_at`, and a rule-only wake timestamp to
-renewal attempts. It backfills the originating attempt and first retained,
-accepted failed report for every stored failure; every such stored failure is
-therefore eligible to alert at the first rule pass after upgrade, regardless of
-its age. It also fills missing historical `not_deployed` raise times from the
-attempt's accepted report time.
+Migration **0049** (still unreleased, so its backfill is updated in place) adds
+the originating `failure_attempt_id`, `failure_reported_at`,
+`failure_cleared_at`, and a rule-only wake timestamp to renewal attempts. It
+backfills the originating attempt and first retained,
+accepted failed report for every stored failure, then walks each endpoint's
+attempt history to carry the earliest unresolved failure across later attempts.
+A recorded verification or a later attempt whose baseline proves a successor
+ends that historical condition. Every still-unresolved stored failure is
+therefore eligible to alert once at the first rule pass after upgrade,
+regardless of its age. It also fills missing historical `not_deployed` raise
+times from the attempt's accepted report time.
 
 The durable condition remains attached to later attempts until stored scan
-evidence verifies a carrying attempt or observes a successor to the failed
-baseline, the endpoint is deleted, or an authorized operator explicitly clears
-it. A start report, lease, bare success claim, lease expiry, or echoed
-`renewal_status=pending` write does not clear it. Existing report messages,
+evidence verifies a carrying attempt under the S4 fingerprint rule: the leaf
+must differ from a known baseline and, when the report supplied a
+`new_fingerprint`, must equal it. A failure reported before any baseline can be
+cleared by scan evidence only when it has an explicit matching
+`new_fingerprint`. Endpoint deletion or an authorized explicit operator clear
+also ends the condition. A start report, lease, bare success claim, lease
+expiry, or echoed `renewal_status=pending` write does not clear it. Existing
+report messages,
 tools, correlations, key identities and recipient identities are not copied
 into the marker or digest. Rollback requires restoring the pre-migration
 backup.

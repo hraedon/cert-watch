@@ -28,6 +28,7 @@ from cert_watch.scheduler import (
     get_hosts_due_for_scan,
     record_scan_history,
 )
+from cert_watch.scheduler_context import SchedulerContext
 from cert_watch.services.host_management import (
     HostSettingsUpdate,
     delete_host,
@@ -1427,6 +1428,155 @@ def test_failed_report_storm_schedules_zero_extra_scans(estate):
     assert scan_selections == 0
     with _connect(db) as conn:
         assert conn.execute("SELECT count(*) FROM scan_history").fetchone()[0] == 1
+
+
+def test_failure_mismatch_uses_s4_fingerprint_rule(estate):
+    db, _host_id, _cert_id, _baseline, settings = estate
+    failed = _post(estate, "failed", NOW)
+    _post(
+        estate,
+        "succeeded",
+        NOW + timedelta(minutes=1),
+        new_fingerprint="a" * 64,
+    )
+
+    evaluate_after_scan(
+        db,
+        HOST,
+        443,
+        "b" * 64,
+        started_at=NOW + timedelta(hours=24, minutes=1),
+        settings=settings,
+    )
+
+    row = _row(db)
+    assert (row["state"], row["verification_reason"]) == (
+        "not_deployed",
+        "mismatch",
+    )
+    assert row["failure_attempt_id"] == failed.attempt_id
+    assert row["failure_cleared_at"] is None
+
+
+def test_rule_wake_ignores_noncurrent_and_cleared_attempts(estate):
+    db, host_id, _cert_id, _baseline, _settings = estate
+    due = (NOW - timedelta(minutes=1)).isoformat()
+    with _connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                suppresses_stalled,received_at,baseline_lease_claimed,
+                failure_attempt_id,failure_reported_at,failure_cleared_at,rule_due_at)
+               VALUES ('dead',?,0,'test','failed',1,0,?,1,'dead',?,?,?)""",
+            (host_id, due, due, due, due),
+        )
+        conn.commit()
+    assert _seconds_until_next_rule_pass(db, now=NOW) == float("inf")
+
+    _post(estate, "failed", NOW)
+    assert _seconds_until_next_rule_pass(db, now=NOW) == 0
+
+
+def test_failure_after_manual_clear_opens_new_condition(estate):
+    db, host_id, _cert_id, _baseline, _settings = estate
+    repo = SqliteAlertRepository(db)
+    first = _post(estate, "failed", NOW)
+    [first_alert] = evaluate_renewal_report_alerts(db, repo)
+    assert clear_renewal_failure(
+        db,
+        host_id,
+        auth=AuthContext.system(),
+        actor="system",
+        source_ip=None,
+        now=NOW + timedelta(minutes=1),
+    )
+    evaluate_renewal_report_alerts(db, repo)
+
+    second = _post(estate, "failed", NOW + timedelta(minutes=2))
+    [second_alert] = evaluate_renewal_report_alerts(db, repo)
+    row = _row(db)
+    assert second.attempt_id != first.attempt_id
+    assert row["failure_attempt_id"] == second.attempt_id
+    assert row["failure_reported_at"] == (NOW + timedelta(minutes=2)).isoformat()
+    assert row["failure_cleared_at"] is None
+    assert second_alert.dedupe_key != first_alert.dedupe_key
+
+
+def test_pre_scan_failure_keeps_one_provider_incident_across_leaf_changes(
+    tmp_path, monkeypatch
+):
+    db = tmp_path / "pre-scan-failure.sqlite3"
+    init_schema(db)
+    SqliteHostRepository(db).add(HOST, 443)
+    settings = Settings(db_path=db, data_dir=tmp_path)
+    auth = AuthContext.renewal_report_key(
+        "key", principal_id="key", binding="all", bound_tags=()
+    )
+    target = resolve_target(db, auth, hostname=HOST, port=443)
+    create_report(
+        db,
+        settings,
+        target,
+        RenewalReportInput("failed", None, None, None, None, None),
+        auth=auth,
+        actor="api_key:key",
+        source_ip=None,
+        idempotency_key=None,
+        body_sha256="pre-scan-failure",
+        now=NOW,
+    )
+    delivered: list[dict[str, str]] = []
+
+    class Response:
+        status = 202
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        "cert_watch.alerting.transports.webhook.ssrf_safe_urlopen",
+        lambda _url, *, data, **_kwargs: (
+            delivered.append(json.loads(data)),
+            Response(),
+        )[1],
+    )
+    webhook = WebhookConfig(
+        "https://events.example.test", kind="pagerduty", routing_key="rk"
+    )
+    context = SchedulerContext(settings, None, webhook)
+    first_leaf = parse_certificate(_make_cert(HOST, days_valid=60).der)
+    store_scanned(
+        ScannedEntry(host=HOST, port=443, leaf=first_leaf, chain=[]),
+        db,
+        webhook_config=webhook,
+    )
+    context.run_alerts()
+    second_leaf = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    store_scanned(
+        ScannedEntry(host=HOST, port=443, leaf=second_leaf, chain=[]),
+        db,
+        webhook_config=webhook,
+    )
+    evaluate_after_scan(
+        db,
+        HOST,
+        443,
+        second_leaf.fingerprint_sha256,
+        started_at=NOW + timedelta(hours=1),
+        settings=settings,
+    )
+    context.run_alerts()
+
+    assert [event["event_action"] for event in delivered] == ["trigger"]
+    with _connect(db) as conn:
+        alerts = conn.execute(
+            "SELECT id,closed_at FROM alerts WHERE alert_type='renewal_failed'"
+        ).fetchall()
+    assert len(alerts) == 1
+    assert alerts[0]["closed_at"] is None
 
 
 def test_failed_attempt_without_scanned_leaf_has_no_alert(tmp_path):

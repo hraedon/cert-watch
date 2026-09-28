@@ -20,7 +20,7 @@ from cert_watch.auth.guards import (
 )
 from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.config import Settings
-from cert_watch.database import SqliteHostRepository
+from cert_watch.database import SqliteHostRepository, resolve_current_certificate
 from cert_watch.host_validation import hostname_is_valid
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth
 from cert_watch.routes._scoped import scope_write_denied, superseded_redirect, tags_with_scope
@@ -427,8 +427,10 @@ def clear_host_renewal_failure(
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     except RenewalReportNotFoundError:
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
+    current = resolve_current_certificate(db, host_id)
+    detail_id = current.cert_id if current is not None else host_id
     return RedirectResponse(
-        url=f"/certificates/{host_id}?renewal_failure_cleared=1", status_code=303
+        url=f"/certificates/{detail_id}?renewal_failure_cleared=1", status_code=303
     )
 
 
