@@ -46,8 +46,9 @@ All notable changes to cert-watch are documented in this file.
   new HTML/JSON explicit clear action. With no condition fingerprint, any
   successor clears it unless the attempt has an unserved certificate claim of
   its own. A later failure after a manual clear restarts a new condition on the
-  same non-terminal attempt without changing its renewal state or claim; a
-  failure after verification instead opens a new attempt from the served leaf.
+  same non-terminal attempt without changing its renewal state or claim. A
+  genuinely new failure after verification opens a new attempt from the served
+  leaf, while a late retry owned by the verified run remains ignored.
   Pre-scan failures defer their alert until a leaf exists and
   keep that incident stable across later leaf changes. Failed reports use a
   dedicated rule wake and never schedule a TLS scan. Failures reported after

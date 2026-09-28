@@ -224,7 +224,7 @@ def evaluate_evidence_on(
     failure_open = bool(
         attempt["failure_reported_at"] and not attempt["failure_cleared_at"]
     )
-    if state not in {"open", "verifying", "not_deployed", "failed"} and not failure_open:
+    if state not in {"open", "verifying", "not_deployed"} and not failure_open:
         return VerificationResult(state, attempt["next_check_at"], attempt["verification_reason"])
     leaf = leaf_fingerprint.lower() if leaf_fingerprint else None
     baseline = (
@@ -253,23 +253,16 @@ def evaluate_evidence_on(
     failure_clear_reason = (
         _failure_clear_reason(attempt, leaf) if failure_open else None
     )
-    if state == "verified":
-        # Verified is terminal. Legacy or raced rows that still carry an open
-        # failure may satisfy the independent evidence rule, but an ordinary
-        # scan cannot make the completed attempt transition into verified again.
+    if state not in {"open", "verifying", "not_deployed"}:
+        # Keep the verification reducer's terminal-state behavior identical to
+        # the base state machine. Stored evidence may clear the independent
+        # failure marker, but cannot revive or verify a terminal attempt.
         if failure_open and failure_clear_reason is not None:
             _clear_failure_condition_on(conn, attempt, started_at.isoformat())
         return VerificationResult(state, attempt["next_check_at"], None)
     verification_reason = _attempt_verification_reason(attempt, leaf)
     if verification_reason is not None:
         state, reason = "verified", verification_reason
-    elif state == "failed":
-        # Failure-only states have no verification scan cadence.  An ordinary
-        # stored scan may still prove the successor and close the condition,
-        # but a baseline observation never changes their state.
-        if failure_open and failure_clear_reason is not None:
-            _clear_failure_condition_on(conn, attempt, started_at.isoformat())
-        return VerificationResult(state, attempt["next_check_at"], None)
     elif not count_check:
         # Acceptance may recognize successor evidence already stored by a
         # completed scan, but it never turns an old observation into a raise

@@ -42,6 +42,7 @@ from cert_watch.services.renewal_reports import (
     RenewalReportInput,
     clear_renewal_failure,
     create_report,
+    expire_renewal_leases,
     resolve_target,
 )
 from tests._helpers import seed_scanned
@@ -1335,7 +1336,7 @@ def test_manual_and_succeeded_attempts_carry_failure_origin(estate):
     assert latest["failure_cleared_at"] is None
 
 
-def test_successor_scan_verifies_failed_attempt_and_clears_condition(estate):
+def test_successor_scan_clears_failed_condition_without_verifying_attempt(estate):
     db, _host_id, _cert_id, _baseline, settings = estate
     failed = _post(estate, "failed", NOW)
     repo = SqliteAlertRepository(db)
@@ -1361,8 +1362,8 @@ def test_successor_scan_verifies_failed_attempt_and_clears_condition(estate):
         started_at=observed_at,
         settings=settings,
     )
-    assert result is not None and result.state == "verified"
-    assert result.reason == "observed_successor"
+    assert result is not None and result.state == "failed"
+    assert result.reason is None
     assert _row(db)["failure_cleared_at"] == observed_at.isoformat()
     row = _row(db)
     assert row["failure_attempt_id"] == failed.attempt_id
@@ -1378,7 +1379,70 @@ def test_successor_scan_verifies_failed_attempt_and_clears_condition(estate):
     assert alerts[0]["closed_at"] is not None
 
 
-def test_explicit_manual_clear_marks_reason_and_closes_on_rule_pass(estate):
+def test_carried_failure_does_not_change_started_or_failed_reduction(estate):
+    db, _host_id, _cert_id, _baseline, _settings = estate
+    _post(estate, "failed", NOW)
+    started = _post(estate, "started", NOW + timedelta(hours=1))
+    first_open = _row(db)
+    repeated = _post(estate, "started", NOW + timedelta(hours=20))
+    after_repeat = _row(db)
+
+    assert repeated.attempt_id == started.attempt_id
+    assert (repeated.state, repeated.effect) == ("open", "duplicate")
+    assert after_repeat["lease_expires_at"] == first_open["lease_expires_at"]
+
+    failed = _post(estate, "failed", NOW + timedelta(hours=21))
+    assert (failed.state, failed.effect) == ("failed", "applied")
+    assert _row(db)["state"] == "failed"
+
+
+def test_verified_run_owns_late_correlated_failure(estate):
+    db, _host_id, _cert_id, _baseline, _settings = estate
+    successor = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    first = _post(
+        estate,
+        "succeeded",
+        NOW,
+        correlation_id="run-1",
+        new_fingerprint=successor.fingerprint_sha256,
+    )
+    assert _serve(estate, successor, NOW + timedelta(minutes=10)).state == "verified"
+
+    late = _post(
+        estate,
+        "failed",
+        NOW + timedelta(minutes=20),
+        correlation_id="run-1",
+    )
+    assert late.attempt_id == first.attempt_id
+    assert (late.state, late.effect) == ("verified", "ignored_late")
+    with _connect(db) as conn:
+        attempts = conn.execute("SELECT count(*) FROM renewal_attempts").fetchone()[0]
+    assert attempts == 1
+    assert _row(db)["failure_reported_at"] is None
+
+
+def test_abandoned_attempt_is_not_verified_to_clear_failure(estate):
+    db, _host_id, _cert_id, _baseline, _settings = estate
+    successor = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    _post(
+        estate,
+        "failed",
+        NOW,
+        new_fingerprint=successor.fingerprint_sha256,
+    )
+    _post(estate, "started", NOW + timedelta(hours=1))
+    expire_renewal_leases(db, now=NOW + timedelta(hours=25))
+
+    result = _serve(estate, successor, NOW + timedelta(hours=26))
+    row = _row(db)
+    assert result is not None and result.state == "abandoned"
+    assert row["state"] == "abandoned"
+    assert row["verified_fingerprint"] is None
+    assert row["failure_cleared_at"] == (NOW + timedelta(hours=26)).isoformat()
+
+
+def test_explicit_manual_clear_closes_on_rule_pass_without_changing_attempt(estate):
     db, host_id, _cert_id, _baseline, _settings = estate
     _post(estate, "failed", NOW)
     repo = SqliteAlertRepository(db)
@@ -1403,7 +1467,7 @@ def test_explicit_manual_clear_marks_reason_and_closes_on_rule_pass(estate):
         now=NOW + timedelta(minutes=2),
     )
     row = _row(db)
-    assert row["closed_reason"] == "manual_clear"
+    assert row["closed_reason"] == "reported_failed"
     assert row["failure_cleared_at"] == (NOW + timedelta(minutes=2)).isoformat()
     assert row["rule_due_at"] == row["failure_cleared_at"]
     evaluate_renewal_report_alerts(db, repo)
@@ -1619,7 +1683,7 @@ def test_failure_restart_updates_condition_without_rewriting_attempt_claim(estat
     )
     row = _row(db)
     assert row["failure_expected_fingerprint"] == fresh_expected.fingerprint_sha256
-    assert row["new_fingerprint"] == old_expected.fingerprint_sha256
+    assert row["new_fingerprint"] is None
 
     unrelated_result = _serve(estate, unrelated, NOW + timedelta(minutes=5))
     row = _row(db)
@@ -1654,18 +1718,12 @@ def test_failure_restart_without_fingerprint_preserves_attempt_claim(estate):
     _post(estate, "failed", NOW + timedelta(minutes=2))
     row = _row(db)
     assert row["failure_expected_fingerprint"] is None
-    assert row["new_fingerprint"] == old_expected.fingerprint_sha256
+    assert row["new_fingerprint"] is None
 
     result = _serve(estate, successor, NOW + timedelta(minutes=5))
     row = _row(db)
     assert result is not None and result.state == "failed"
-    assert row["failure_cleared_at"] is None
-
-    result = _serve(estate, old_expected, NOW + timedelta(minutes=10))
-    row = _row(db)
-    assert result is not None and result.state == "verified"
-    assert result.reason == "reported_fingerprint"
-    assert row["failure_cleared_at"] == (NOW + timedelta(minutes=10)).isoformat()
+    assert row["failure_cleared_at"] == (NOW + timedelta(minutes=5)).isoformat()
 
 
 def test_failed_report_on_carrier_changes_only_failure_evidence(estate):
@@ -1681,21 +1739,7 @@ def test_failed_report_on_carrier_changes_only_failure_evidence(estate):
         new_fingerprint=claim.fingerprint_sha256,
     )
     before = _row(db)
-    s4_fields = (
-        "state",
-        "baseline_fingerprint",
-        "baseline_not_after",
-        "new_fingerprint",
-        "success_received_at",
-        "verification_reason",
-        "verified_fingerprint",
-        "raised_at",
-        "closed_reason",
-        "checks_done",
-        "last_check_at",
-        "next_check_at",
-    )
-    before_s4 = tuple(before[name] for name in s4_fields)
+    assert before["state"] == "verifying"
 
     result = _post(
         estate,
@@ -1704,8 +1748,10 @@ def test_failed_report_on_carrier_changes_only_failure_evidence(estate):
         new_fingerprint=latest.fingerprint_sha256,
     )
     after = _row(db)
-    assert result.state == "verifying"
-    assert tuple(after[name] for name in s4_fields) == before_s4
+    assert result.state == "failed"
+    assert after["state"] == "failed"
+    assert after["new_fingerprint"] == before["new_fingerprint"]
+    assert after["closed_reason"] == "reported_failed"
     assert after["failure_expected_fingerprint"] == latest.fingerprint_sha256
 
 
@@ -1750,7 +1796,7 @@ def test_failure_after_verified_opens_new_cycle_and_baseline_scan_does_not_clear
     assert _row(db)["failure_cleared_at"] is None
 
     expected_result = _serve(estate, expected, NOW + timedelta(minutes=20))
-    assert expected_result is not None and expected_result.state == "verified"
+    assert expected_result is not None and expected_result.state == "failed"
     assert _row(db)["failure_cleared_at"] == (
         NOW + timedelta(minutes=20)
     ).isoformat()

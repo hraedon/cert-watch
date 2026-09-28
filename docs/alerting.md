@@ -29,9 +29,11 @@ established by observing a successor certificate, not by an operator report.
 **A failure condition clears when any of these happens:**
 
 - A scan after the failure report moves the carrying renewal attempt into the
-  verified state. Open, verifying, failed, and deployment-warning attempts are
-  all eligible for this transition. A failure report never changes the
-  attempt's own certificate claim or other verification details.
+  verified state. Open, verifying, and deployment-warning attempts are eligible
+  for this transition under the ordinary renewal rules. Failure tracking never
+  changes renewal-attempt behavior: reports and scans produce the same state,
+  lease, certificate claim, verification record, and result they would produce
+  if no failure condition were being tracked.
 - A stored scan sees a certificate other than the attempt's baseline and it
   matches the most recent certificate fingerprint named by a failed or
   succeeded report during this failure condition. If no such fingerprint was
@@ -101,15 +103,15 @@ identifier are never copied into the alert or its delivery.
   that first received it. Any later attempt opened before resolution carries
   the original failure identifier and report time. A `started` report, a live
   lease, a bare success claim, lease expiry, or the compatibility
-  legacy pending-status write-through does not clear it. Failed and other
-  failure-marked attempts are evaluated when an ordinary scan is stored; a
-  successor leaf verifies the carrying attempt and resolves the same provider
-  incident.
+  legacy pending-status write-through does not clear it. An ordinary stored
+  scan can resolve the same provider incident when it satisfies the clearing
+  rule above. It does not make a failed or abandoned attempt verified; only
+  transitions allowed by the ordinary renewal state machine occur.
 - Operators may explicitly clear the condition with
   `POST /hosts/{id}/renewal-failure/clear` or its JSON peer
   `POST /api/hosts/{id}/renewal-failure/clear`. The action requires write
-  access to the endpoint's host tags, records `closed_reason=manual_clear` and
-  an audit event, and closes the alert on the next rule pass.
+  access to the endpoint's host tags, records an audit event, and closes the
+  alert on the next rule pass.
 - Failure alert text is fixed server wording with an endpoint-detail link. It
   never contains the report message, tool, correlation identifier, reporting
   key, or recipient identities. An endpoint with no scanned leaf retains its

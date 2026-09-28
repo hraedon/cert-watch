@@ -57,7 +57,7 @@ def test_clear_route_marks_failure_and_audits(reload_app, tmp_path, adapter):
                WHERE action='renewal_failure.clear' ORDER BY rowid DESC LIMIT 1"""
         ).fetchone()
     assert attempt["failure_cleared_at"] is not None
-    assert attempt["closed_reason"] == "manual_clear"
+    assert attempt["closed_reason"] is None
     # The application scheduler may already have consumed the rule wake while
     # the TestClient lifespan is active; the durable clearing state must remain.
     assert (audit["action"], audit["target_id"]) == (

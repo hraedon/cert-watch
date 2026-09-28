@@ -99,8 +99,9 @@ The durable condition remains attached to later attempts until stored scan
 evidence shows a leaf different from its baseline. A carrying attempt's own
 `new_fingerprint` takes precedence; otherwise the original failure report's
 expected fingerprint applies, and without either claim any successor clears
-the condition. These condition rules do not alter the carrying attempt's S4
-verification state. A failure reported before any baseline can be
+the condition. These condition rules do not alter the carrying attempt's
+renewal state or verification behavior. A failure reported before any baseline
+can be
 cleared by scan evidence only when it has an explicit matching
 `new_fingerprint`. Endpoint deletion or an authorized explicit operator clear
 also ends the condition. A start report, lease, bare success claim, lease
