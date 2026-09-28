@@ -38,7 +38,7 @@ class AlertAdapter(Protocol):
     def build(self, msg: OutboundMessage, config: WebhookConfig) -> AlertRequest: ...
 
 def _status_color(alert_type: str) -> int:
-    if alert_type == "expired":
+    if alert_type in ("expired", "renewal_failed"):
         return 0xCC0000
     if alert_type in (
         "expiry_warning", "drift", "renewal_stalled", "renewal_not_deployed",
@@ -52,7 +52,8 @@ def _status_urgency(alert_type: str) -> str:
     if alert_type == "expired":
         return "attention"
     if alert_type in (
-        "expiry_warning", "renewal_stalled", "renewal_not_deployed", "policy_violation"
+        "expiry_warning", "renewal_stalled", "renewal_not_deployed", "renewal_failed",
+        "policy_violation",
     ):
         return "warning"
     return "default"
@@ -65,6 +66,8 @@ def _pd_severity(alert_type: str, threshold_days: int | None) -> str:
         if threshold_days is not None and threshold_days <= 3:
             return "error"
         return "warning"
+    if alert_type == "renewal_failed":
+        return "error"
     if alert_type in ("renewal_stalled", "renewal_not_deployed"):
         return "warning"
     if alert_type == "policy_violation":
@@ -90,6 +93,7 @@ _ALERT_NAMES = {
     "drift": "CertDrift",
     "renewal_stalled": "CertRenewalStalled",
     "renewal_not_deployed": "CertRenewalNotDeployed",
+    "renewal_failed": "CertRenewalFailed",
     "scan_failure": "CertScanFailure",
     "policy_violation": "CertPolicyViolation",
 }
@@ -458,7 +462,7 @@ class PagerDutyAdapter:
 
 
 def _slack_color(alert_type: str) -> str:
-    if alert_type == "expired":
+    if alert_type in ("expired", "renewal_failed"):
         return "danger"
     if alert_type in ("expiry_warning", "renewal_stalled", "renewal_not_deployed"):
         return "warning"

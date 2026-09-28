@@ -142,6 +142,22 @@ def test_attempt_scoped_alert_requires_nonempty_provider_key(dedupe_key):
         provider_incident_key("renewal_not_deployed", dedupe_key)
 
 
+def test_renewal_failed_is_registered_in_every_adapter_table():
+    message = _alert(
+        alert_type="renewal_failed",
+        threshold_days=None,
+        hostname="failed.example.test",
+    )
+    assert _status_color("renewal_failed") == 0xCC0000
+    assert _status_urgency("renewal_failed") == "warning"
+    assert _pd_severity("renewal_failed", None) == "error"
+    assert _slack_color("renewal_failed") == "danger"
+    alertmanager = json.loads(
+        AlertmanagerAdapter().build(message, _config("alertmanager")).body
+    )
+    assert alertmanager["alerts"][0]["labels"]["alertname"] == "CertRenewalFailed"
+
+
 # ---------------------------------------------------------------------------
 # Generic adapter — backward-compatible behaviour
 # ---------------------------------------------------------------------------

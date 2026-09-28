@@ -12,6 +12,7 @@ step.
 | **Expiry warning** | A certificate crosses an expiry threshold (see below). | Once per threshold. The next threshold is a new alert. |
 | **Expired** | A certificate has expired. | Once. |
 | **Renewal stalled** | A certificate is inside its renewal window (`CERT_WATCH_RENEWAL_WINDOW_DAYS`, 30 by default) and no successor has appeared. | Once per certificate, paused during the first live renewal-attempt lease for that served certificate. The weekly renewal digest is the reminder. |
+| **Renewal failed** | Renewal automation reports failure for an endpoint with a current scanned leaf. A failure reported after a deployment warning is recorded on that same renewal cycle and raises this alert alongside the warning. | Once per continuous failure condition. Later started, manual in-progress, or succeeded attempts carry the condition without opening another provider incident. A failure after a manual clear starts a new incident on the same active attempt without changing its renewal state. See the clearing rule below. |
 | **Renewal not deployed** | Renewal automation reported success, but a qualifying stored scan still sees the previous certificate or a different certificate than the reported fingerprint. | Once per renewal attempt. It closes when a later scan verifies the successor or the endpoint is deleted. |
 | **Policy violation** | A scan finds a critical or warning finding from the posture policy, such as SHA-1, short keys or an old TLS version. | Once while the violation persists. If it clears and comes back, again. |
 | **Drift** | A scan sees a high-severity change: a new issuer, a smaller key, a signature downgrade to SHA-1, a TLS version downgrade, or a posture-grade drop. Turn off with `CERT_WATCH_DRIFT_ALERTS=0`. | Each drift is its own alert. |
@@ -24,6 +25,32 @@ condition and the automation-facing `renewal_needed` webhook; the overdue event
 is still recorded. It never suppresses expiry warnings or expired alerts.
 Repeated starts do not extend or re-grant the lease. Renewal completion is
 established by observing a successor certificate, not by an operator report.
+
+**A failure condition clears when any of these happens:**
+
+- A scan after the failure report moves the carrying renewal attempt into the
+  verified state. Open, verifying, and deployment-warning attempts are eligible
+  for this transition under the ordinary renewal rules. One exception is a
+  failed report tied to an already verified attempt by its correlation: it is
+  ignored as late even after the served certificate changes, because the
+  verified attempt continues to own reports with that correlation.
+- A stored scan sees a certificate other than the attempt's baseline and it
+  matches the most recent certificate fingerprint named by a failed or
+  succeeded report during this failure condition. If no such fingerprint was
+  reported, any non-baseline certificate normally clears the failure. The
+  exception is an attempt whose own reported certificate has not yet been
+  served: an unrelated certificate does not clear its failure in any state.
+  If a later report names a different fingerprint, that newer fingerprint can
+  clear the failure while the renewal itself continues to be judged against
+  its original claim.
+- An operator clears the failure manually.
+- The endpoint is deleted.
+
+A scan that still serves the baseline never clears a failure. After a manual
+clear, another failure can restart the condition in place only on a
+non-terminal attempt; the restart leaves the renewal state and claim intact.
+If the previous attempt is already verified, the failure opens a new attempt
+whose baseline is the certificate currently being served.
 
 ### Renewal verification
 
@@ -47,30 +74,48 @@ A failed network scan or database store is not verification evidence. It sets
 the attempt's blocked timestamp, leaves the state and alert unchanged, and
 reschedules using the same band. If evaluating an otherwise stored scan fails,
 cert-watch retries with exponential backoff from five minutes up to that band's
-cadence. A certificate different from both the
-baseline and a supplied `new_fingerprint` is a mismatch and raises the same
-warning only on a qualifying post-grace scan. The report's free-form message, tool and
-correlation identifier are never copied into the alert or its delivery.
+cadence. A certificate different from both the baseline and a supplied
+replacement fingerprint is a mismatch and raises the same warning only on a
+qualifying post-grace scan. The report's free-form message, tool and correlation
+identifier are never copied into the alert or its delivery.
 
-#### S4 verification rules
+#### Renewal verification details
 
 - Any success, whether it addresses the endpoint by hostname or by an explicit
   `cert_fingerprint`, can use the current leaf's predecessor as its baseline
   only when that replacement was observed in the last 24 hours, the current
   leaf has never appeared as an old lineage fingerprint on the endpoint, and
   no earlier attempt has verified or used the current leaf as its baseline.
-  This applies after any terminal attempt. Send `new_fingerprint` for exact
-  verification. An explicit predecessor target still has a seven-day endpoint
-  lookup window, but that wider addressing window does not change the baseline
-  rules.
+  This applies after any terminal attempt. Send a replacement fingerprint for
+  exact verification. An explicit predecessor target still has a seven-day
+  endpoint lookup window, but that wider addressing window does not change the
+  baseline rules.
 - A verified attempt owns late reports with its correlation. Bare successes
   and new correlations received within 24 hours of its accepted success are
-  also duplicates. After that window, or when `new_fingerprint` names a leaf
+  also duplicates. After that window, or when the report names a leaf
   different from the verified leaf, a success opens a new renewal cycle.
-- Reports never move an attempt out of `not_deployed`. In particular, a
-  `failed` report is retained with `no_change`; only stored scan evidence for
-  the expected or observed successor verifies the attempt and closes its
-  alert.
+- Reports never move an attempt out of the deployment-warning state. In
+  particular, a `failed` report is retained without changing the deployment
+  decision. It raises a renewal-failed alert alongside the deployment warning;
+  only stored scan evidence for the expected or observed successor verifies
+  the attempt and closes both alerts.
+- A failure belongs to the endpoint's renewal cycle, not just the attempt row
+  that first received it. Any later attempt opened before resolution carries
+  the original failure identifier and report time. A `started` report, a live
+  lease, a bare success claim, lease expiry, or the compatibility
+  legacy pending-status write-through does not clear it. An ordinary stored
+  scan can resolve the same provider incident when it satisfies the clearing
+  rule above. It does not make a failed or abandoned attempt verified; only
+  transitions allowed by the ordinary renewal state machine occur.
+- Operators may explicitly clear the condition with
+  `POST /hosts/{id}/renewal-failure/clear` or its JSON peer
+  `POST /api/hosts/{id}/renewal-failure/clear`. The action requires write
+  access to the endpoint's host tags, records an audit event, and closes the
+  alert on the next rule pass.
+- Failure alert text is fixed server wording with an endpoint-detail link. It
+  never contains the report message, tool, correlation identifier, reporting
+  key, or recipient identities. An endpoint with no scanned leaf retains its
+  attempt history but cannot carry either certificate-bound renewal alert.
 
 ### Expiry thresholds
 
@@ -200,12 +245,24 @@ rescan that finds the same certificate doesn't count as a renewal.
 | Digest | Sent | Contents |
 |---|---|---|
 | **Expiry digest** (digest mode only) | Once per week per recipient | Certificates expiring within the window (the largest alert-group digest window, 30 days by default); a global version and one per host owner |
-| **Renewal digest** | Weekly | Renewals seen, renewals overdue, and certificates whose replacement has a shorter lifetime |
+| **Renewal digest** | Weekly | Renewals seen, renewals overdue, shorter replacement lifetimes, every **Renewal failed** condition that overlapped the period (including one since cleared), and current **Reported but not deployed** transitions raised during the period |
 | **Orphan notice** | Weekly when there are orphans, to local administrator accounts with an email | Certificates nobody specific is watching |
 
 Each digest is claimed per recipient and per period. So a restart, a second
 process or a changed setting mid-week never sends one twice, and a partial
 failure retries only the recipients that didn't get it.
+
+The two renewal-problem sections read durable attempt transition timestamps,
+not Event stream or alert-delivery rows. A carried failure condition appears
+once, under the attempt that first reported it, when it was open at any point
+in the digest period; verification or manual clearing later in the same period
+does not erase that history. A superseding attempt without scan evidence also
+does not erase it. Current not-deployed conditions appear once using their
+raise time (or their accepted report time for upgraded historical rows). Owner copies use
+the endpoint's owner email when the digest is sent; the global copy and delivery
+ledger behave like the existing renewal sections. Digest content includes only
+the endpoint and transition time, never report text, tool or correlation data,
+key identity, tags, or recipient identities.
 
 ## The renewal webhook
 

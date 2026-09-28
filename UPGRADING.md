@@ -75,6 +75,42 @@ unchanged scan can raise `renewal_not_deployed` with
 `renewal_verify_grace_minutes` (5 minutes by default, accepted range 5–15).
 Rollback requires restoring the pre-migration backup.
 
+### Migration 0049
+
+Migration **0049** (still unreleased, so its backfill is updated in place) adds
+the originating `failure_attempt_id`, `failure_reported_at`,
+`failure_cleared_at`, the condition's expected fingerprint, and a rule-only
+wake timestamp to renewal attempts. It
+backfills the originating attempt and first retained,
+accepted failed report for every stored failure, then walks each endpoint's
+attempt history to carry the earliest unresolved failure across later attempts.
+Only stored scan history, certificate-lineage evidence, or a later attempt's
+durable verified result satisfying the baseline/expected-fingerprint predicate
+ends a historical condition; a changed baseline on a later attempt is not
+evidence. The backfill cannot infer an observation that was never committed to
+stored scan history, so such a condition remains open for a later scan or an
+operator clear.
+Every still-unresolved stored failure is
+therefore eligible to alert once at the first rule pass after upgrade,
+regardless of its age. It also fills missing historical `not_deployed` raise
+times from the attempt's accepted report time.
+
+The durable condition remains attached to later attempts until stored scan
+evidence shows a leaf different from its baseline. A carrying attempt's own
+`new_fingerprint` takes precedence; otherwise the original failure report's
+expected fingerprint applies, and without either claim any successor clears
+the condition. These condition rules do not alter the carrying attempt's
+renewal state or verification behavior. A failure reported before any baseline
+can be
+cleared by scan evidence only when it has an explicit matching
+`new_fingerprint`. Endpoint deletion or an authorized explicit operator clear
+also ends the condition. A start report, lease, bare success claim, lease
+expiry, or echoed `renewal_status=pending` write does not clear it. Existing
+report messages,
+tools, correlations, key identities and recipient identities are not copied
+into the marker or digest. Rollback requires restoring the pre-migration
+backup.
+
 ## Upgrading from 1.1.0 to 1.1.1
 
 API-key audit actors now use the stable `api_key:<id>` format instead of the

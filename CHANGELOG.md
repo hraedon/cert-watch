@@ -35,6 +35,29 @@ All notable changes to cert-watch are documented in this file.
   safe predecessor observations from the prior 24 hours, verified endpoints
   can open later renewal cycles, and evaluation errors back off exponentially
   to the expiry-band cadence (#118 S4).
+- Failed renewal reports now wake the alert rule pass and raise an
+  endpoint-cycle `renewal_failed` alert with fixed, non-report-derived text.
+  The attempt that first reports the failure supplies the stable provider key;
+  later started, manual in-progress, and succeeded attempts carry the same
+  condition and incident. It closes when a scan after the failure moves its
+  carrying attempt into the verified state, when a non-baseline stored leaf
+  matches the latest fingerprint carried by a failure or success report in the
+  condition, when the endpoint is deleted, or an authorized operator uses the
+  new HTML/JSON explicit clear action. With no condition fingerprint, any
+  successor clears it unless the attempt has an unserved certificate claim of
+  its own. A later failure after a manual clear restarts a new condition on the
+  same non-terminal attempt without changing its renewal state or claim. A
+  genuinely new failure after verification opens a new attempt from the served
+  leaf, while a late retry owned by the verified run remains ignored.
+  Pre-scan failures defer their alert until a leaf exists and
+  keep that incident stable across later leaf changes. Failed reports use a
+  dedicated rule wake and never schedule a TLS scan. Failures reported after
+  `not_deployed` raise both conditions. Renewal
+  digests now include every failure condition open at any point in the period,
+  including superseded or since-cleared conditions, plus current **Reported but
+  not deployed** transitions, without depending on Event stream retention
+  (#118 S5). Closing an alert by dedupe key now also resolves provider
+  incidents whose delivery is currently in progress.
 
 ### Changed
 
@@ -49,6 +72,22 @@ All notable changes to cert-watch are documented in this file.
   when a same-certificate restart is visible but cannot suppress again
   (#118 S3).
 
+### Fixed
+
+- **Verified-correlation late-failure exception:** a failed renewal report
+  carrying an already verified attempt's correlation is now treated as
+  `ignored_late` even when the served leaf has since changed. This fixes the
+  attempt state machine to enforce its documented correlation ownership rule;
+  it is the one deliberate departure from the reducer at this work's merge
+  base. A differential test runs reports, direct stored-leaf evidence, manual
+  clears, compatibility status writes, and generated restart sequences against
+  merge-base copies of both the report and verification reducers. It compares
+  returned state and effect, stored report effect, and every attempt column
+  except the five failure-overlay columns migration 0049 adds, runs the
+  store-time failure hook on the new side, and stops a sequence when it
+  records that one allowed difference, which must occur on exactly the
+  recorded sequences (#118 S5).
+
 ### Upgrade notes
 
 - Migration 0046 adds renewal report, attempt/correlation history and
@@ -60,6 +99,9 @@ All notable changes to cert-watch are documented in this file.
   reports. See [UPGRADING.md](UPGRADING.md).
 - Migration 0048 adds renewal-verification evidence fields and short-lived
   endpoint scan claims. See [UPGRADING.md](UPGRADING.md).
+- Migration 0049 adds and backfills the failure condition identity, expected
+  fingerprint, first accepted failure timestamp, clearing time, and rule-pass
+  wake used by alerts and digests. See [UPGRADING.md](UPGRADING.md).
 - Migration 0045 adds explicit binding metadata to API keys. Existing keys
   remain bound to all endpoints. See [UPGRADING.md](UPGRADING.md).
 

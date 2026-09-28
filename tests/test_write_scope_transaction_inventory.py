@@ -172,6 +172,15 @@ _target(
     "PATCH /api/hosts/{host_id}/settings",
 )
 _target(
+    _Contract(
+        renewal_reports.clear_renewal_failure,
+        renewal_reports.clear_renewal_failure,
+        "UPDATE renewal_attempts",
+    ),
+    "POST /hosts/{host_id}/renewal-failure/clear",
+    "POST /api/hosts/{host_id}/renewal-failure/clear",
+)
+_target(
     _Contract(host_management.update_expected_issuers,
               host_management.update_expected_issuers,
               '"UPDATE hosts SET expected_issuers'),
@@ -249,6 +258,11 @@ _route_service(
     host_management.update_host_settings,
     "POST /hosts/{host_id}/settings",
     "PATCH /api/hosts/{host_id}/settings",
+)
+_route_service(
+    renewal_reports.clear_renewal_failure,
+    "POST /hosts/{host_id}/renewal-failure/clear",
+    "POST /api/hosts/{host_id}/renewal-failure/clear",
 )
 _route_service(
     host_management.update_expected_issuers,

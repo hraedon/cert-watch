@@ -192,6 +192,10 @@ _RACE_CASES = {
         ("POST", "/hosts/{host_id}/settings"),
         ("PATCH", "/api/hosts/{host_id}/settings"),
     ),
+    "renewal_failure_clear": (
+        ("POST", "/hosts/{host_id}/renewal-failure/clear"),
+        ("POST", "/api/hosts/{host_id}/renewal-failure/clear"),
+    ),
     "notes": (
         ("POST", "/hosts/{host_id}/notes"),
         ("PATCH", "/api/hosts/{host_id}/notes"),
@@ -631,6 +635,60 @@ def test_host_settings(tmp_path, monkeypatch, adapter):
         None,
         "pending",
     )
+
+
+@_race_adapters("renewal_failure_clear")
+def test_renewal_failure_clear(tmp_path, monkeypatch, adapter):
+    db, host_id, _cert_id = _estate(tmp_path)
+    with _connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                suppresses_stalled,received_at,baseline_lease_claimed,
+                failure_attempt_id,failure_reported_at,rule_due_at)
+               VALUES ('failed-cycle',?,1,'test','failed',1,0,?,1,
+                       'failed-cycle',?,?)""",
+            (host_id, "2026-09-28T12:00:00+00:00",
+             "2026-09-28T12:00:00+00:00", "2026-09-28T12:00:00+00:00"),
+        )
+        conn.commit()
+
+    module_name = (
+        "cert_watch.routes.hosts"
+        if adapter == "html"
+        else "cert_watch.routes.api.hosts"
+    )
+    route_module = importlib.import_module(module_name)
+    real_scope_check = route_module.scope_write_denied
+    moved: list[str] = []
+
+    def check_then_move(*args, **kwargs):
+        denied = real_scope_check(*args, **kwargs)
+        if denied is None and not moved:
+            moved.append(_move_host(db, host_id))
+        return denied
+
+    monkeypatch.setattr(route_module, "scope_write_denied", check_then_move)
+    with _team_a_client(db, tmp_path) as client:
+        if adapter == "html":
+            r = client.post(
+                f"/hosts/{host_id}/renewal-failure/clear", follow_redirects=False
+            )
+        else:
+            r = client.post(
+                f"/api/hosts/{host_id}/renewal-failure/clear", json={}
+            )
+    assert moved == ["moved"]
+    if adapter == "html":
+        assert r.status_code == 303
+        assert "outside%20your%20team%20scope" in r.headers["location"]
+    else:
+        assert (r.status_code, r.json()) == (403, _REFUSED)
+    with _connect(db) as conn:
+        row = conn.execute(
+            "SELECT failure_cleared_at FROM renewal_attempts WHERE attempt_id='failed-cycle'"
+        ).fetchone()
+    assert row["failure_cleared_at"] is None
 
 
 def test_expected_issuers_rechecks_scope_in_transaction(tmp_path, monkeypatch):

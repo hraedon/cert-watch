@@ -36,6 +36,277 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
 
 
+def test_migration_0049_backfills_first_accepted_failure(tmp_path: Path) -> None:
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.migrations.m0049_renewal_failure_marker import upgrade
+
+    db = tmp_path / "failure-marker.sqlite3"
+    init_schema(db)
+    host_id = SqliteHostRepository(db).add("failure-marker.example.test", 443)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                suppresses_stalled,received_at,baseline_lease_claimed)
+               VALUES ('attempt',?,1,'test','not_deployed',1,0,?,1)""",
+            (host_id, "2026-09-20T00:00:00+00:00"),
+        )
+        for report_id, received_at, effect in (
+            ("ignored", "2026-09-21T00:00:00+00:00", "ignored_late"),
+            ("first", "2026-09-22T00:00:00+00:00", "no_change"),
+            ("repeat", "2026-09-23T00:00:00+00:00", "no_change"),
+        ):
+            conn.execute(
+                """INSERT INTO renewal_reports
+                   (report_id,host_id,hostname_snapshot,port_snapshot,outcome,
+                    received_at,source,effect,attempt_id)
+                   VALUES (?,?,?,443,'failed',?,'test',?,'attempt')""",
+                (report_id, host_id, "failure-marker.example.test", received_at, effect),
+            )
+        upgrade(conn)
+        upgrade(conn)
+        marker = conn.execute(
+            """SELECT failure_attempt_id,failure_reported_at,rule_due_at,raised_at
+               FROM renewal_attempts WHERE attempt_id='attempt'"""
+        ).fetchone()
+    assert tuple(marker) == (
+        "attempt",
+        "2026-09-22T00:00:00+00:00",
+        "2026-09-22T00:00:00+00:00",
+        "2026-09-20T00:00:00+00:00",
+    )
+
+
+def test_migration_0049_carries_failure_to_current_attempt_and_clears_once(
+    tmp_path: Path,
+) -> None:
+    from cert_watch.alerting.rules.renewal_reports import evaluate_renewal_report_alerts
+    from cert_watch.certificate_model import parse_certificate
+    from cert_watch.config import Settings
+    from cert_watch.database import SqliteAlertRepository, SqliteHostRepository
+    from cert_watch.database.connection import _connect
+    from cert_watch.migrations.m0049_renewal_failure_marker import upgrade
+    from cert_watch.renewal_verification import evaluate_after_scan
+    from cert_watch.scan import ScannedEntry, store_scanned
+    from tests._helpers import seed_scanned
+    from tests.conftest import _make_cert
+
+    db = tmp_path / "failure-carry.sqlite3"
+    init_schema(db)
+    hostname = "failure-carry.example.test"
+    host_id = SqliteHostRepository(db).add(hostname, 443)
+    baseline = parse_certificate(_make_cert(hostname, days_valid=60).der)
+    successor = parse_certificate(_make_cert(hostname, days_valid=90).der)
+    seed_scanned(db, hostname, 443, baseline)
+    failed_at = datetime(2026, 9, 20, tzinfo=UTC).isoformat()
+    started_at = datetime(2026, 9, 21, tzinfo=UTC).isoformat()
+    with _connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+                (attempt_id,host_id,is_current,source,state,opened_seq,
+                baseline_fingerprint,baseline_not_after,new_fingerprint,suppresses_stalled,
+                received_at,baseline_lease_claimed)
+               VALUES ('failed-origin',?,0,'test','failed',1,?,?,?,0,?,1)""",
+            (
+                host_id,
+                baseline.fingerprint_sha256,
+                baseline.not_after.isoformat(),
+                successor.fingerprint_sha256,
+                failed_at,
+            ),
+        )
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                baseline_fingerprint,baseline_not_after,suppresses_stalled,
+                received_at,baseline_lease_claimed)
+               VALUES ('retry',?,1,'test','open',2,?,?,0,?,0)""",
+            (host_id, baseline.fingerprint_sha256, baseline.not_after.isoformat(), started_at),
+        )
+        conn.execute(
+            """INSERT INTO renewal_reports
+               (report_id,host_id,hostname_snapshot,port_snapshot,outcome,
+                received_at,source,effect,attempt_id)
+               VALUES ('failure-report',?,?,443,'failed',?,'test','applied','failed-origin')""",
+            (host_id, hostname, failed_at),
+        )
+        upgrade(conn)
+        conn.commit()
+        attempts = conn.execute(
+            """SELECT attempt_id,failure_attempt_id,failure_reported_at,
+                      failure_expected_fingerprint,rule_due_at
+               FROM renewal_attempts ORDER BY opened_seq"""
+        ).fetchall()
+    assert [row["failure_attempt_id"] for row in attempts] == [
+        "failed-origin",
+        "failed-origin",
+    ]
+    assert attempts[0]["rule_due_at"] is None
+    assert attempts[1]["rule_due_at"] == failed_at
+    assert [row["failure_expected_fingerprint"] for row in attempts] == [
+        successor.fingerprint_sha256,
+        successor.fingerprint_sha256,
+    ]
+
+    repo = SqliteAlertRepository(db)
+    assert len(evaluate_renewal_report_alerts(db, repo)) == 1
+    observed_at = datetime(2026, 9, 22, tzinfo=UTC)
+    store_scanned(
+        ScannedEntry(host=hostname, port=443, leaf=successor, chain=[]), db
+    )
+    result = evaluate_after_scan(
+        db,
+        hostname,
+        443,
+        successor.fingerprint_sha256,
+        started_at=observed_at,
+        settings=Settings(db_path=db, data_dir=tmp_path),
+    )
+    assert result is not None and result.state == "verified"
+    assert evaluate_renewal_report_alerts(db, repo) == []
+    assert evaluate_renewal_report_alerts(db, repo) == []
+    with _connect(db) as conn:
+        alerts = conn.execute(
+            "SELECT closed_at FROM alerts WHERE alert_type='renewal_failed'"
+        ).fetchall()
+    assert len(alerts) == 1
+    assert alerts[0]["closed_at"] is not None
+
+
+def test_migration_0049_does_not_use_changed_attempt_baseline_as_evidence(
+    tmp_path: Path,
+) -> None:
+    from cert_watch.certificate_model import parse_certificate
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.database.connection import _connect
+    from cert_watch.migrations.m0049_renewal_failure_marker import upgrade
+    from tests._helpers import seed_scanned
+    from tests.conftest import _make_cert
+
+    db = tmp_path / "failure-explicit-predecessor.sqlite3"
+    init_schema(db)
+    hostname = "explicit-predecessor.example.test"
+    host_id = SqliteHostRepository(db).add(hostname, 443)
+    baseline = parse_certificate(_make_cert(hostname, days_valid=60).der)
+    seed_scanned(db, hostname, 443, baseline)
+    failed_at = "2026-09-20T00:00:00+00:00"
+    retry_at = "2026-09-20T00:01:00+00:00"
+    with _connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                baseline_fingerprint,suppresses_stalled,received_at,
+                baseline_lease_claimed)
+               VALUES ('origin',?,0,'test','failed',1,?,0,?,1)""",
+            (host_id, baseline.fingerprint_sha256, failed_at),
+        )
+        conn.execute(
+            """INSERT INTO renewal_reports
+               (report_id,host_id,hostname_snapshot,port_snapshot,outcome,
+                received_at,source,effect,attempt_id)
+               VALUES ('failure',?,?,443,'failed',?,'test','applied','origin')""",
+            (host_id, hostname, failed_at),
+        )
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                baseline_fingerprint,suppresses_stalled,received_at,
+                baseline_lease_claimed)
+               VALUES ('retry',?,1,'test','open',2,?,0,?,1)""",
+            (host_id, "f" * 64, retry_at),
+        )
+        upgrade(conn)
+        rows = conn.execute(
+            """SELECT attempt_id,failure_attempt_id,failure_cleared_at,rule_due_at
+               FROM renewal_attempts ORDER BY opened_seq"""
+        ).fetchall()
+
+    assert [row["failure_attempt_id"] for row in rows] == ["origin", "origin"]
+    assert all(row["failure_cleared_at"] is None for row in rows)
+    assert rows[1]["rule_due_at"] == failed_at
+
+
+def test_migration_0049_uses_durable_verified_successor_evidence(
+    tmp_path: Path,
+) -> None:
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.migrations.m0049_renewal_failure_marker import upgrade
+
+    db = tmp_path / "failure-verified.sqlite3"
+    init_schema(db)
+    hostname = "verified-successor.example.test"
+    host_id = SqliteHostRepository(db).add(hostname, 443)
+    failed_at = "2026-09-20T00:00:00+00:00"
+    verified_at = "2026-09-20T00:01:00+00:00"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                baseline_fingerprint,verified_fingerprint,suppresses_stalled,
+                received_at,success_received_at,baseline_lease_claimed)
+               VALUES ('attempt',?,1,'test','verified',1,?,?,0,?,?,1)""",
+            (host_id, "a" * 64, "b" * 64, failed_at, verified_at),
+        )
+        conn.execute(
+            """INSERT INTO renewal_reports
+               (report_id,host_id,hostname_snapshot,port_snapshot,outcome,
+                received_at,source,effect,attempt_id)
+               VALUES ('failure',?,?,443,'failed',?,'test','applied','attempt')""",
+            (host_id, hostname, failed_at),
+        )
+        upgrade(conn)
+        row = conn.execute(
+            """SELECT failure_attempt_id,failure_cleared_at,rule_due_at
+               FROM renewal_attempts WHERE attempt_id='attempt'"""
+        ).fetchone()
+
+    assert tuple(row) == ("attempt", verified_at, None)
+
+
+def test_migration_0049_second_direct_run_preserves_manual_clear(
+    tmp_path: Path,
+) -> None:
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.migrations.m0049_renewal_failure_marker import upgrade
+
+    db = tmp_path / "failure-manual-clear.sqlite3"
+    init_schema(db)
+    hostname = "manual-clear.example.test"
+    host_id = SqliteHostRepository(db).add(hostname, 443)
+    failed_at = "2026-09-20T00:00:00+00:00"
+    cleared_at = "2026-09-20T00:02:00+00:00"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                baseline_fingerprint,suppresses_stalled,received_at,
+                baseline_lease_claimed)
+               VALUES ('attempt',?,1,'test','failed',1,?,0,?,1)""",
+            (host_id, "a" * 64, failed_at),
+        )
+        conn.execute(
+            """INSERT INTO renewal_reports
+               (report_id,host_id,hostname_snapshot,port_snapshot,outcome,
+                received_at,source,effect,attempt_id)
+               VALUES ('failure',?,?,443,'failed',?,'test','applied','attempt')""",
+            (host_id, hostname, failed_at),
+        )
+        upgrade(conn)
+        conn.execute(
+            """UPDATE renewal_attempts
+               SET failure_cleared_at=?,closed_reason='manual_clear',rule_due_at=?
+               WHERE attempt_id='attempt'""",
+            (cleared_at, cleared_at),
+        )
+        upgrade(conn)
+        row = conn.execute(
+            """SELECT failure_cleared_at,closed_reason,rule_due_at
+               FROM renewal_attempts WHERE attempt_id='attempt'"""
+        ).fetchone()
+
+    assert tuple(row) == (cleared_at, "manual_clear", cleared_at)
+
+
 def _run_concurrent_migration(
     db_path: str,
     start: Any,
@@ -1005,7 +1276,7 @@ def test_migration_0033_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
 
     assert run_pending_migrations(db, backup=False) == [
         "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044",
-        "0045", "0046", "0047", "0048",
+        "0045", "0046", "0047", "0048", "0049",
     ]
     with sqlite3.connect(str(db)) as conn:
         assert "deferred_since" in _table_columns(conn, "alerts")
@@ -1030,7 +1301,7 @@ def test_migration_0033_tolerates_a_column_added_by_hand_without_the_ledger(
 
     assert run_pending_migrations(db, backup=False) == [
         "0033", "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044",
-        "0045", "0046", "0047", "0048",
+        "0045", "0046", "0047", "0048", "0049",
     ]
 
 
@@ -1073,7 +1344,7 @@ def test_migration_0034_backfills_existing_alerts_with_their_trigger_row(
 
     assert run_pending_migrations(db, backup=False) == [
         "0034", "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044",
-        "0045", "0046", "0047", "0048",
+        "0045", "0046", "0047", "0048", "0049",
     ]
     with sqlite3.connect(str(db)) as conn:
         row = conn.execute(
@@ -1106,7 +1377,7 @@ def test_migration_0034_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
 
     assert run_pending_migrations(db, backup=False) == [
         "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044",
-        "0045", "0046", "0047", "0048",
+        "0045", "0046", "0047", "0048", "0049",
     ]
     with sqlite3.connect(str(db)) as conn:
         assert "trigger_cert_id" in _table_columns(conn, "alerts")
@@ -1131,7 +1402,7 @@ def test_migration_0034_tolerates_a_column_added_by_hand_without_the_ledger(
 
     assert run_pending_migrations(db, backup=False) == [
         "0034", "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044",
-        "0045", "0046", "0047", "0048",
+        "0045", "0046", "0047", "0048", "0049",
     ]
 
 
@@ -1183,7 +1454,7 @@ def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) ->
         "0041",
         "0042",
         "0043",
-        "0044", "0045", "0046", "0047", "0048",
+        "0044", "0045", "0046", "0047", "0048", "0049",
     ]
 
     with sqlite3.connect(str(db)) as conn:
@@ -1221,7 +1492,7 @@ def test_reconciled_migrations_upgrade_old_review_feature_database(
         "0041",
         "0042",
         "0043",
-        "0044", "0045", "0046", "0047", "0048",
+        "0044", "0045", "0046", "0047", "0048", "0049",
     ]
 
     with sqlite3.connect(str(db)) as conn:
@@ -1805,7 +2076,7 @@ def test_migration_0044_versions_and_refreshes_existing_0043_cache(
 
     monkeypatch.setattr(runner, "_MIGRATIONS", migrations)
     assert runner.run_pending_migrations(db, backup=False) == [
-        "0044", "0045", "0046", "0047", "0048"
+        "0044", "0045", "0046", "0047", "0048", "0049"
     ]
     with sqlite3.connect(str(db)) as conn:
         row = conn.execute(

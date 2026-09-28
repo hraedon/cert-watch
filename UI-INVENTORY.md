@@ -187,6 +187,7 @@ because the HTML and JSON adapters must share their mutation owner too.
 | host import | `POST /hosts/import` | `POST /api/hosts/import` | `host_management.import_hosts_csv` |
 | host scan all | `POST /hosts/all/scan` | `POST /api/hosts/scan` | `host_management.scan_all_hosts` |
 | host settings | `POST /hosts/{host_id}/settings` | `PATCH /api/hosts/{host_id}/settings` | `host_management.update_host_settings` |
+| renewal failure clear | `POST /hosts/{host_id}/renewal-failure/clear` | `POST /api/hosts/{host_id}/renewal-failure/clear` | `renewal_reports.clear_renewal_failure` |
 | expected issuers | `POST /hosts/{host_id}/expected-issuers` | `PUT /api/hosts/{host_id}/issuers` | `host_management.update_expected_issuers` |
 | host delete | `POST /hosts/{host_id}/delete` | `DELETE /api/hosts/{host_id}` | `host_management.delete_host` |
 | host scan | `POST /hosts/{host_id}/scan` | `POST /api/hosts/{host_id}/scan` | `host_management.scan_host_now` |

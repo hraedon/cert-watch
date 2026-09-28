@@ -263,6 +263,10 @@ def _do_replace(
                 stale,
                 conn=conn,
                 reason="certificate replaced before delivery",
+                # Renewal failures describe the endpoint cycle, not the leaf.
+                # Keep their one provider incident open across replacements;
+                # the renewal rule closes it when its own condition resolves.
+                exclude_alert_types=("renewal_failed",),
             )
         conn.execute(
             f"DELETE FROM alert_group_certs WHERE cert_id IN ({ph})",

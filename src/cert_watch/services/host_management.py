@@ -898,6 +898,11 @@ def delete_host(
         try:
             begin_immediate(conn)
             ensure_write_scope_on(conn, auth, host_id=host_id)
+            host = conn.execute(
+                "SELECT hostname,port FROM hosts WHERE id=?", (host_id,)
+            ).fetchone()
+            if host is None:
+                raise HostNotFoundError("host not found")
             cert_ids = [
                 str(row["id"])
                 for row in conn.execute(
@@ -906,12 +911,48 @@ def delete_host(
                     (host_id,),
                 ).fetchall()
             ]
-            if cert_ids:
-                from cert_watch.database.alert_store import AlertStore
+            attempts = conn.execute(
+                """SELECT attempt_id,failure_attempt_id
+                   FROM renewal_attempts WHERE host_id=?""",
+                (host_id,),
+            ).fetchall()
+            failed_keys = {
+                f"renewal_failed:{row['failure_attempt_id']}"
+                for row in attempts
+                if row["failure_attempt_id"]
+            }
+            attempt_ids = {str(row["attempt_id"]) for row in attempts}
+            endpoint_prefix = (
+                f"renewal_not_deployed:{host['hostname']}:{host['port']}:"
+            )
+            renewal_keys = {
+                str(row["dedupe_key"])
+                for row in conn.execute(
+                    """SELECT dedupe_key FROM alerts
+                       WHERE alert_type IN ('renewal_failed','renewal_not_deployed')
+                         AND closed_at IS NULL AND dedupe_key IS NOT NULL"""
+                ).fetchall()
+                if str(row["dedupe_key"]) in failed_keys
+                or (
+                    str(row["dedupe_key"]).startswith(endpoint_prefix)
+                    and str(row["dedupe_key"]).rsplit(":", 1)[-1]
+                    in attempt_ids
+                )
+            }
+            from cert_watch.database.alert_store import AlertStore
 
-                closed_sent = AlertStore(db_path, initialize=False).close_for_cert_ids(
+            alert_store = AlertStore(db_path, initialize=False)
+            if cert_ids:
+                closed_sent = alert_store.close_for_cert_ids(
                     cert_ids, conn=conn, reason="endpoint deleted"
                 )
+            closed_sent.extend(
+                alert_store.close_keys(
+                    renewal_keys,
+                    conn=conn,
+                    reason="endpoint deleted",
+                )
+            )
             deleted = SqliteHostRepository(db_path).delete(host_id, conn=conn)
             audit_event = record_audit(
                 db_path,

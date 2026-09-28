@@ -20,7 +20,7 @@ from cert_watch.auth.guards import (
 )
 from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.config import Settings
-from cert_watch.database import SqliteHostRepository
+from cert_watch.database import SqliteHostRepository, resolve_current_certificate
 from cert_watch.host_validation import hostname_is_valid
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth
 from cert_watch.routes._scoped import scope_write_denied, superseded_redirect, tags_with_scope
@@ -71,7 +71,13 @@ from cert_watch.services.host_ownership import (
     HostOwnershipValidationError,
     update_host_ownership,
 )
-from cert_watch.services.renewal_reports import RenewalStatusOutOfDateError
+from cert_watch.services.renewal_reports import (
+    RenewalReportNotFoundError,
+    RenewalStatusOutOfDateError,
+)
+from cert_watch.services.renewal_reports import (
+    clear_renewal_failure as clear_renewal_failure_service,
+)
 from cert_watch.services.resource_metadata import (
     ResourceMetadataNotFoundError,
     ResourceMetadataValidationError,
@@ -395,6 +401,39 @@ async def update_host_settings(
     return RedirectResponse(url=f"{back}?endpoint_saved=1#edit-host", status_code=303)
 
 
+@router.post("/hosts/{host_id}/renewal-failure/clear")
+def clear_host_renewal_failure(
+    request: Request,
+    host_id: IdParam,
+    _auth: str = Depends(write_form_guard),
+) -> RedirectResponse:
+    """Explicitly clear the endpoint's carried renewal-failure condition."""
+    db = _db_path(request)
+    denied = scope_write_denied(request, db, host_id=host_id)
+    if denied:
+        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
+    try:
+        clear_renewal_failure_service(
+            db,
+            host_id,
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+        from cert_watch.scheduler import wake_scheduler
+
+        wake_scheduler(getattr(request.app.state, "scheduler", None))
+    except ScopeDeniedError as exc:
+        return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
+    except RenewalReportNotFoundError:
+        return RedirectResponse(url="/?error=host+not+found", status_code=303)
+    current = resolve_current_certificate(db, host_id)
+    detail_id = current.cert_id if current is not None else host_id
+    return RedirectResponse(
+        url=f"/certificates/{detail_id}?renewal_failure_cleared=1", status_code=303
+    )
+
+
 @router.post("/hosts")
 async def add_host(
     request: Request,
@@ -636,7 +675,7 @@ async def delete_host(
             source_ip=resolve_source_ip(request),
             webhook_config=_get_settings(request).build_webhook_config(),
         )
-    except ScopeDeniedError as exc:
+    except (ScopeDeniedError, ManagedHostNotFoundError) as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     logger.info("deleted host %s", host_id)
     return RedirectResponse(url="/", status_code=303)

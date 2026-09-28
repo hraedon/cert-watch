@@ -125,6 +125,8 @@ def _result(service: str, resource_id: str) -> Any:
         )
     if service.endswith("update_expected_issuers"):
         return ("Example CA",)
+    if service.endswith("clear_renewal_failure"):
+        return True
     if service.endswith("scan_host_now"):
         from cert_watch.services.host_management import ScanResult
 
@@ -197,6 +199,8 @@ def _request_pair(concept: str) -> tuple[dict[str, Any], dict[str, Any]]:
             "threshold_days": None,
             "renewal_status": "pending",
         }
+    elif concept == "renewal failure clear":
+        api["json"] = {}
     elif concept == "expected issuers":
         form["data"] = {"expected_issuers": "Example CA"}
         api["json"] = {"issuers": ["Example CA"]}

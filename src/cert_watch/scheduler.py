@@ -309,6 +309,30 @@ def _seconds_until_next_scan(
                 for _, _, deadline, unattempted in deadlines), default=float("inf"))
 
 
+def _seconds_until_next_rule_pass(
+    db_path: str | Path, *, now: datetime | None = None
+) -> float:
+    """Return the durable renewal-rule wake without making a host scan-due."""
+    from cert_watch.database import _connect
+
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """SELECT MIN(rule_due_at) FROM renewal_attempts
+               WHERE is_current=1 AND rule_due_at IS NOT NULL"""
+        ).fetchone()
+    value = row[0] if row else None
+    if value is None:
+        return float("inf")
+    try:
+        due = datetime.fromisoformat(str(value))
+        due = due.replace(tzinfo=UTC) if due.tzinfo is None else due.astimezone(UTC)
+    except (TypeError, ValueError):
+        logger.warning("renewal rule wake timestamp is malformed (%r); running now", value)
+        return 0.0
+    return max(0.0, (due - current).total_seconds())
+
+
 class Clock(Protocol):
     """Time source used by the scheduler loop and digest budget."""
 
@@ -454,6 +478,8 @@ class Scheduler:
 
     def _run_loop(self, stop_event: threading.Event) -> None:
         next_cycle_allowed = 0.0
+        rule_failure_count = 0
+        unconsumed_rule_wake_logged = False
         daily_deadline: datetime | None = None
         daily_schedule: tuple[int, int] | None = None
         try:
@@ -480,6 +506,10 @@ class Scheduler:
                                 current_minute,
                                 now=now,
                             ),
+                            _seconds_until_next_rule_pass(
+                                self.context.settings.db_path,
+                                now=now,
+                            ),
                         )
                     except Exception:
                         logger.exception("could not calculate host scan cadence")
@@ -501,11 +531,37 @@ class Scheduler:
                         next_cycle_allowed = self.clock.monotonic() + 60
                         self._mark_loop_healthy()
                         continue
+                    alert_succeeded = True
                     try:
-                        self.run_cycle(stop_event=stop_event)
+                        alert_succeeded = self.run_cycle(stop_event=stop_event)
                     finally:
                         self._cycle_lock.release()
-                        next_cycle_allowed = self.clock.monotonic() + 60
+                        rule_wake_unconsumed = False
+                        if alert_succeeded and not stop_event.is_set():
+                            rule_wake_unconsumed = (
+                                _seconds_until_next_rule_pass(
+                                    self.context.settings.db_path,
+                                    now=self.clock.now(),
+                                )
+                                == 0
+                            )
+                            if rule_wake_unconsumed and not unconsumed_rule_wake_logged:
+                                logger.warning(
+                                    "scheduler alert_fn left a renewal rule wake "
+                                    "unconsumed; backing off"
+                                )
+                                unconsumed_rule_wake_logged = True
+                        if alert_succeeded and not rule_wake_unconsumed:
+                            rule_failure_count = 0
+                            rule_backoff = 60.0
+                            unconsumed_rule_wake_logged = False
+                        else:
+                            rule_failure_count += 1
+                            rule_backoff = min(
+                                float(FAST_RETRY_INTERVAL),
+                                60.0 * 2.0 ** min(rule_failure_count - 1, 30),
+                            )
+                        next_cycle_allowed = self.clock.monotonic() + rule_backoff
                         now = self.clock.now()
                         if daily_deadline <= now:
                             daily_deadline = _next_daily_time(
@@ -560,7 +616,7 @@ class Scheduler:
         maintenance_fn: Callable[[], None] | None = None,
         digest_fn: Callable[[], dict[str, Any]] | None = None,
         stop_event: threading.Event | None = None,
-    ) -> None:
+    ) -> bool:
         """Run one isolated scan → CT → alert → digest → maintenance cycle."""
         scan_fn = scan_fn or self.context.scan_all
         alert_fn = alert_fn or self.context.run_alerts
@@ -571,28 +627,29 @@ class Scheduler:
             "scan_fn", scan_fn, stopped, completed_message="scheduled scan completed",
         )
         if stopped.is_set():
-            return
+            return True
         if ct_fn is not None:
             self._run_phase(
                 "ct_fn", ct_fn, stopped, completed_message="scheduled CT check completed",
             )
         if stopped.is_set():
-            return
-        self._run_phase(
+            return True
+        alert_succeeded = self._run_phase(
             "alert_fn", alert_fn, stopped,
             completed_message="scheduled alerts completed",
         )
         if stopped.is_set():
-            return
+            return alert_succeeded
         if digest_fn is not None:
             self._run_phase(
                 "digest_fn", digest_fn, stopped,
                 completed_message="scheduled digest completed",
             )
         if stopped.is_set():
-            return
+            return alert_succeeded
         if maintenance_fn is not None:
             self._run_phase("maintenance_fn", maintenance_fn, stopped)
+        return alert_succeeded
 
     @staticmethod
     def _run_phase(
@@ -601,7 +658,7 @@ class Scheduler:
         stopped: threading.Event,
         *,
         completed_message: str | None = None,
-    ) -> None:
+    ) -> bool:
         """Isolate phase failures unless the process is genuinely stopping."""
         try:
             fn()
@@ -609,9 +666,11 @@ class Scheduler:
             if stopped.is_set() or sys.is_finalizing():
                 raise
             logger.exception("scheduler %s failed", name)
+            return False
         else:
             if completed_message is not None:
                 logger.info(completed_message)
+            return True
 
     def try_run_alert_delivery(
         self, delivery_fn: Callable[[], dict[str, int]],

@@ -110,7 +110,7 @@ class AlertStore:
         reason: str = "condition closed",
         conn: sqlite3.Connection | None = None,
     ) -> list[Alert]:
-        """Close conditions and return sent rows needing incident resolves.
+        """Close conditions and return triggered rows needing incident resolves.
 
         Pending rows become cancelled. A live claimed row is marked closed but
         keeps its lease; settlement records a completed send or cancels it
@@ -167,7 +167,7 @@ class AlertStore:
             from cert_watch.database.repo import SqliteAlertRepository
             return [
                 SqliteAlertRepository._row_to_alert(row)
-                for row in rows if row["status"] == "sent"
+                for row in rows if row["status"] in {"sending", "sent"}
             ]
 
         if conn is not None:
@@ -184,15 +184,19 @@ class AlertStore:
         conn: sqlite3.Connection,
         now: datetime | None = None,
         reason: str = "certificate condition closed",
+        exclude_alert_types: tuple[str, ...] = (),
     ) -> list[Alert]:
         if not cert_ids:
             return []
         placeholders = ",".join("?" for _ in cert_ids)
+        excluded = ",".join("?" for _ in exclude_alert_types)
+        exclusion_sql = f" AND alert_type NOT IN ({excluded})" if excluded else ""
+        params = [*cert_ids, *exclude_alert_types]
         current = now or datetime.now(UTC)
         rows = conn.execute(
             f"""SELECT * FROM alerts
-                WHERE cert_id IN ({placeholders}) AND closed_at IS NULL""",
-            cert_ids,
+                WHERE cert_id IN ({placeholders}) AND closed_at IS NULL{exclusion_sql}""",
+            params,
         ).fetchall()
         conn.execute(
             f"""UPDATE alerts SET
@@ -224,10 +228,10 @@ class AlertStore:
                                                     AND (lease_expires_at IS NULL
                                                          OR lease_expires_at < ?))
                                            THEN NULL ELSE deferred_since END
-                WHERE cert_id IN ({placeholders}) AND closed_at IS NULL""",
+                WHERE cert_id IN ({placeholders}) AND closed_at IS NULL{exclusion_sql}""",
             (
                 _iso(current), _iso(current), reason, _iso(current),
-                _iso(current), _iso(current), _iso(current), *cert_ids,
+                _iso(current), _iso(current), _iso(current), *params,
             ),
         )
         from cert_watch.database.repo import SqliteAlertRepository

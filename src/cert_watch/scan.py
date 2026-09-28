@@ -447,7 +447,15 @@ def _stage_resolve_pending_alerts(
         ).fetchone()
     if row:
         old_leaf_id = row["id"]
-        pending = SqliteAlertRepository(repo_path).list_for_cert(old_leaf_id)
+        pending = [
+            alert
+            for alert in SqliteAlertRepository(repo_path).list_for_cert(old_leaf_id)
+            # This condition belongs to the endpoint renewal cycle. Its rule
+            # owns the eventual resolve; a leaf replacement alone may not be
+            # sufficient evidence (no baseline, or an expected-fingerprint
+            # mismatch), and resolving here would churn the provider incident.
+            if alert.alert_type != "renewal_failed"
+        ]
     return pending, old_leaf_id
 
 
@@ -994,6 +1002,17 @@ def store_scanned(
             _guard(conn)
         leaf_id, replaced_cert_id, cert_unchanged = _stage(
             "replace", _stage_replace, repo_path, entry, conn,
+        )
+        from cert_watch.renewal_verification import observe_failure_successor_on
+
+        _stage(
+            "renewal_verification",
+            observe_failure_successor_on,
+            conn,
+            entry.host,
+            entry.port,
+            entry.leaf.fingerprint_sha256,
+            observed_at=entry.scanned_at,
         )
         if posture_eval is not None:
             posture_grade, original_findings, stored_chain_status = _stage(
