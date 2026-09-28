@@ -38,6 +38,16 @@ supported: stop cert-watch and restore the pre-migration backup before
 starting an older binary. Do not point an older binary at the migrated
 database.
 
+### Migration 0046
+
+Migration **0046** adds the append-only renewal report ledger with opaque public
+identifiers and an internal non-reusing sequence, retained attempt and
+correlation history, a one-current-attempt-per-endpoint projection, and
+source-and-endpoint-scoped idempotency records. It does not backfill or
+reinterpret the existing `renewal_status` column; that compatibility
+transition is intentionally deferred to the next slice. Endpoint deletion
+removes all of the new endpoint-owned data.
+
 ## Upgrading from 1.1.0 to 1.1.1
 
 API-key audit actors now use the stable `api_key:<id>` format instead of the

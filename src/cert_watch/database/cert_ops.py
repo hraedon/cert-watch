@@ -319,8 +319,16 @@ def _do_replace(
         # may not store renewals at all.
         conn.execute(
             "INSERT OR IGNORE INTO certificate_lineage "
-            "(old_cert_id, new_cert_id, hostname, port, created_at) VALUES (?, ?, ?, ?, ?)",
-            (replaces_id, leaf_id, hostname, port, now),
+            "(old_cert_id, new_cert_id, hostname, port, created_at, old_fingerprint) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                replaces_id,
+                leaf_id,
+                hostname,
+                port,
+                now,
+                old_leaf_row["fingerprint_sha256"] if old_leaf_row is not None else None,
+            ),
         )
 
     for chain_cert in chain:

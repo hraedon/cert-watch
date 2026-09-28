@@ -258,7 +258,10 @@ def test_race_matrix_covers_every_paired_target_scoped_route() -> None:
     assert expected == _RACE_ROUTE_PAIRS
     assert set(_RACE_CASES) == _COLLECTED_RACE_CASES
     paired_routes = {route for pair in expected for route in pair}
-    assert target_routes - paired_routes == {("POST", "/api/alerts/{alert_id}/read")}
+    assert target_routes - paired_routes == {
+        ("POST", "/api/alerts/{alert_id}/read"),
+        ("POST", "/api/renewal-reports"),
+    }
 
 
 @_race_adapters("certificate_delete")

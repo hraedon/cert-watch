@@ -308,6 +308,10 @@ class SchedulerContext:
         from cert_watch.database import purge_old_alerts, purge_old_history
         from cert_watch.database.drift import purge_old_scan_history
         from cert_watch.events import purge_old_events
+        from cert_watch.services.renewal_reports import (
+            expire_renewal_leases,
+            purge_renewal_reports,
+        )
 
         s = self._snapshot().settings
         purge_old_audit(s.db_path, s.audit_retention_days)
@@ -315,6 +319,8 @@ class SchedulerContext:
         purge_old_scan_history(s.db_path, s.history_retention_days)
         purge_old_alerts(s.db_path, s.alert_retention_days)
         purge_old_events(s.db_path, s.event_retention_days)
+        expire_renewal_leases(s.db_path)
+        purge_renewal_reports(s.db_path, s.history_retention_days)
 
     def _max_group_cadence(
         self, db_path: str | Path, *, default: int = 30
