@@ -103,7 +103,9 @@ Deleting an endpoint deletes its reports, attempt and correlation history, and
 idempotency records, so re-adding the same address does not inherit private
 history.
 
-The legacy host `renewal_status` field is write-through: `in_progress` creates
-a `started` report and `pending` cancels active work. Responses still return
-`in_progress` exactly when a current attempt is open, without consulting the
-stored compatibility column.
+The legacy host `renewal_status` field is write-through only when the submitted
+value differs from the lease-aware derived value: `in_progress` creates a
+`started` report, and `pending` cancels only a current open attempt whose lease
+is still live. Echoing either displayed value is a no-op. Responses return
+`in_progress` exactly when the current attempt is open and its lease is live,
+without consulting the stored compatibility column.

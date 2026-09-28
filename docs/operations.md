@@ -128,7 +128,10 @@ Every page counts the estate with the same definitions.
   `likely-automated` or `manual` from its manual classification; otherwise the
   state is `unknown`. A restart on the same served certificate remains visible
   through the compatibility API but ranks as stalled because it cannot receive
-  a second suppressing lease. The model records which source made the decision.
+  a second suppressing lease. A failed attempt reads `pending` through the
+  two-value compatibility field; the renewal axis can still call the unchanged
+  certificate condition `stalled`. The model records which source made the
+  decision.
 - **Delivery** — per-certificate recipients and matched groups come from the
   same `alerting.routing` resolver that snapshots a queued alert. SMTP lists
   the global plus routed recipients and is deliverable only when its relay,

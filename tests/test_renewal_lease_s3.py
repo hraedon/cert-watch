@@ -18,7 +18,13 @@ from cert_watch.config import Settings
 from cert_watch.database import SqliteAlertRepository, SqliteHostRepository, init_schema
 from cert_watch.database.connection import _connect
 from cert_watch.services.host_management import HostSettingsUpdate, update_host_settings
-from cert_watch.services.renewal_reports import write_through_renewal_status_on
+from cert_watch.services.renewal_reports import (
+    RenewalReportInput,
+    create_report,
+    expire_renewal_leases,
+    resolve_target,
+    write_through_renewal_status_on,
+)
 from tests._helpers import seed_certificate
 
 NOW = datetime(2026, 9, 27, 12, tzinfo=UTC)
@@ -255,7 +261,7 @@ def test_manual_status_round_trip_creates_and_cancels_attempt(tmp_path: Path) ->
     assert settings.renewal_report_lease_hours == 24
 
 
-def test_pending_cancels_a_failed_attempt(tmp_path: Path) -> None:
+def test_pending_echo_preserves_a_failed_attempt(tmp_path: Path) -> None:
     db, host_id = _seed_stalled(tmp_path)
     _attempt(db, host_id, "failed", lease=None, suppresses=False)
     result = update_host_settings(
@@ -274,8 +280,8 @@ def test_pending_cancels_a_failed_attempt(tmp_path: Path) -> None:
         report = conn.execute(
             "SELECT outcome,effect FROM renewal_reports WHERE host_id=?", (host_id,)
         ).fetchone()
-    assert tuple(attempt) == ("cancelled", "manual_cancelled")
-    assert tuple(report) == ("cancelled", "applied")
+    assert tuple(attempt) == ("failed", None)
+    assert report is None
 
 
 def test_restart_same_leaf_is_visible_but_never_suppresses_twice(tmp_path: Path) -> None:
@@ -299,6 +305,94 @@ def test_restart_same_leaf_is_visible_but_never_suppresses_twice(tmp_path: Path)
         ).fetchone()
     assert tuple(current) == ("open", 0)
     assert evaluate_renewal_window(db, SqliteAlertRepository(db), 30)
+
+
+@pytest.mark.parametrize("restart", ["report", "manual"])
+def test_born_failed_attempt_consumes_baseline_lease_once(
+    tmp_path: Path, restart: str
+) -> None:
+    db, host_id = _seed_stalled(tmp_path)
+    settings = Settings(db_path=db, data_dir=tmp_path)
+    report_auth = AuthContext.renewal_report_key(
+        "reporter", principal_id="report-key", binding="all", bound_tags=()
+    )
+    target = resolve_target(db, report_auth, hostname=HOST, port=443)
+
+    def send(outcome: str, when: datetime, correlation: str) -> None:
+        create_report(
+            db,
+            settings,
+            target,
+            RenewalReportInput(outcome, None, "test", correlation, None, None),
+            auth=report_auth,
+            actor="api_key:report-key",
+            source_ip=None,
+            idempotency_key=None,
+            body_sha256=f"{outcome}-{correlation}",
+            now=when,
+        )
+
+    send("failed", NOW, "failed-first")
+    if restart == "report":
+        send("started", NOW + timedelta(minutes=1), "restart")
+    else:
+        with _connect(db) as conn:
+            write_through_renewal_status_on(
+                conn,
+                db,
+                settings,
+                host_id,
+                "in_progress",
+                auth=AuthContext.system(),
+                actor="system",
+                source_ip=None,
+                now=NOW + timedelta(minutes=1),
+            )
+            conn.commit()
+    with _connect(db) as conn:
+        rows = conn.execute(
+            """SELECT state,is_current,suppresses_stalled,baseline_lease_claimed
+               FROM renewal_attempts WHERE host_id=? ORDER BY opened_seq""",
+            (host_id,),
+        ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        ("failed", 0, 0, 1),
+        ("open", 1, 0, 0),
+    ]
+    assert evaluate_renewal_window(db, SqliteAlertRepository(db), 30)
+
+
+def test_repeated_failed_started_cycles_never_regrant_same_baseline(tmp_path: Path) -> None:
+    db, host_id = _seed_stalled(tmp_path)
+    settings = Settings(db_path=db, data_dir=tmp_path)
+    auth = AuthContext.renewal_report_key(
+        "reporter", principal_id="report-key", binding="all", bound_tags=()
+    )
+    target = resolve_target(db, auth, hostname=HOST, port=443)
+    for cycle in range(3):
+        instant = NOW + timedelta(hours=cycle * 40)
+        for outcome, offset in (("failed", 0), ("started", 1)):
+            create_report(
+                db,
+                settings,
+                target,
+                RenewalReportInput(outcome, None, "test", f"{cycle}-{outcome}", None, None),
+                auth=auth,
+                actor="api_key:report-key",
+                source_ip=None,
+                idempotency_key=None,
+                body_sha256=f"{cycle}-{outcome}",
+                now=instant + timedelta(minutes=offset),
+            )
+        expire_renewal_leases(db, now=instant + timedelta(hours=25))
+    with _connect(db) as conn:
+        claims, suppressions = conn.execute(
+            """SELECT sum(baseline_lease_claimed),sum(suppresses_stalled)
+               FROM renewal_attempts WHERE host_id=?""",
+            (host_id,),
+        ).fetchone()
+    assert claims == 1
+    assert suppressions == 0
 
 
 def test_renewal_report_key_cannot_cancel_an_attempt(tmp_path: Path) -> None:
@@ -361,3 +455,116 @@ def test_migration_0047_backfills_baseline_lease_and_audit_idempotently(
     assert attempt[0][4] == 1
     received = datetime.fromisoformat(attempt[0][5])
     assert datetime.fromisoformat(attempt[0][3]) - received == timedelta(hours=12)
+
+
+def test_migration_0047_preserves_s2_attempts_and_used_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cert_watch.migrations.registry  # noqa: F401 — register migrations
+    from cert_watch.migrations import runner
+    from cert_watch.migrations.m0047_renewal_status_leases import upgrade
+
+    db = tmp_path / "s2.sqlite3"
+    migrations = runner.get_migrations()
+    monkeypatch.setattr(
+        runner, "_MIGRATIONS", [item for item in migrations if item[0] <= "0046"]
+    )
+    runner.run_pending_migrations(db, backup=False)
+    host_ids = {name: uuid.uuid4().hex for name in ("failed", "used", "open", "demoted")}
+    with _connect(db) as conn:
+        for name, host_id in host_ids.items():
+            conn.execute(
+                """INSERT INTO hosts
+                   (id,hostname,port,renewal_status,added_at)
+                   VALUES (?,?,443,?,?)""",
+                (
+                    host_id,
+                    f"{name}.example.test",
+                    "pending" if name == "demoted" else "in_progress",
+                    NOW.isoformat(),
+                ),
+            )
+        conn.execute(
+            """INSERT INTO certificates
+               (id,subject,issuer,not_before,not_after,san_dns_names,
+                fingerprint_sha256,raw_der,source,hostname,port,is_leaf,
+                parent_cert_id,chain_valid,replaces_cert_id,tags,created_at,updated_at)
+               VALUES ('used-cert','CN=used.example.test','CN=Test CA',?,?,
+                       '[]','used-fp',X'','scanned','used.example.test',443,1,
+                       NULL,NULL,NULL,'',?,?)""",
+            (
+                (NOW - timedelta(days=30)).isoformat(),
+                (NOW + timedelta(days=10)).isoformat(),
+                NOW.isoformat(),
+                NOW.isoformat(),
+            ),
+        )
+        attempts = (
+            ("failed-a", "failed", 1, "failed", None, 0, "failed-fp"),
+            ("used-a", "used", 0, "abandoned", NOW.isoformat(), 0, "used-fp"),
+            (
+                "open-a",
+                "open",
+                1,
+                "open",
+                datetime(2099, 1, 1, tzinfo=UTC).isoformat(),
+                1,
+                "open-fp",
+            ),
+            (
+                "demoted-a",
+                "demoted",
+                0,
+                "open",
+                datetime(2099, 1, 1, tzinfo=UTC).isoformat(),
+                1,
+                "demoted-fp",
+            ),
+        )
+        for attempt_id, name, current, state, lease, suppresses, fingerprint in attempts:
+            conn.execute(
+                """INSERT INTO renewal_attempts
+                   (attempt_id,host_id,is_current,source,state,opened_seq,
+                    baseline_fingerprint,lease_expires_at,suppresses_stalled,received_at)
+                   VALUES (?,?,?,'api_key:s2',?,1,?,?,?,?)""",
+                (
+                    attempt_id,
+                    host_ids[name],
+                    current,
+                    state,
+                    fingerprint,
+                    lease,
+                    suppresses,
+                    NOW.isoformat(),
+                ),
+            )
+        upgrade(conn)
+        rows = conn.execute(
+            """SELECT h.hostname,a.source,a.state,a.is_current,a.suppresses_stalled,
+                      a.baseline_lease_claimed
+               FROM renewal_attempts a JOIN hosts h ON h.id=a.host_id
+               ORDER BY h.hostname,a.opened_seq"""
+        ).fetchall()
+        audits = conn.execute(
+            """SELECT action,target_id FROM audit_log
+               WHERE actor='migration:0047' ORDER BY action,target_id"""
+        ).fetchall()
+        invalid_open = conn.execute(
+            """SELECT count(*) FROM renewal_attempts
+               WHERE state='open' AND suppresses_stalled=1
+                 AND (is_current=0 OR
+                      julianday(lease_expires_at)<=julianday('now'))"""
+        ).fetchone()[0]
+    by_host: dict[str, list[tuple[object, ...]]] = {}
+    for row in rows:
+        by_host.setdefault(str(row[0]), []).append(tuple(row[1:]))
+    assert by_host["failed.example.test"] == [("api_key:s2", "failed", 1, 0, 1)]
+    assert by_host["open.example.test"] == [("api_key:s2", "open", 1, 1, 1)]
+    assert by_host["used.example.test"] == [
+        ("api_key:s2", "abandoned", 0, 0, 1),
+        ("migration:0047", "open", 1, 0, 0),
+    ]
+    assert by_host["demoted.example.test"] == [("api_key:s2", "open", 0, 0, 1)]
+    assert [row[0] for row in audits].count("renewal_report.migration_skip") == 2
+    assert [row[0] for row in audits].count("renewal_report.create") == 1
+    assert invalid_open == 0

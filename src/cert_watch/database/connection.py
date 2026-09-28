@@ -72,6 +72,11 @@ def _cw_tags_overlap(*values: str | None) -> int:
     return int(tags_match(merge_tags(*values[:-1]), merge_tags(values[-1])))
 
 
+def _cw_utc_now() -> str:
+    """Return a Python-owned UTC reference instant for unparameterized projections."""
+    return _iso(datetime.now(UTC))
+
+
 class _ThreadConnections:
     """Per-thread connection cache that closes its connections when dropped.
 
@@ -177,6 +182,7 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
     conn.create_function("cw_casefold", 1, _cw_casefold)
     conn.create_function("cw_tag_set", 1, _cw_tag_set, deterministic=True)
     conn.create_function("cw_tags_overlap", -1, _cw_tags_overlap, deterministic=True)
+    conn.create_function("cw_utc_now", 0, _cw_utc_now)
     from cert_watch.status_rule import register_sql_functions
 
     register_sql_functions(conn)

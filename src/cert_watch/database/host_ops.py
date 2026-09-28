@@ -68,7 +68,6 @@ def update_host_ownership(
         "owner_name": owner_name,
         "owner_email": owner_email,
         "owner_slack": owner_slack,
-        "renewal_status": renewal_status,
         "renewal_method": renewal_method,
         "runbook_url": runbook_url,
     }

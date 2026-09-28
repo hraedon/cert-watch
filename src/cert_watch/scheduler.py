@@ -852,6 +852,12 @@ def _check_renewal_overdue(
         from cert_watch.renewal_analytics import detect_renewal_overdue
 
         store = AlertStore(db_path)
+        current = now()
+        suppressions: set[tuple[str, int]] = set()
+        if send_webhook is not None:
+            from cert_watch.database.renewal_attempts import endpoint_stall_suppressions
+
+            suppressions = endpoint_stall_suppressions(db_path, hosts, now=current)
         seen: set[tuple[str, int]] = set()
         for hostname, port in hosts:
             if (hostname, port) in seen:
@@ -870,7 +876,6 @@ def _check_renewal_overdue(
                     )
                     event_key = f"{firing}:event"
                     webhook_key = f"{firing}:webhook"
-                    current = now()
                     event_config = load_event_config(db_path)
                     event_enabled = (
                         "renewal_overdue" in event_config.enabled_event_types
@@ -910,13 +915,7 @@ def _check_renewal_overdue(
                                 suppression_keys=(firing, legacy_firing),
                             )
                     if send_webhook is not None:
-                        from cert_watch.database.renewal_attempts import (
-                            endpoint_stall_suppression_active,
-                        )
-
-                        if endpoint_stall_suppression_active(
-                            db_path, signal.hostname, port, now=current
-                        ):
+                        if (signal.hostname, port) in suppressions:
                             # Leave the independent webhook claim untouched so
                             # the nudge becomes due as soon as the lease lapses.
                             continue

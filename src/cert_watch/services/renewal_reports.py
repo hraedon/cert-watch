@@ -22,6 +22,7 @@ from cert_watch.auth.scope import (
 from cert_watch.config import Settings
 from cert_watch.database import get_write_lock
 from cert_watch.database.connection import _connect, begin_immediate
+from cert_watch.database.renewal_attempts import renewal_attempt_is_live
 from cert_watch.tags import parse_tags
 
 
@@ -207,23 +208,27 @@ def write_through_renewal_status_on(
         "SELECT * FROM renewal_attempts WHERE host_id=? AND is_current=1", (host_id,)
     ).fetchone()
 
+    derived_status = (
+        "in_progress"
+        if attempt is not None
+        and renewal_attempt_is_live(
+            str(attempt["state"]), attempt["lease_expires_at"], now=received
+        )
+        else "pending"
+    )
+    conn.execute(
+        "UPDATE hosts SET renewal_status=? WHERE id=?", (derived_status, host_id)
+    )
+    if status == derived_status:
+        return derived_status, None
+
     outcome = "started" if status == "in_progress" else "cancelled"
-    if outcome == "cancelled" and (
-        attempt is None
-        or str(attempt["state"]) not in {"open", "failed", "verifying", "not_deployed"}
-    ):
-        return "pending", None
 
     baseline_fingerprint, baseline_not_after = _current_leaf(conn, host_id)
     effect = "applied"
     new_attempt = False
     if outcome == "started":
-        if (
-            attempt is not None
-            and attempt["state"] == "open"
-            and attempt["lease_expires_at"]
-            and str(attempt["lease_expires_at"]) <= received_at
-        ):
+        if attempt is not None and attempt["state"] == "open":
             conn.execute(
                 "UPDATE renewal_attempts SET state='abandoned',suppresses_stalled=0,"
                 "closed_reason='lease_expired' WHERE attempt_id=?",
@@ -232,12 +237,8 @@ def write_through_renewal_status_on(
             attempt = conn.execute(
                 "SELECT * FROM renewal_attempts WHERE host_id=? AND is_current=1", (host_id,)
             ).fetchone()
-        if attempt is not None and attempt["state"] == "open":
-            attempt_id = str(attempt["attempt_id"])
-            effect = "duplicate"
-        else:
-            attempt_id = uuid.uuid4().hex
-            new_attempt = True
+        attempt_id = uuid.uuid4().hex
+        new_attempt = True
     else:
         assert attempt is not None
         attempt_id = str(attempt["attempt_id"])
@@ -267,21 +268,20 @@ def write_through_renewal_status_on(
             "UPDATE renewal_attempts SET is_current=0 WHERE host_id=? AND is_current=1",
             (host_id,),
         )
-        suppresses = int(
+        claims_baseline = int(
             conn.execute(
                 """SELECT 1 FROM renewal_attempts
                    WHERE host_id=? AND baseline_fingerprint IS ?
-                     AND lease_expires_at IS NOT NULL LIMIT 1""",
+                   LIMIT 1""",
                 (host_id, baseline_fingerprint),
-            ).fetchone()
-            is None
+            ).fetchone() is None
         )
         conn.execute(
             """INSERT INTO renewal_attempts
                (attempt_id,host_id,is_current,source,state,opened_seq,baseline_fingerprint,
                 baseline_not_after,new_fingerprint,lease_expires_at,suppresses_stalled,
-                received_at,next_check_at,closed_reason)
-               VALUES (?,?,1,?,'open',?,?,?,NULL,?,?,?,NULL,NULL)""",
+                received_at,next_check_at,closed_reason,baseline_lease_claimed)
+               VALUES (?,?,1,?,'open',?,?,?,NULL,?,?,?,NULL,NULL,?)""",
             (
                 attempt_id,
                 host_id,
@@ -301,8 +301,9 @@ def write_through_renewal_status_on(
                     ),
                     settings,
                 )).isoformat(),
-                suppresses,
+                claims_baseline,
                 received_at,
+                claims_baseline,
             ),
         )
     elif outcome == "cancelled":
@@ -427,8 +428,9 @@ def create_report(
             if (
                 attempt is not None
                 and attempt["state"] == "open"
-                and attempt["lease_expires_at"]
-                and str(attempt["lease_expires_at"]) <= received_at
+                and not renewal_attempt_is_live(
+                    str(attempt["state"]), attempt["lease_expires_at"], now=received
+                )
             ):
                 conn.execute(
                     "UPDATE renewal_attempts SET state='abandoned',"
@@ -546,18 +548,17 @@ def create_report(
                     "UPDATE renewal_attempts SET is_current=0 WHERE host_id=? AND is_current=1",
                     (target.host_id,),
                 )
-                suppresses = int(
-                    report.outcome == "started"
-                    and conn.execute(
+                claims_baseline = int(
+                    conn.execute(
                         """SELECT 1 FROM renewal_attempts
                            WHERE host_id=? AND baseline_fingerprint IS ?
-                             AND lease_expires_at IS NOT NULL LIMIT 1""",
+                           LIMIT 1""",
                         (target.host_id, baseline_fingerprint),
-                    ).fetchone()
-                    is None
+                    ).fetchone() is None
                 )
+                suppresses = int(report.outcome == "started" and claims_baseline)
                 lease = (
-                    (received + renewal_lease_for(target, settings)).isoformat()
+                    (received + renewal_lease_for(target, settings)).astimezone(UTC).isoformat()
                     if report.outcome == "started"
                     else None
                 )
@@ -565,8 +566,9 @@ def create_report(
                     """INSERT INTO renewal_attempts
                        (attempt_id,host_id,is_current,source,state,opened_seq,baseline_fingerprint,
                         baseline_not_after,new_fingerprint,lease_expires_at,
-                        suppresses_stalled,received_at,next_check_at,closed_reason)
-                       VALUES (?,?,1,?,?,?,?,?,?,?,?,?,NULL,?)""",
+                        suppresses_stalled,received_at,next_check_at,closed_reason,
+                        baseline_lease_claimed)
+                       VALUES (?,?,1,?,?,?,?,?,?,?,?,?,NULL,?,?)""",
                     (
                         attempt_id,
                         target.host_id,
@@ -580,6 +582,7 @@ def create_report(
                         suppresses,
                         received_at,
                         None if state == "open" else "reported_failed",
+                        claims_baseline,
                     ),
                 )
             elif effect == "applied" and state == "failed":
@@ -701,7 +704,8 @@ def list_reports(
         )
         rows = conn.execute(
             f"""SELECT r.*, CASE
-                     WHEN a.state='open' AND a.lease_expires_at<=? THEN 'abandoned'
+                     WHEN a.state='open'
+                          AND julianday(a.lease_expires_at)<=julianday(?) THEN 'abandoned'
                      ELSE COALESCE(
                          a.state,
                          CASE WHEN r.outcome='failed' THEN 'failed' ELSE 'abandoned' END
@@ -742,7 +746,7 @@ def expire_renewal_leases(db_path: str | Path, *, now: datetime | None = None) -
         cursor = conn.execute(
             "UPDATE renewal_attempts SET state='abandoned',suppresses_stalled=0,"
             "closed_reason='lease_expired' WHERE is_current=1 AND state='open' "
-            "AND lease_expires_at<=?",
+            "AND julianday(lease_expires_at)<=julianday(?)",
             (instant,),
         )
         conn.commit()
@@ -782,7 +786,7 @@ def purge_renewal_reports(
                          SELECT kept.attempt_id FROM renewal_attempts kept
                          WHERE kept.host_id=a.host_id
                            AND kept.baseline_fingerprint IS a.baseline_fingerprint
-                           AND kept.lease_expires_at IS NOT NULL
+                           AND kept.baseline_lease_claimed=1
                          ORDER BY kept.opened_seq DESC LIMIT 1
                      )""",
                 (cutoff_iso,),

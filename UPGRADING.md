@@ -58,10 +58,10 @@ derive `renewal_status` from the attempt and all existing writes create or
 cancel durable reports.
 
 Hosts left “in progress” for weeks will therefore start receiving
-renewal-stalled notices 24 hours after the upgrade unless they are re-marked
-or a successor certificate is observed. Re-marking the same served
-certificate shows work as in progress but does not grant a second
-stall-suppressing lease.
+renewal-stalled notices 24 hours after the upgrade. Re-marking the same served
+certificate shows work as in progress but does not stop those notices because
+the migration used that leaf's one stall-suppressing lease. A new certificate,
+or the lease lapsing followed by an actual renewal, stops them.
 
 ## Upgrading from 1.1.0 to 1.1.1
 

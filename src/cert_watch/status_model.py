@@ -194,16 +194,9 @@ def renewal_state(
     now: datetime | None = None,
 ) -> tuple[str, str]:
     """Return state and evidence source using the documented precedence."""
-    current = now or datetime.now(UTC)
-    live = False
-    if attempt_state == "open" and lease_expires_at:
-        try:
-            lease = datetime.fromisoformat(lease_expires_at)
-            if lease.tzinfo is None:
-                lease = lease.replace(tzinfo=UTC)
-            live = lease > current
-        except (TypeError, ValueError, OverflowError):
-            live = False
+    from cert_watch.database.renewal_attempts import renewal_attempt_is_live
+
+    live = renewal_attempt_is_live(attempt_state, lease_expires_at, now=now)
     if stalled and not (live and suppresses_stalled):
         return "stalled", "renewal_window"
     if live:

@@ -33,9 +33,11 @@ All notable changes to cert-watch are documented in this file.
 
 - Renewal-stalled alerts and `renewal_needed` webhooks now pause only during
   the first live report lease for an endpoint and served certificate. Manual
-  `in_progress`/`pending` writes create or cancel the same durable attempts;
-  API responses retain their existing shape while deriving the value from the
-  current attempt. Expiry warnings and expired alerts remain independent.
+  `in_progress`/`pending` writes create or cancel the same durable attempts only
+  when they change the lease-aware derived value; echoed values leave failed,
+  lapsed and live attempts untouched. API responses retain their existing
+  shape while returning `in_progress` only for a current open attempt with a
+  live lease. Expiry warnings and expired alerts remain independent.
   The renewal axis now consistently ranks `stalled` ahead of `in_progress`
   when a same-certificate restart is visible but cannot suppress again
   (#118 S3).
@@ -45,9 +47,10 @@ All notable changes to cert-watch are documented in this file.
 - Migration 0046 adds renewal report, attempt/correlation history and
   idempotency tables. It does not change alerting or existing renewal status
   behavior. See [UPGRADING.md](UPGRADING.md).
-- Migration 0047 converts stored `in_progress` hosts to 24-hour leased
-  attempts (or the configured lease), audits each conversion, and enables
-  manual cancellation reports. See [UPGRADING.md](UPGRADING.md).
+- Migration 0047 converts stored `in_progress` hosts without a current S2
+  attempt to 24-hour leased attempts (or the configured lease), audits each
+  conversion or preservation decision, and enables manual cancellation
+  reports. See [UPGRADING.md](UPGRADING.md).
 - Migration 0045 adds explicit binding metadata to API keys. Existing keys
   remain bound to all endpoints. See [UPGRADING.md](UPGRADING.md).
 

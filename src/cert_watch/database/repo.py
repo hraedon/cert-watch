@@ -775,7 +775,6 @@ class SqliteHostRepository:
         owner_name: str = "",
         owner_email: str = "",
         owner_slack: str = "",
-        renewal_status: str = "pending",
         renewal_method: str = "",
         runbook_url: str = "",
         notes: str = "",
@@ -808,7 +807,7 @@ class SqliteHostRepository:
                 (
                     host_id, hostname, port, threshold_days, tags,
                     scan_interval_hours, owner_name, owner_email,
-                    owner_slack, renewal_status, renewal_method,
+                    owner_slack, "pending", renewal_method,
                     runbook_url, notes, expected_issuers, starttls_mode,
                     _iso(datetime.now(UTC)),
                 ),
@@ -872,7 +871,7 @@ class SqliteHostRepository:
             owner_name=dict(r).get("owner_name", ""),
             owner_email=dict(r).get("owner_email", ""),
             owner_slack=dict(r).get("owner_slack", ""),
-            renewal_status=dict(r).get("derived_renewal_status", "pending"),
+            renewal_status=str(r["derived_renewal_status"]),
             renewal_method=dict(r).get("renewal_method", ""),
             runbook_url=dict(r).get("runbook_url", ""),
             notes=dict(r).get("notes", ""),
@@ -1016,9 +1015,8 @@ class SqliteHostRepository:
         owner_name: str | None = None,
         owner_email: str | None = None,
         owner_slack: str | None = None,
-        renewal_status: str | None = None,
     ) -> bool:
-        """Update owner/contact and renewal status for a host."""
+        """Update owner/contact fields for a host."""
         with _connect(self.db_path) as conn:
             r = conn.execute("SELECT id FROM hosts WHERE id = ?", (host_id,)).fetchone()
             if not r:
@@ -1034,9 +1032,6 @@ class SqliteHostRepository:
             if owner_slack is not None:
                 sets.append("owner_slack = ?")
                 params.append(owner_slack)
-            if renewal_status is not None:
-                sets.append("renewal_status = ?")
-                params.append(renewal_status)
             if not sets:
                 return True
             params.append(host_id)
@@ -1065,9 +1060,8 @@ class SqliteHostRepository:
         *,
         renewal_method: str | None = None,
         runbook_url: str | None = None,
-        renewal_status: str | None = None,
     ) -> bool:
-        """Update renewal_method, runbook_url, and renewal_status for a host."""
+        """Update renewal method and runbook URL for a host."""
         with _connect(self.db_path) as conn:
             r = conn.execute(
                 "SELECT id FROM hosts WHERE id = ?", (host_id,)
@@ -1082,9 +1076,6 @@ class SqliteHostRepository:
             if runbook_url is not None:
                 sets.append("runbook_url = ?")
                 params.append(runbook_url)
-            if renewal_status is not None:
-                sets.append("renewal_status = ?")
-                params.append(renewal_status)
             if not sets:
                 return True
             params.append(host_id)
@@ -1114,24 +1105,6 @@ class SqliteHostRepository:
             return []
         raw = row["expected_issuers"] or ""
         return [i.strip() for i in raw.split(",") if i.strip()]
-
-    def update_settings(
-        self,
-        host_id: str,
-        *,
-        scan_interval_hours: int | None,
-        threshold_days: int | None,
-        renewal_status: str,
-    ) -> bool:
-        """Atomically update endpoint controls; None restores numeric defaults."""
-        with _connect(self.db_path) as conn:
-            cur = conn.execute(
-                "UPDATE hosts SET scan_interval_hours = ?, threshold_days = ?, "
-                "renewal_status = ? WHERE id = ?",
-                (scan_interval_hours, threshold_days, renewal_status, host_id),
-            )
-            conn.commit()
-        return cur.rowcount > 0
 
     def set_expected_issuers(self, host_id: str, issuers: str) -> bool:
         """Set the expected-issuer CN allowlist for a host. Returns False if no such host."""

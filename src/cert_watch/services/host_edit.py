@@ -20,6 +20,7 @@ from cert_watch.database.connection import _connect, begin_immediate, get_write_
 from cert_watch.database.metadata_ops import (
     update_certificate_tags as persist_certificate_tags,
 )
+from cert_watch.database.renewal_attempts import host_projection_sql
 from cert_watch.scan_freshness import scan_interval_out_of_range
 from cert_watch.services.certificate_identity import (
     ensure_not_superseded,
@@ -207,7 +208,7 @@ def edit_host(
             cursor = conn.execute(
                 "UPDATE hosts SET owner_name = ?, owner_email = ?, owner_slack = ?, "
                 "renewal_method = ?, runbook_url = ?, scan_interval_hours = ?, "
-                "threshold_days = ?, renewal_status = ?, notes = ?"
+                "threshold_days = ?, notes = ?"
                 + (", tags = ?" if not named_cert else "")
                 + " WHERE id = ?",
                 (
@@ -218,7 +219,6 @@ def edit_host(
                     ownership.runbook_url,
                     interval,
                     threshold,
-                    ownership.renewal_status,
                     resolved.notes,
                     *((normalized_tags,) if not named_cert else ()),
                     target.host_id,
@@ -240,10 +240,13 @@ def edit_host(
                 actor=actor,
                 source_ip=source_ip,
             )
-            row = conn.execute("SELECT * FROM hosts WHERE id = ?", (target.host_id,)).fetchone()
+            row = conn.execute(
+                f"SELECT {host_projection_sql('h')} FROM hosts h WHERE h.id = ?",
+                (target.host_id,),
+            ).fetchone()
             assert row is not None
             updated = SqliteHostRepository(db_path)._row_to_host(row)
-            updated.renewal_status = derived_status
+            assert updated.renewal_status == derived_status
             event = record_audit(
                 db_path,
                 actor=actor,

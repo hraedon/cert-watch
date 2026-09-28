@@ -346,8 +346,11 @@ def test_migration_0041_resets_renewed_hosts_with_one_audit_each_and_is_idempote
         hosts.add("one.example.test", 443),
         hosts.add("two.example.test", 8443),
     ]
-    unchanged = hosts.add("working.example.test", 443, renewal_status="in_progress")
+    unchanged = hosts.add("working.example.test", 443)
     with sqlite3.connect(str(db_path)) as conn:
+        conn.execute(
+            "UPDATE hosts SET renewal_status = 'in_progress' WHERE id = ?", (unchanged,)
+        )
         conn.execute(
             "UPDATE hosts SET renewal_status = 'renewed' WHERE id IN (?, ?)",
             changed,

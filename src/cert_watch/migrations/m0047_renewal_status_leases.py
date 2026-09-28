@@ -84,9 +84,43 @@ def _allow_cancelled_reports(conn: sqlite3.Connection) -> None:
 
 def upgrade(conn: sqlite3.Connection) -> None:
     _allow_cancelled_reports(conn)
+    attempt_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(renewal_attempts)")
+    }
+    if "baseline_lease_claimed" not in attempt_columns:
+        conn.execute(
+            "ALTER TABLE renewal_attempts ADD COLUMN baseline_lease_claimed INTEGER "
+            "NOT NULL DEFAULT 0 CHECK (baseline_lease_claimed IN (0,1))"
+        )
+    # The first attempt on a served leaf consumes that leaf's only opportunity
+    # to suppress a stalled-renewal notice, even when it was born failed and
+    # therefore never received a lease.
+    conn.execute(
+        """UPDATE renewal_attempts AS a SET baseline_lease_claimed=1
+           WHERE NOT EXISTS (
+               SELECT 1 FROM renewal_attempts earlier
+               WHERE earlier.host_id=a.host_id
+                 AND earlier.baseline_fingerprint IS a.baseline_fingerprint
+                 AND (earlier.opened_seq<a.opened_seq OR
+                      (earlier.opened_seq=a.opened_seq AND
+                       earlier.attempt_id<a.attempt_id))
+           )"""
+    )
     now = datetime.now(UTC)
-    received_at = now.isoformat()
-    lease_expires_at = (now + timedelta(hours=_lease_hours(conn))).isoformat()
+    received_at = now.astimezone(UTC).isoformat()
+    lease_expires_at = (
+        now + timedelta(hours=_lease_hours(conn))
+    ).astimezone(UTC).isoformat()
+    # S2 could leave a suppressing row open after it stopped being current, or
+    # after its lease elapsed. Preserve its attempt/history but make the
+    # suppression invariant true immediately on upgrade.
+    conn.execute(
+        """UPDATE renewal_attempts SET suppresses_stalled=0
+           WHERE state='open' AND suppresses_stalled=1
+             AND (baseline_lease_claimed=0 OR is_current=0 OR
+                  julianday(lease_expires_at)<=julianday(?))""",
+        (received_at,),
+    )
     rows = conn.execute(
         """SELECT h.id,h.hostname,h.port,c.fingerprint_sha256,c.not_after
            FROM hosts h
@@ -108,10 +142,42 @@ def upgrade(conn: sqlite3.Connection) -> None:
         ).fetchone()
         if existing is not None:
             continue
-        conn.execute(
-            "UPDATE renewal_attempts SET is_current=0 WHERE host_id=? AND is_current=1",
+        current = conn.execute(
+            "SELECT attempt_id,state,lease_expires_at FROM renewal_attempts "
+            "WHERE host_id=? AND is_current=1",
             (host_id,),
-        )
+        ).fetchone()
+        if current is not None:
+            audited = conn.execute(
+                """SELECT 1 FROM audit_log
+                   WHERE actor='migration:0047'
+                     AND action='renewal_report.migration_skip'
+                     AND target_type='host' AND target_id=? LIMIT 1""",
+                (host_id,),
+            ).fetchone()
+            if audited is None:
+                detail = json.dumps(
+                    {
+                        "attempt_id": str(current[0]),
+                        "previous_renewal_status": "in_progress",
+                        "reason": "migration 0047 kept the existing current attempt",
+                    }
+                )
+                conn.execute(
+                    """INSERT INTO audit_log
+                       (id,ts,actor,action,target_type,target_id,detail,source_ip)
+                       VALUES (?,?,'migration:0047','renewal_report.migration_skip',
+                               'host',?,?,NULL)""",
+                    (str(uuid.uuid4()), received_at, host_id, detail),
+                )
+            continue
+        baseline = str(fingerprint).lower() if fingerprint else None
+        baseline_used = conn.execute(
+            """SELECT 1 FROM renewal_attempts
+               WHERE host_id=? AND baseline_fingerprint IS ?
+               LIMIT 1""",
+            (host_id, baseline),
+        ).fetchone() is not None
         attempt_id = uuid.uuid4().hex
         report_id = uuid.uuid4().hex
         cursor = conn.execute(
@@ -127,16 +193,18 @@ def upgrade(conn: sqlite3.Connection) -> None:
             """INSERT INTO renewal_attempts
                (attempt_id,host_id,is_current,source,state,opened_seq,baseline_fingerprint,
                 baseline_not_after,new_fingerprint,lease_expires_at,suppresses_stalled,
-                received_at,next_check_at,closed_reason)
-               VALUES (?,?,1,'migration:0047','open',?,?,?,NULL,?,1,?,NULL,NULL)""",
+                received_at,next_check_at,closed_reason,baseline_lease_claimed)
+               VALUES (?,?,1,'migration:0047','open',?,?,?,NULL,?,?,?,NULL,NULL,?)""",
             (
                 attempt_id,
                 host_id,
                 int(cursor.lastrowid),
-                str(fingerprint).lower() if fingerprint else None,
+                baseline,
                 not_after,
                 lease_expires_at,
+                int(not baseline_used),
                 received_at,
+                int(not baseline_used),
             ),
         )
         detail = json.dumps(

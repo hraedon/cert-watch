@@ -12,7 +12,7 @@ from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import Any
 
-from cert_watch.database.renewal_attempts import open_attempt_exists_sql
+from cert_watch.database.renewal_attempts import live_attempt_exists_sql
 
 logger = logging.getLogger("cert_watch.alerts")
 
@@ -46,7 +46,7 @@ def _load_host_owner_maps(
         ).fetchone()
         attempt_status = (
             "CASE WHEN "
-            + open_attempt_exists_sql("h")
+            + live_attempt_exists_sql("h", "cw_utc_now()")
             + " THEN 'in_progress' ELSE 'pending' END"
             if has_attempts is not None
             else "'pending'"

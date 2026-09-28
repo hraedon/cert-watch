@@ -40,7 +40,7 @@ def renewal_window_candidates(
 
     Home and notification generation share this predicate
     (:func:`renewal_window_sql`): a leaf is inside the configured window, has
-    no successor, and its host is not marked as in progress.
+    no successor, and its endpoint has no live stall-suppressing lease.
     Delivery success/failure does not resolve it. Each result contains the
     certificate fields, days_remaining, and owner.
     """

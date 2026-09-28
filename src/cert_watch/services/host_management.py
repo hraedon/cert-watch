@@ -24,6 +24,7 @@ from cert_watch.auth.scope import (
 from cert_watch.config import Settings
 from cert_watch.database import HostEntry, SqliteHostRepository, get_write_lock
 from cert_watch.database.connection import _connect, begin_immediate
+from cert_watch.database.renewal_attempts import host_projection_sql
 from cert_watch.host_validation import canonical_hostname
 from cert_watch.scan import (
     STARTTLS_MODES,
@@ -681,12 +682,10 @@ def update_host_settings(
             begin_immediate(conn)
             ensure_write_scope_on(conn, auth, host_id=host_id)
             cursor = conn.execute(
-                "UPDATE hosts SET scan_interval_hours = ?, threshold_days = ?, "
-                "renewal_status = ? WHERE id = ?",
+                "UPDATE hosts SET scan_interval_hours = ?, threshold_days = ? WHERE id = ?",
                 (
                     update.scan_interval_hours,
                     update.threshold_days,
-                    update.renewal_status,
                     host_id,
                 ),
             )
@@ -705,10 +704,13 @@ def update_host_settings(
                 actor=actor,
                 source_ip=source_ip,
             )
-            row = conn.execute("SELECT * FROM hosts WHERE id = ?", (host_id,)).fetchone()
+            row = conn.execute(
+                f"SELECT {host_projection_sql('h')} FROM hosts h WHERE h.id = ?",
+                (host_id,),
+            ).fetchone()
             assert row is not None
             updated = repo._row_to_host(row)
-            updated.renewal_status = derived_status
+            assert updated.renewal_status == derived_status
             audit_event = record_audit(
                 db_path,
                 actor=actor,
