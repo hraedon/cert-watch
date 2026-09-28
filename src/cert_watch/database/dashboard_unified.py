@@ -9,18 +9,16 @@ host/scan context), ``_build_pending_entries`` (hosts with no leaf cert),
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from cert_watch.database.connection import _connect
+from cert_watch.database.connection import SQLITE_QUERY_CHUNK, _connect, _sql_now
 from cert_watch.database.dashboard_rows import _build_dashboard_rows
+from cert_watch.database.renewal_attempts import host_projection_sql
 from cert_watch.database.schema import init_schema
 from cert_watch.filters import subject_cn
 from cert_watch.tags import format_tags, merge_tags
-
-# Bound on bound parameters per ``IN (...)``: well under SQLite's limit.
-_IN_CHUNK = 400
 
 
 def _build_unified_from_dash(
@@ -58,7 +56,7 @@ def _build_unified_from_dash(
             "owner_name": dict(h).get("owner_name", ""),
             "owner_email": dict(h).get("owner_email", ""),
             "owner_slack": dict(h).get("owner_slack", ""),
-            "renewal_status": dict(h).get("renewal_status", "pending"),
+            "renewal_status": dict(h).get("derived_renewal_status", "pending"),
             "renewal_method": dict(h).get("renewal_method", ""),
             "runbook_url": dict(h).get("runbook_url", ""),
             "notes": dict(h).get("notes", ""),
@@ -140,7 +138,7 @@ def _build_pending_entries(host_rows: list[Any], scan_rows: list[Any]) -> list[d
             "owner_name": dict(h).get("owner_name", ""),
             "owner_email": dict(h).get("owner_email", ""),
             "owner_slack": dict(h).get("owner_slack", ""),
-            "renewal_status": dict(h).get("renewal_status", "pending"),
+            "renewal_status": dict(h).get("derived_renewal_status", "pending"),
             "renewal_method": dict(h).get("renewal_method", ""),
             "runbook_url": dict(h).get("runbook_url", ""),
             "notes": dict(h).get("notes", ""),
@@ -199,8 +197,8 @@ def _build_unified_for_leaf_ids(
         return []
     leaf_rows: list[Any] = []
     chain_rows: list[Any] = []
-    for start in range(0, len(leaf_ids), _IN_CHUNK):
-        chunk = leaf_ids[start : start + _IN_CHUNK]
+    for start in range(0, len(leaf_ids), SQLITE_QUERY_CHUNK):
+        chunk = leaf_ids[start : start + SQLITE_QUERY_CHUNK]
         ph = ",".join("?" * len(chunk))
         leaf_rows += conn.execute(
             f"SELECT * FROM certificates WHERE id IN ({ph})", chunk
@@ -281,17 +279,22 @@ def _load_unified_filtered(
         host_where, host_params = None, ()
 
     init_schema(db_path)
+    instant = _sql_now(datetime.now(UTC))
     with _connect(db_path) as conn:
         if host_where:
             host_rows = conn.execute(
                 # The filter clause is ``h.``-prefixed for the EXISTS subqueries
                 # below, so the alias is required here too (the owner and
                 # renewal-method drill-downs raised "no such column").
-                f"SELECT * FROM hosts h WHERE {host_where} ORDER BY added_at",
-                host_params,
+                f"SELECT {host_projection_sql('h', '?')} FROM hosts h "
+                f"WHERE {host_where} ORDER BY h.added_at",
+                (instant, *host_params),
             ).fetchall()
         else:
-            host_rows = conn.execute("SELECT * FROM hosts ORDER BY added_at").fetchall()
+            host_rows = conn.execute(
+                f"SELECT {host_projection_sql('h', '?')} FROM hosts h ORDER BY h.added_at",
+                (instant,),
+            ).fetchall()
 
         if host_where:
             exists_clause = (

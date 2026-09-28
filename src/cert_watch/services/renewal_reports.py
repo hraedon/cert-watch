@@ -14,10 +14,15 @@ from typing import Any
 
 from cert_watch.audit import export_audit, record_audit
 from cert_watch.auth.guards import renewal_report_binding
-from cert_watch.auth.scope import ensure_write_scope_on, may_reveal_routing_identities
+from cert_watch.auth.scope import (
+    ScopeDeniedError,
+    ensure_write_scope_on,
+    may_reveal_routing_identities,
+)
 from cert_watch.config import Settings
 from cert_watch.database import get_write_lock
 from cert_watch.database.connection import _connect, begin_immediate
+from cert_watch.database.renewal_attempts import renewal_attempt_is_live
 from cert_watch.tags import parse_tags
 
 
@@ -39,6 +44,10 @@ class RenewalReportUnavailableError(RenewalReportServiceError):
 
 class RenewalReportRateLimitError(RenewalReportServiceError):
     pass
+
+
+class RenewalStatusOutOfDateError(ValueError):
+    """An HTML form omitted the status value it originally displayed."""
 
 
 @dataclass(frozen=True)
@@ -163,9 +172,215 @@ def resolve_target(
 
 def _source(auth: Any) -> str:
     principal_id = str(getattr(auth, "principal_id", "") or "")
-    if getattr(auth, "principal_kind", "") == "renewal-report" and principal_id:
+    if getattr(auth, "principal_kind", "") in {"api-key", "renewal-report"} and principal_id:
         return f"api_key:{principal_id}"
     return f"user:{principal_id or getattr(auth, 'username', '')}"
+
+
+def _cache_renewal_status(
+    conn: sqlite3.Connection, host_id: str, *, now: datetime
+) -> str:
+    """Refresh the legacy host column from the post-transition attempt state."""
+    attempt = conn.execute(
+        "SELECT state,lease_expires_at FROM renewal_attempts "
+        "WHERE host_id=? AND is_current=1",
+        (host_id,),
+    ).fetchone()
+    status = (
+        "in_progress"
+        if attempt is not None
+        and renewal_attempt_is_live(
+            str(attempt["state"]), attempt["lease_expires_at"], now=now
+        )
+        else "pending"
+    )
+    conn.execute("UPDATE hosts SET renewal_status=? WHERE id=?", (status, host_id))
+    return status
+
+
+def write_through_renewal_status_on(
+    conn: sqlite3.Connection,
+    db_path: str | Path,
+    settings: Settings,
+    host_id: str,
+    status: str | None,
+    *,
+    seen_status: str | None = None,
+    require_seen_status: bool = False,
+    auth: Any,
+    actor: str,
+    source_ip: str | None,
+    now: datetime | None = None,
+) -> tuple[str, dict[str, Any] | None]:
+    """Apply the compatibility ``renewal_status`` write inside its caller's transaction.
+
+    The host-writing service owns ``BEGIN IMMEDIATE`` and its other audit row.
+    This helper repeats the authoritative host-scope check, reduces the same
+    attempt tables as report ingestion, and returns an audit event for export
+    only after the caller commits.
+    """
+    if require_seen_status and seen_status == "":
+        seen_status = None
+    if status is not None and status not in {"pending", "in_progress"}:
+        raise ValueError("invalid renewal status")
+    if seen_status is not None and seen_status not in {"pending", "in_progress"}:
+        raise ValueError("invalid seen renewal status")
+    if (
+        status == "pending"
+        and status != seen_status
+        and getattr(auth, "principal_kind", "") == "renewal-report"
+    ):
+        raise ScopeDeniedError("renewal-report keys cannot cancel renewal attempts")
+    ensure_write_scope_on(conn, auth, host_id=host_id)
+    host = conn.execute(
+        "SELECT id,hostname,port FROM hosts WHERE id=?", (host_id,)
+    ).fetchone()
+    if host is None:
+        raise RenewalReportNotFoundError("endpoint not found")
+    received = (now or datetime.now(UTC)).astimezone(UTC)
+    received_at = received.isoformat()
+    attempt = conn.execute(
+        "SELECT * FROM renewal_attempts WHERE host_id=? AND is_current=1", (host_id,)
+    ).fetchone()
+
+    derived_status = (
+        "in_progress"
+        if attempt is not None
+        and renewal_attempt_is_live(
+            str(attempt["state"]), attempt["lease_expires_at"], now=received
+        )
+        else "pending"
+    )
+    if (
+        require_seen_status
+        and status is not None
+        and seen_status is None
+        and status != derived_status
+    ):
+        raise RenewalStatusOutOfDateError(
+            "The form is out of date; reload and try again."
+        )
+    # HTML submits the value it rendered separately from the selected value.
+    # An unchanged stale form is a no-op regardless of the state at commit.
+    # JSON omits ``seen_status`` and retains explicit-intent semantics.
+    unchanged = (
+        status is None
+        or status == derived_status
+        or (seen_status is not None and status == seen_status)
+    )
+    if unchanged:
+        _cache_renewal_status(conn, host_id, now=received)
+        return derived_status, None
+
+    outcome = "started" if status == "in_progress" else "cancelled"
+
+    baseline_fingerprint, baseline_not_after = _current_leaf(conn, host_id)
+    effect = "applied"
+    new_attempt = False
+    if outcome == "started":
+        if attempt is not None and attempt["state"] == "open":
+            conn.execute(
+                "UPDATE renewal_attempts SET state='abandoned',suppresses_stalled=0,"
+                "closed_reason='lease_expired' WHERE attempt_id=?",
+                (attempt["attempt_id"],),
+            )
+            attempt = conn.execute(
+                "SELECT * FROM renewal_attempts WHERE host_id=? AND is_current=1", (host_id,)
+            ).fetchone()
+        attempt_id = uuid.uuid4().hex
+        new_attempt = True
+    else:
+        assert attempt is not None
+        attempt_id = str(attempt["attempt_id"])
+
+    report_id = uuid.uuid4().hex
+    cursor = conn.execute(
+        """INSERT INTO renewal_reports
+           (report_id,host_id,hostname_snapshot,port_snapshot,outcome,message,tool,
+            correlation_id,new_fingerprint,occurred_at,received_at,source,effect,attempt_id)
+           VALUES (?,?,?,?,?,NULL,NULL,NULL,NULL,NULL,?,?,?,?)""",
+        (
+            report_id,
+            host_id,
+            host["hostname"],
+            host["port"],
+            outcome,
+            received_at,
+            _source(auth),
+            effect,
+            attempt_id,
+        ),
+    )
+    if cursor.lastrowid is None:  # pragma: no cover - SQLite INSERT contract
+        raise RuntimeError("renewal report insert returned no sequence")
+    if new_attempt:
+        conn.execute(
+            "UPDATE renewal_attempts SET is_current=0 WHERE host_id=? AND is_current=1",
+            (host_id,),
+        )
+        claims_baseline = int(
+            conn.execute(
+                """SELECT 1 FROM renewal_attempts
+                   WHERE host_id=? AND baseline_fingerprint IS ?
+                   LIMIT 1""",
+                (host_id, baseline_fingerprint),
+            ).fetchone() is None
+        )
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,baseline_fingerprint,
+                baseline_not_after,new_fingerprint,lease_expires_at,suppresses_stalled,
+                received_at,next_check_at,closed_reason,baseline_lease_claimed)
+               VALUES (?,?,1,?,'open',?,?,?,NULL,?,?,?,NULL,NULL,?)""",
+            (
+                attempt_id,
+                host_id,
+                _source(auth),
+                int(cursor.lastrowid),
+                baseline_fingerprint,
+                baseline_not_after,
+                (received + renewal_lease_for(
+                    RenewalTarget(
+                        host_id,
+                        str(host["hostname"]),
+                        int(host["port"]),
+                        "",
+                        "",
+                        baseline_fingerprint,
+                        baseline_not_after,
+                    ),
+                    settings,
+                )).isoformat(),
+                claims_baseline,
+                received_at,
+                claims_baseline,
+            ),
+        )
+    elif outcome == "cancelled":
+        conn.execute(
+            """UPDATE renewal_attempts SET state='cancelled',suppresses_stalled=0,
+               closed_reason='manual_cancelled' WHERE attempt_id=?""",
+            (attempt_id,),
+        )
+
+    post_status = _cache_renewal_status(conn, host_id, now=received)
+    audit_event = record_audit(
+        db_path,
+        actor=actor,
+        action="renewal_report.create",
+        target_type="host",
+        target_id=host_id,
+        detail={
+            "attempt_id": attempt_id,
+            "effect": effect,
+            "outcome": outcome,
+            "report_id": report_id,
+            "source": _source(auth),
+        },
+        source_ip=source_ip,
+        conn=conn,
+    )
+    return post_status, audit_event
 
 
 def _current_leaf(conn: sqlite3.Connection, host_id: str) -> tuple[str | None, str | None]:
@@ -264,8 +479,9 @@ def create_report(
             if (
                 attempt is not None
                 and attempt["state"] == "open"
-                and attempt["lease_expires_at"]
-                and str(attempt["lease_expires_at"]) <= received_at
+                and not renewal_attempt_is_live(
+                    str(attempt["state"]), attempt["lease_expires_at"], now=received
+                )
             ):
                 conn.execute(
                     "UPDATE renewal_attempts SET state='abandoned',"
@@ -383,18 +599,17 @@ def create_report(
                     "UPDATE renewal_attempts SET is_current=0 WHERE host_id=? AND is_current=1",
                     (target.host_id,),
                 )
-                suppresses = int(
-                    report.outcome == "started"
-                    and conn.execute(
+                claims_baseline = int(
+                    conn.execute(
                         """SELECT 1 FROM renewal_attempts
                            WHERE host_id=? AND baseline_fingerprint IS ?
-                             AND lease_expires_at IS NOT NULL LIMIT 1""",
+                           LIMIT 1""",
                         (target.host_id, baseline_fingerprint),
-                    ).fetchone()
-                    is None
+                    ).fetchone() is None
                 )
+                suppresses = int(report.outcome == "started" and claims_baseline)
                 lease = (
-                    (received + renewal_lease_for(target, settings)).isoformat()
+                    (received + renewal_lease_for(target, settings)).astimezone(UTC).isoformat()
                     if report.outcome == "started"
                     else None
                 )
@@ -402,8 +617,9 @@ def create_report(
                     """INSERT INTO renewal_attempts
                        (attempt_id,host_id,is_current,source,state,opened_seq,baseline_fingerprint,
                         baseline_not_after,new_fingerprint,lease_expires_at,
-                        suppresses_stalled,received_at,next_check_at,closed_reason)
-                       VALUES (?,?,1,?,?,?,?,?,?,?,?,?,NULL,?)""",
+                        suppresses_stalled,received_at,next_check_at,closed_reason,
+                        baseline_lease_claimed)
+                       VALUES (?,?,1,?,?,?,?,?,?,?,?,?,NULL,?,?)""",
                     (
                         attempt_id,
                         target.host_id,
@@ -417,6 +633,7 @@ def create_report(
                         suppresses,
                         received_at,
                         None if state == "open" else "reported_failed",
+                        claims_baseline,
                     ),
                 )
             elif effect == "applied" and state == "failed":
@@ -425,6 +642,8 @@ def create_report(
                     "closed_reason='reported_failed' WHERE attempt_id=?",
                     (attempt_id,),
                 )
+
+            _cache_renewal_status(conn, target.host_id, now=received)
 
             if report.correlation_id and effect != "ignored_late":
                 conn.execute(
@@ -538,7 +757,8 @@ def list_reports(
         )
         rows = conn.execute(
             f"""SELECT r.*, CASE
-                     WHEN a.state='open' AND a.lease_expires_at<=? THEN 'abandoned'
+                     WHEN a.state='open'
+                          AND julianday(a.lease_expires_at)<=julianday(?) THEN 'abandoned'
                      ELSE COALESCE(
                          a.state,
                          CASE WHEN r.outcome='failed' THEN 'failed' ELSE 'abandoned' END
@@ -574,12 +794,21 @@ def list_reports(
 
 
 def expire_renewal_leases(db_path: str | Path, *, now: datetime | None = None) -> int:
-    instant = (now or datetime.now(UTC)).astimezone(UTC).isoformat()
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    instant = current.isoformat()
     with get_write_lock(), _connect(db_path) as conn:
         cursor = conn.execute(
             "UPDATE renewal_attempts SET state='abandoned',suppresses_stalled=0,"
             "closed_reason='lease_expired' WHERE is_current=1 AND state='open' "
-            "AND lease_expires_at<=?",
+            "AND cw_epoch_ms(lease_expires_at)<=cw_epoch_ms(?)",
+            (instant,),
+        )
+        conn.execute(
+            "UPDATE hosts AS h SET renewal_status='pending' WHERE EXISTS ("
+            "SELECT 1 FROM renewal_attempts a WHERE a.host_id=h.id "
+            "AND a.is_current=1 AND a.state='abandoned' "
+            "AND a.closed_reason='lease_expired' "
+            "AND cw_epoch_ms(a.lease_expires_at)<=cw_epoch_ms(?))",
             (instant,),
         )
         conn.commit()
@@ -619,7 +848,7 @@ def purge_renewal_reports(
                          SELECT kept.attempt_id FROM renewal_attempts kept
                          WHERE kept.host_id=a.host_id
                            AND kept.baseline_fingerprint IS a.baseline_fingerprint
-                           AND kept.lease_expires_at IS NOT NULL
+                           AND kept.baseline_lease_claimed=1
                          ORDER BY kept.opened_seq DESC LIMIT 1
                      )""",
                 (cutoff_iso,),

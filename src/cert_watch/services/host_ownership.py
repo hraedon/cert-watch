@@ -33,6 +33,7 @@ from cert_watch.services.certificate_identity import (
     ensure_not_superseded,
     refuse_if_superseded,
 )
+from cert_watch.services.renewal_reports import write_through_renewal_status_on
 
 VALID_RENEWAL_METHODS = frozenset({"", "acme", "cert-manager", "manual"})
 VALID_RENEWAL_STATUSES = frozenset({"pending", "in_progress"})
@@ -53,6 +54,8 @@ class HostOwnershipUpdate:
     owner_email: str | None = None
     owner_slack: str | None = None
     renewal_status: str | None = None
+    renewal_status_seen: str | None = None
+    require_renewal_status_seen: bool = False
     renewal_method: str | None = None
     runbook_url: str | None = None
 
@@ -127,6 +130,8 @@ def _validate(update: HostOwnershipUpdate) -> HostOwnershipUpdate:
         owner_email=normalized["owner_email"],
         owner_slack=normalized["owner_slack"],
         renewal_status=update.renewal_status,
+        renewal_status_seen=update.renewal_status_seen,
+        require_renewal_status_seen=update.require_renewal_status_seen,
         renewal_method=normalized["renewal_method"],
         runbook_url=normalized["runbook_url"],
     )
@@ -145,6 +150,18 @@ def _validate(update: HostOwnershipUpdate) -> HostOwnershipUpdate:
                 "renewal_status",
                 "renewal_status must be 'pending' or 'in_progress'; "
                 "'renewed' is no longer supported",
+            )
+    if update.renewal_status_seen is not None and not (
+        update.require_renewal_status_seen and update.renewal_status_seen == ""
+    ):
+        if not isinstance(update.renewal_status_seen, str):
+            raise HostOwnershipValidationError(
+                "renewal_status_seen", "renewal_status_seen must be a string"
+            )
+        if update.renewal_status_seen not in VALID_RENEWAL_STATUSES:
+            raise HostOwnershipValidationError(
+                "renewal_status_seen",
+                "renewal_status_seen must be 'pending' or 'in_progress'",
             )
     if update.renewal_method is not None:
         if not isinstance(update.renewal_method, str):
@@ -255,6 +272,7 @@ def update_host_ownership(
             update = update()
         update = _validate(update)
         detail = asdict(update)
+        detail.pop("require_renewal_status_seen")
         conn = _connect(db_path)
         try:
             begin_immediate(conn)
@@ -270,9 +288,34 @@ def update_host_ownership(
             # transaction: a host moved to another team since the check
             # above is refused (#115 review round 10).
             ensure_write_scope_on(conn, auth, **target.scope_target())
-            updated = persist_host_ownership(conn, host_id, **detail)
+            updated = persist_host_ownership(
+                conn,
+                host_id,
+                owner_name=update.owner_name,
+                owner_email=update.owner_email,
+                owner_slack=update.owner_slack,
+                renewal_method=update.renewal_method,
+                runbook_url=update.runbook_url,
+            )
             if updated is None:
                 raise HostNotFoundError("host not found")
+            renewal_audit = None
+            if update.renewal_status is not None:
+                from cert_watch.config import current_settings
+
+                derived_status, renewal_audit = write_through_renewal_status_on(
+                    conn,
+                    db_path,
+                    current_settings(db_path),
+                    host_id,
+                    update.renewal_status,
+                    seen_status=update.renewal_status_seen,
+                    require_seen_status=update.require_renewal_status_seen,
+                    auth=auth,
+                    actor=actor,
+                    source_ip=source_ip,
+                )
+                updated.renewal_status = derived_status
             audit_event = record_audit(
                 db_path,
                 actor=actor,
@@ -288,6 +331,7 @@ def update_host_ownership(
             conn.rollback()
             raise
     export_audit(audit_event)
+    export_audit(renewal_audit)
 
     return HostOwnership(
         host_id=host_id,

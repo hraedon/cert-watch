@@ -59,6 +59,7 @@ from cert_watch.services.host_ownership import (
     HostOwnershipValidationError,
     update_host_ownership,
 )
+from cert_watch.services.renewal_reports import RenewalStatusOutOfDateError
 from cert_watch.services.resource_metadata import (
     ResourceMetadataNotFoundError,
     ResourceMetadataValidationError,
@@ -293,6 +294,8 @@ async def update_certificate_owner(
     owner_slack: str = Form(""),
     renewal_method: str = Form(""),
     runbook_url: str = Form(""),
+    renewal_status: str | None = Form(None),
+    renewal_status_seen: str | None = Form(None),
     _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
     if not check_rate_limit(f"cert_owner:{_extract_client_ip(request)}", 30, 60):
@@ -311,6 +314,9 @@ async def update_certificate_owner(
                 owner_slack=owner_slack,
                 renewal_method=renewal_method,
                 runbook_url=runbook_url,
+                renewal_status=renewal_status,
+                renewal_status_seen=renewal_status_seen,
+                require_renewal_status_seen=True,
             ),
             auth=acting_auth(request),
             actor=resolve_actor(request),
@@ -318,6 +324,10 @@ async def update_certificate_owner(
         )
     except ScopeDeniedError as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
+    except RenewalStatusOutOfDateError as exc:
+        return RedirectResponse(
+            url=f"/certificates/{cert_id}?error={quote(str(exc))}", status_code=303
+        )
     except HostOwnershipValidationError as exc:
         message = "invalid renewal method" if exc.field == "renewal_method" else str(exc)
         return RedirectResponse(

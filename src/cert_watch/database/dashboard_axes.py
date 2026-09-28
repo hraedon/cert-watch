@@ -10,6 +10,7 @@ from cert_watch.database.chain_status_cache import StatusContext, prepare_status
 from cert_watch.database.connection import _connect
 from cert_watch.database.dashboard_page import inventory_candidates_sql
 from cert_watch.status_model import (
+    RENEWAL_STATES,
     AxisSettings,
     StatusModelContext,
     prepare_status_model_context,
@@ -46,9 +47,7 @@ def dashboard_axis_stats(
     result: dict[str, Any] = {
         "condition": dict.fromkeys(("expired", "le7", "8to30", "ok"), 0),
         "monitoring": dict.fromkeys(("current", "failing", "never_scanned"), 0),
-        "renewal": dict.fromkeys(
-            ("automation_configured", "manual", "stalled", "in_progress", "unknown"), 0
-        ),
+        "renewal": dict.fromkeys(RENEWAL_STATES, 0),
         "delivery": dict.fromkeys(("ok", "failing", "unrouted"), 0),
         "overall": dict.fromkeys(
             ("expired", "critical", "warning", "healthy", "failing", "gray"), 0

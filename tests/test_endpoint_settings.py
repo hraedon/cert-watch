@@ -47,6 +47,7 @@ def _form(**changes):
         "scan_interval_hours": "6",
         "threshold_days": "21",
         "renewal_status": "in_progress",
+        "renewal_status_seen": "pending",
         **changes,
     }
 

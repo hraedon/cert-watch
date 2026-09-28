@@ -16,7 +16,7 @@ from cert_watch.database import (
     init_schema,
 )
 from cert_watch.database.repo import Alert
-from tests._helpers import seed_scanned
+from tests._helpers import mark_renewal_in_progress, seed_scanned
 
 
 def _mk_cert(seed: str, days: int) -> Certificate:
@@ -111,9 +111,10 @@ class TestQueueAssembly:
 
         cert = _mk_cert("shared", 20)
         hosts = SqliteHostRepository(db)
-        hosts.add("a.example.com", 443, renewal_method="acme", renewal_status="in_progress")
+        first_host_id = hosts.add("a.example.com", 443, renewal_method="acme")
         hosts.add("z.example.com", 443, renewal_method="manual")
         first_id = seed_scanned(db, "a.example.com", 443, cert)
+        mark_renewal_in_progress(db, first_host_id)
         affected_id = seed_scanned(db, "z.example.com", 443, cert)
         SqliteAlertRepository(db).create(
             Alert(
@@ -208,12 +209,9 @@ class TestQueueAssembly:
                 replaces_cert_id=cert_id,
             ).add(_mk_cert("successor", 300))
         else:
-            with sqlite3_conn(db) as conn:
-                conn.execute(
-                    "UPDATE hosts SET renewal_status = ? WHERE hostname = ?",
-                    (resolution, "handled.example.com"),
-                )
-                conn.commit()
+            host = SqliteHostRepository(db).get_by_endpoint("handled.example.com", 443)
+            assert host is not None
+            mark_renewal_in_progress(db, host.id)
         assert not any(item["kind"] == "renewal_stalled" for item in build_attention_queue(db))
 
     def test_legacy_renewed_value_does_not_clear_home_condition(self, db: Path):

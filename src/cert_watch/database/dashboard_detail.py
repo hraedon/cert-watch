@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from cert_watch.certificate_model import Certificate
-from cert_watch.database.connection import _connect, _row_to_cert
+from cert_watch.database.connection import _connect, _row_to_cert, _sql_now
 from cert_watch.database.dashboard_rows import _build_dashboard_rows
 from cert_watch.database.dashboard_unified import _build_unified_from_dash
 from cert_watch.database.posture import get_posture_for_cert
+from cert_watch.database.renewal_attempts import host_projection_sql
 from cert_watch.database.repo import HostEntry, SqliteHostRepository
 from cert_watch.database.schema import init_schema
 
@@ -42,6 +44,7 @@ def get_stored_certificate_detail_records(
 ) -> StoredCertificateDetailRecords | None:
     """Load the certificate, chain, endpoint, and host context in one place."""
     init_schema(db_path)
+    instant = _sql_now(datetime.now(UTC))
     with _connect(db_path) as conn:
         leaf = conn.execute("SELECT * FROM certificates WHERE id = ?", (cert_id,)).fetchone()
         if leaf is None:
@@ -55,8 +58,9 @@ def get_stored_certificate_detail_records(
         host_row = None
         if hostname:
             host_row = conn.execute(
-                "SELECT * FROM hosts WHERE hostname = ? AND port = ?",
-                (hostname, port),
+                f"SELECT {host_projection_sql('h', '?')} FROM hosts h "
+                "WHERE h.hostname = ? AND h.port = ?",
+                (instant, hostname, port),
             ).fetchone()
     return StoredCertificateDetailRecords(
         cert=_row_to_cert(leaf),
@@ -123,8 +127,12 @@ def get_pending_host_detail_records(
 ) -> PendingHostDetailRecords | None:
     """Load a registered host and its latest scan result."""
     init_schema(db_path)
+    instant = _sql_now(datetime.now(UTC))
     with _connect(db_path) as conn:
-        host_row = conn.execute("SELECT * FROM hosts WHERE id = ?", (host_id,)).fetchone()
+        host_row = conn.execute(
+            f"SELECT {host_projection_sql('h', '?')} FROM hosts h WHERE h.id = ?",
+            (instant, host_id),
+        ).fetchone()
         if host_row is None:
             return None
     return PendingHostDetailRecords(
@@ -163,6 +171,7 @@ def get_cert_detail(db_path: str | Path, cert_id: str) -> dict[str, Any] | None:
     Returns ``None`` if no leaf cert with that id exists.
     """
     init_schema(db_path)
+    instant = _sql_now(datetime.now(UTC))
     with _connect(db_path) as conn:
         leaf = conn.execute(
             "SELECT * FROM certificates WHERE id = ? AND is_leaf = 1", (cert_id,)
@@ -178,8 +187,9 @@ def get_cert_detail(db_path: str | Path, cert_id: str) -> dict[str, Any] | None:
         scan_rows = []
         if leaf["hostname"]:
             host_rows = conn.execute(
-                "SELECT * FROM hosts WHERE hostname = ? AND port = ?",
-                (leaf["hostname"], leaf["port"]),
+                f"SELECT {host_projection_sql('h', '?')} FROM hosts h "
+                "WHERE h.hostname = ? AND h.port = ?",
+                (instant, leaf["hostname"], leaf["port"]),
             ).fetchall()
             scan_rows = conn.execute(
                 """

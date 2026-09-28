@@ -109,7 +109,7 @@ class HostSettingsBody(BaseModel):
 
     scan_interval_hours: StrictInt | None = Field(ge=1, le=8760)
     threshold_days: StrictInt | None = Field(ge=1, le=2**63 - 1)
-    renewal_status: Literal["pending", "in_progress"]
+    renewal_status: Literal["pending", "in_progress"] | None = None
 
 
 _HOST_EDIT_FIELDS = {
@@ -124,6 +124,7 @@ _HOST_EDIT_FIELDS = {
     "notes",
     "tags",
 }
+_HOST_EDIT_REQUIRED_FIELDS = _HOST_EDIT_FIELDS - {"renewal_status"}
 
 
 def _validation_error(exc: PydanticValidationError) -> JSONResponse:
@@ -335,12 +336,15 @@ async def api_edit_host(
 
     def parse() -> HostEditUpdate:
         body = json_body(raw)
-        missing = _HOST_EDIT_FIELDS - body.keys()
+        missing = _HOST_EDIT_REQUIRED_FIELDS - body.keys()
         extra = body.keys() - _HOST_EDIT_FIELDS
         if missing or extra:
             raise JsonBodyError(
-                "host edit requires exactly: " + ", ".join(sorted(_HOST_EDIT_FIELDS))
+                "host edit requires exactly the required fields (renewal_status is optional): "
+                + ", ".join(sorted(_HOST_EDIT_REQUIRED_FIELDS))
             )
+        if "renewal_status" in body and body["renewal_status"] is None:
+            raise JsonBodyError("renewal_status must be a string")
         return HostEditUpdate(**body)
 
     try:
@@ -397,6 +401,19 @@ async def api_update_host_owner(
 
     def parse() -> HostOwnershipUpdate:
         body = json_body(raw)
+        allowed = {
+            "owner_name",
+            "owner_email",
+            "owner_slack",
+            "renewal_status",
+            "renewal_method",
+            "runbook_url",
+        }
+        extra = body.keys() - allowed
+        if extra:
+            raise JsonBodyError(f"unknown field: {', '.join(sorted(extra))}")
+        if "renewal_status" in body and body["renewal_status"] is None:
+            raise JsonBodyError("renewal_status must be a string")
         return HostOwnershipUpdate(
             owner_name=body.get("owner_name"),
             owner_email=body.get("owner_email"),
@@ -448,6 +465,8 @@ async def api_update_host_settings(
 ) -> JSONResponse:
     try:
         body = HostSettingsBody.model_validate(json_body(await request.body()))
+        if "renewal_status" in body.model_fields_set and body.renewal_status is None:
+            raise JsonBodyError("renewal_status must be a string")
         updated = update_host_settings(
             _db_path(request),
             host_id,

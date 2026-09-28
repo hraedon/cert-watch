@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,10 +17,11 @@ from cert_watch.auth.scope import (
     unknown_target_scope_error,
 )
 from cert_watch.database import HostEntry, SqliteHostRepository
-from cert_watch.database.connection import _connect, begin_immediate, get_write_lock
+from cert_watch.database.connection import _connect, _sql_now, begin_immediate, get_write_lock
 from cert_watch.database.metadata_ops import (
     update_certificate_tags as persist_certificate_tags,
 )
+from cert_watch.database.renewal_attempts import host_projection_sql
 from cert_watch.scan_freshness import scan_interval_out_of_range
 from cert_watch.services.certificate_identity import (
     ensure_not_superseded,
@@ -32,6 +34,7 @@ from cert_watch.services.host_ownership import (
     resolve_host_ownership_target,
     validate_host_ownership,
 )
+from cert_watch.services.renewal_reports import write_through_renewal_status_on
 from cert_watch.services.resource_metadata import (
     MAX_NOTES_LENGTH,
     ResourceMetadataValidationError,
@@ -50,7 +53,9 @@ class HostEditUpdate:
     runbook_url: Any = ""
     scan_interval_hours: Any = None
     threshold_days: Any = None
-    renewal_status: Any = "pending"
+    renewal_status: Any = None
+    renewal_status_seen: Any = None
+    require_renewal_status_seen: bool = False
     notes: Any = ""
     tags: Any = ""
 
@@ -90,6 +95,8 @@ def _validate(
             renewal_method=update.renewal_method,
             runbook_url=update.runbook_url,
             renewal_status=update.renewal_status,
+            renewal_status_seen=update.renewal_status_seen,
+            require_renewal_status_seen=update.require_renewal_status_seen,
         )
     )
     for field in (
@@ -98,7 +105,6 @@ def _validate(
         "owner_slack",
         "renewal_method",
         "runbook_url",
-        "renewal_status",
     ):
         if getattr(ownership, field) is None:
             raise HostOwnershipValidationError(field, f"{field} must be a string")
@@ -206,7 +212,7 @@ def edit_host(
             cursor = conn.execute(
                 "UPDATE hosts SET owner_name = ?, owner_email = ?, owner_slack = ?, "
                 "renewal_method = ?, runbook_url = ?, scan_interval_hours = ?, "
-                "threshold_days = ?, renewal_status = ?, notes = ?"
+                "threshold_days = ?, notes = ?"
                 + (", tags = ?" if not named_cert else "")
                 + " WHERE id = ?",
                 (
@@ -217,7 +223,6 @@ def edit_host(
                     ownership.runbook_url,
                     interval,
                     threshold,
-                    ownership.renewal_status,
                     resolved.notes,
                     *((normalized_tags,) if not named_cert else ()),
                     target.host_id,
@@ -227,9 +232,29 @@ def edit_host(
                 raise HostNotFoundError("host not found")
             if named_cert and not persist_certificate_tags(conn, named_cert, normalized_tags):
                 raise HostNotFoundError("certificate not found")
-            row = conn.execute("SELECT * FROM hosts WHERE id = ?", (target.host_id,)).fetchone()
+            from cert_watch.config import current_settings
+
+            received = datetime.now(UTC)
+            derived_status, renewal_audit = write_through_renewal_status_on(
+                conn,
+                db_path,
+                current_settings(db_path),
+                target.host_id,
+                ownership.renewal_status,
+                seen_status=ownership.renewal_status_seen,
+                require_seen_status=ownership.require_renewal_status_seen,
+                auth=auth,
+                actor=actor,
+                source_ip=source_ip,
+                now=received,
+            )
+            row = conn.execute(
+                f"SELECT {host_projection_sql('h', '?')} FROM hosts h WHERE h.id = ?",
+                (_sql_now(received), target.host_id),
+            ).fetchone()
             assert row is not None
             updated = SqliteHostRepository(db_path)._row_to_host(row)
+            assert updated.renewal_status == derived_status
             event = record_audit(
                 db_path,
                 actor=actor,
@@ -257,6 +282,7 @@ def edit_host(
             conn.rollback()
             raise
     export_audit(event)
+    export_audit(renewal_audit)
     return HostEditResult(
         updated,
         tuple(parse_tags(normalized_tags)),

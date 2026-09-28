@@ -163,7 +163,7 @@ group chips were removed because they did not establish historical delivery.
 | Column | Write path(s) | UI surface |
 |---|---|---|
 | `hosts.expected_issuers` | Existing admin form/API write paths retained for compatibility | Read-only legacy value on details for admins, explicitly not monitored after CT removal. No new policy editor. |
-| `hosts.renewal_status` | `POST /hosts/{id}/settings`; existing `PATCH /api/hosts/{id}/owner` | Endpoint settings; `pending` or operator-reported `in_progress`, which suppresses only renewal-stalled notices. |
+| `hosts.renewal_status` | `POST /hosts/{id}/settings`; existing `PATCH /api/hosts/{id}/owner` | Compatibility write-through: `in_progress` starts a leased durable attempt and `pending` cancels active work. Reads derive the same two values from the current attempt. |
 | `hosts.scan_interval_hours` | `POST /hosts`, CSV, and `POST /hosts/{id}/settings` | Add drawer creation seed and endpoint settings editor. |
 | `hosts.threshold_days` | `POST /hosts`, CSV, and `POST /hosts/{id}/settings` | Creation drawer and endpoint settings editor. |
 

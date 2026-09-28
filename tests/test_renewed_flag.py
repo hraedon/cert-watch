@@ -8,7 +8,7 @@ from cert_watch.certificate_model import Certificate
 from cert_watch.database import SqliteAlertRepository, SqliteHostRepository, init_schema
 from cert_watch.database.connection import _connect
 from cert_watch.scan import ScanError, scan_host
-from tests._helpers import seed_certificate
+from tests._helpers import mark_renewal_in_progress, seed_certificate
 
 
 def _cert(name: str, days: int) -> Certificate:
@@ -78,7 +78,7 @@ def test_in_progress_suppresses_only_renewal_stalled_alerts(tmp_path) -> None:
         ("warning.example.test", 2),
         ("expired.example.test", -3),
     ):
-        hosts.add(hostname, 443, renewal_status="in_progress")
+        host_id = hosts.add(hostname, 443)
         seed_certificate(
             db,
             _cert(hostname[0], days),
@@ -86,6 +86,7 @@ def test_in_progress_suppresses_only_renewal_stalled_alerts(tmp_path) -> None:
             hostname=hostname,
             port=443,
         )
+        mark_renewal_in_progress(db, host_id)
 
     expiry = evaluate_all_certs(db, alerts)
     assert {alert.cert_id for alert in expiry} == {

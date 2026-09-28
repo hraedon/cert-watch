@@ -135,6 +135,9 @@
                             {% endif %}
                             <form method="post" action="/hosts/{{ cert_id }}/edit" class="cw-form">
                                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                                <input type="hidden"
+                                       name="renewal_status_seen"
+                                       value="{{ edit_values.get('renewal_status_seen', host_info.renewal_status) }}">
                                 <div class="cw-form-grid">
                                     <div class="cw-field">
                                         <label class="cw-label" for="host-owner-name">Owner name</label>

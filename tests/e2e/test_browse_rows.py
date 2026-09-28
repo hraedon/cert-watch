@@ -29,6 +29,7 @@ from cert_watch.database import (
 )
 from cert_watch.scheduler import ScanHistory, record_scan_history
 from cert_watch.security import SecurityContext
+from tests._helpers import mark_renewal_in_progress
 
 _AUTH_SECRET = "e2e-browse-rows-secret-0123456789abcdef"
 _CSRF_SECRET = "e2e-browse-rows-csrf-0123456789abcdef"
@@ -70,12 +71,11 @@ def browse_rows_server(
     init_schema(db)
     hosts = SqliteHostRepository(db)
 
-    hosts.add(
+    current_host_id = hosts.add(
         "current.alpha.example.test",
         tags="alpha",
         owner_name="Alpha team",
         owner_email="alpha@example.test",
-        renewal_status="in_progress",
         renewal_method="acme",
     )
     replace_scanned(
@@ -86,14 +86,14 @@ def browse_rows_server(
         [],
         True,
     )
+    mark_renewal_in_progress(db, current_host_id)
     _history(db, "current.alpha.example.test", "success", 0)
 
-    hosts.add(
+    peer_host_id = hosts.add(
         "peer.alpha.example.test",
         tags="alpha",
         owner_name="Alpha team",
         owner_email="alpha@example.test",
-        renewal_status="in_progress",
         renewal_method="acme",
     )
     replace_scanned(
@@ -104,6 +104,7 @@ def browse_rows_server(
         [],
         True,
     )
+    mark_renewal_in_progress(db, peer_host_id)
     _history(db, "peer.alpha.example.test", "success", 80)
     _history(db, "peer.alpha.example.test", "failure", 3, "connection refused")
 

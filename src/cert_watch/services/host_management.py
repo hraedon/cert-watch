@@ -8,6 +8,7 @@ import io
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -23,7 +24,8 @@ from cert_watch.auth.scope import (
 )
 from cert_watch.config import Settings
 from cert_watch.database import HostEntry, SqliteHostRepository, get_write_lock
-from cert_watch.database.connection import _connect, begin_immediate
+from cert_watch.database.connection import _connect, _sql_now, begin_immediate
+from cert_watch.database.renewal_attempts import host_projection_sql
 from cert_watch.host_validation import canonical_hostname
 from cert_watch.scan import (
     STARTTLS_MODES,
@@ -61,7 +63,9 @@ class HostNotFoundError(LookupError):
 class HostSettingsUpdate:
     scan_interval_hours: int | None
     threshold_days: int | None
-    renewal_status: str
+    renewal_status: str | None = None
+    renewal_status_seen: str | None = None
+    require_renewal_status_seen: bool = False
 
 
 @dataclass(frozen=True)
@@ -674,27 +678,58 @@ def update_host_settings(
             raise HostValidationError(
                 "Alert threshold must be a positive whole number within the stored range."
             )
-        if update.renewal_status not in {"pending", "in_progress"}:
+        if update.renewal_status is not None and update.renewal_status not in {
+            "pending",
+            "in_progress",
+        }:
             raise HostValidationError("Choose a valid operator-reported renewal status.")
+        if (
+            update.renewal_status_seen is not None
+            and not (
+                update.require_renewal_status_seen
+                and update.renewal_status_seen == ""
+            )
+            and update.renewal_status_seen not in {"pending", "in_progress"}
+        ):
+            raise HostValidationError("Choose a valid previously seen renewal status.")
         conn = _connect(db_path)
         try:
             begin_immediate(conn)
             ensure_write_scope_on(conn, auth, host_id=host_id)
             cursor = conn.execute(
-                "UPDATE hosts SET scan_interval_hours = ?, threshold_days = ?, "
-                "renewal_status = ? WHERE id = ?",
+                "UPDATE hosts SET scan_interval_hours = ?, threshold_days = ? WHERE id = ?",
                 (
                     update.scan_interval_hours,
                     update.threshold_days,
-                    update.renewal_status,
                     host_id,
                 ),
             )
             if cursor.rowcount == 0:
                 raise HostNotFoundError("host not found")
-            row = conn.execute("SELECT * FROM hosts WHERE id = ?", (host_id,)).fetchone()
+            from cert_watch.config import current_settings
+            from cert_watch.services.renewal_reports import write_through_renewal_status_on
+
+            received = datetime.now(UTC)
+            derived_status, renewal_audit = write_through_renewal_status_on(
+                conn,
+                db_path,
+                current_settings(db_path),
+                host_id,
+                update.renewal_status,
+                seen_status=update.renewal_status_seen,
+                require_seen_status=update.require_renewal_status_seen,
+                auth=auth,
+                actor=actor,
+                source_ip=source_ip,
+                now=received,
+            )
+            row = conn.execute(
+                f"SELECT {host_projection_sql('h', '?')} FROM hosts h WHERE h.id = ?",
+                (_sql_now(received), host_id),
+            ).fetchone()
             assert row is not None
             updated = repo._row_to_host(row)
+            assert updated.renewal_status == derived_status
             audit_event = record_audit(
                 db_path,
                 actor=actor,
@@ -714,6 +749,7 @@ def update_host_settings(
             conn.rollback()
             raise
     export_audit(audit_event)
+    export_audit(renewal_audit)
     assert updated is not None
     return updated
 

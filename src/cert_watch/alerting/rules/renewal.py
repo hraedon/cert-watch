@@ -10,26 +10,25 @@ from cert_watch.alerting.keys import certificate_alert_key
 from cert_watch.alerting.messages import _format_renewal_message
 from cert_watch.alerting.routing import _load_host_owner_maps
 from cert_watch.database import Alert, AlertRepository
+from cert_watch.database.renewal_attempts import endpoint_stall_suppression_exists_sql
 
 
 def renewal_window_sql(alias: str = "c") -> str:
     """SQL: leaf row *alias* is in its renewal window with the renewal unhandled.
 
-    Binds ``?`` window days, ``?`` now (``_sql_now``), ``?`` window days. The one
+    Binds ``?`` window days, ``?`` now (``_sql_now``), ``?`` window days, then
+    that same ``now`` for the attempt lease. The one
     predicate Home's attention queue and the renewal notification share: the
     leaf's own days are within the window (not expired), no successor
     certificate replaces it (a row naming itself doesn't count), and its host
-    is not marked in progress. A legacy
-    ``renewed`` value is not evidence that a replacement certificate exists.
+    has no live stall-suppressing lease.
     """
     return (
         f"(? > 0 AND cw_effective_days({alias}.not_after, NULL, ?) BETWEEN 0 AND ?"
         f" AND NOT EXISTS (SELECT 1 FROM certificates succ"
         # A row naming itself is not replaced by anything (#115 review).
         f" WHERE succ.replaces_cert_id = {alias}.id AND succ.id != {alias}.id)"
-        f" AND COALESCE((SELECT rh.renewal_status FROM hosts rh"
-        f" WHERE rh.hostname = {alias}.hostname AND rh.port = {alias}.port), '')"
-        f" != 'in_progress')"
+        f" AND NOT {endpoint_stall_suppression_exists_sql(alias, '?')})"
     )
 
 
@@ -41,7 +40,7 @@ def renewal_window_candidates(
 
     Home and notification generation share this predicate
     (:func:`renewal_window_sql`): a leaf is inside the configured window, has
-    no successor, and its host is not marked as in progress.
+    no successor, and its endpoint has no live stall-suppressing lease.
     Delivery success/failure does not resolve it. Each result contains the
     certificate fields, days_remaining, and owner.
     """
@@ -56,7 +55,7 @@ def renewal_window_candidates(
             "SELECT c.id, c.subject, c.hostname, c.port, c.not_after, c.fingerprint_sha256,"
             " cw_effective_days(c.not_after, NULL, ?) AS days_remaining"
             f" FROM certificates c WHERE c.is_leaf = 1 AND {renewal_window_sql('c')}",
-            (now, window_days, now, window_days),
+            (now, window_days, now, window_days, now),
         ).fetchall()
 
     _host_thresholds, host_owners = _load_host_owner_maps(db_path)

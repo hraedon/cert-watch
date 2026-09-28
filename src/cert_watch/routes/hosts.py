@@ -74,6 +74,7 @@ from cert_watch.services.host_ownership import (
     HostOwnershipValidationError,
     update_host_ownership,
 )
+from cert_watch.services.renewal_reports import RenewalStatusOutOfDateError
 from cert_watch.services.resource_metadata import (
     ResourceMetadataNotFoundError,
     ResourceMetadataValidationError,
@@ -221,6 +222,7 @@ async def edit_host_detail(
     scan_interval_hours: str = Form(""),
     threshold_days: str = Form(""),
     renewal_status: str = Form("pending"),
+    renewal_status_seen: str | None = Form(None),
     notes: str = Form(""),
     tags: str = Form(""),
     _auth: str = Depends(write_form_guard),
@@ -240,6 +242,7 @@ async def edit_host_detail(
         "scan_interval_hours": scan_interval_hours,
         "threshold_days": threshold_days,
         "renewal_status": renewal_status,
+        "renewal_status_seen": renewal_status_seen or "",
         "notes": notes,
         "tags": tags,
     }
@@ -256,6 +259,8 @@ async def edit_host_detail(
                 scan_interval_hours=scan_interval_hours.strip(),
                 threshold_days=threshold_days.strip(),
                 renewal_status=renewal_status,
+                renewal_status_seen=renewal_status_seen,
+                require_renewal_status_seen=True,
                 notes=notes,
                 tags=tags,
             ),
@@ -270,6 +275,11 @@ async def edit_host_detail(
         return superseded_redirect(exc)
     except ScopeDeniedError as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
+    except RenewalStatusOutOfDateError as exc:
+        return RedirectResponse(
+            url=f"/certificates/{resource_id}?endpoint_error={quote(str(exc))}#edit-host",
+            status_code=303,
+        )
     except (HostOwnershipTargetError, OwnershipHostNotFoundError, ManagedHostNotFoundError):
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
     except (
@@ -279,7 +289,7 @@ async def edit_host_detail(
     ) as exc:
         message = str(exc)
         if isinstance(exc, HostOwnershipValidationError):
-            field = exc.field
+            field = "renewal_status" if exc.field == "renewal_status_seen" else exc.field
         elif message.startswith("Scan interval"):
             field = "scan_interval_hours"
         elif message.startswith("Alert threshold"):
@@ -314,6 +324,8 @@ async def update_host_owner(
     owner_slack: str = Form(""),
     renewal_method: str = Form(""),
     runbook_url: str = Form(""),
+    renewal_status: str | None = Form(None),
+    renewal_status_seen: str | None = Form(None),
     _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
     """Update host ownership through the host-namespaced UI adapter."""
@@ -332,6 +344,9 @@ async def update_host_owner(
                 owner_slack=owner_slack,
                 renewal_method=renewal_method,
                 runbook_url=runbook_url,
+                renewal_status=renewal_status,
+                renewal_status_seen=renewal_status_seen,
+                require_renewal_status_seen=True,
             ),
             auth=acting_auth(request),
             actor=resolve_actor(request),
@@ -345,6 +360,10 @@ async def update_host_owner(
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
     except ScopeDeniedError as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
+    except RenewalStatusOutOfDateError as exc:
+        return RedirectResponse(
+            url=f"/certificates/{host_id}?error={quote(str(exc))}", status_code=303
+        )
     except HostOwnershipValidationError as exc:
         message = "invalid renewal method" if exc.field == "renewal_method" else str(exc)
         return RedirectResponse(
@@ -361,6 +380,7 @@ async def update_host_settings(
     scan_interval_hours: str = Form(""),
     threshold_days: str = Form(""),
     renewal_status: str = Form("pending"),
+    renewal_status_seen: str | None = Form(None),
     _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
     """Edit cadence, expiry thresholds, and the operator's renewal report."""
@@ -409,7 +429,13 @@ async def update_host_settings(
         update_host_settings_service(
             db,
             host_id,
-            HostSettingsUpdate(interval, threshold, renewal_status),
+            HostSettingsUpdate(
+                interval,
+                threshold,
+                renewal_status,
+                renewal_status_seen,
+                True,
+            ),
             auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
@@ -419,6 +445,8 @@ async def update_host_settings(
         wake_scheduler(getattr(request.app.state, "scheduler", None))
     except ScopeDeniedError as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
+    except RenewalStatusOutOfDateError as exc:
+        return invalid(str(exc))
     except HostValidationError as exc:
         return invalid(str(exc))
     except ManagedHostNotFoundError:

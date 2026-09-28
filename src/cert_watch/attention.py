@@ -72,7 +72,7 @@ def _ranked_sql(inv_sql: str) -> str:
     the row's most urgent item (99 when it has none) and ``items`` how many
     items it yields, so the queue can be counted and cut without building a
     row. Binds, after *inv_sql*'s parameters: the stale-evidence host ids
-    (a JSON array), then :func:`renewal_window_sql`'s three.
+    (a JSON array), then :func:`renewal_window_sql`'s four.
     """
     from cert_watch.alerting.rules.renewal import renewal_window_sql
 
@@ -280,7 +280,14 @@ def attention_queue_page(
     evidence = scan_evidence or {}
     stale_hosts = json.dumps(sorted(h for h, ev in evidence.items() if ev.state != "current"))
     ranked = _ranked_sql(inv_sql)
-    params = [*inv_params, stale_hosts, window_days, status.sql_now, window_days]
+    params = [
+        *inv_params,
+        stale_hosts,
+        window_days,
+        status.sql_now,
+        window_days,
+        status.sql_now,
+    ]
     order = (
         f"ORDER BY best, COALESCE(eff_days, 9999), (grp_method IN ({_AUTO_SQL})), endpoint"
     )

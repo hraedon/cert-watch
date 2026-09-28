@@ -48,6 +48,21 @@ reinterpret the existing `renewal_status` column; that compatibility
 transition is intentionally deferred to the next slice. Endpoint deletion
 removes all of the new endpoint-owned data.
 
+### Migration 0047
+
+Migration **0047** converts every host stored as `in_progress` into an open
+renewal attempt. Its lease begins at upgrade time and lasts for
+`renewal_report_lease_hours` (24 hours by default). Each conversion is written
+to the audit log. The compatibility column remains in this release, but reads
+derive `renewal_status` from the attempt and all existing writes create or
+cancel durable reports.
+
+Hosts left “in progress” for weeks will therefore start receiving
+renewal-stalled notices 24 hours after the upgrade. Re-marking the same served
+certificate shows work as in progress but does not stop those notices because
+the migration used that leaf's one stall-suppressing lease. A new certificate,
+or the lease lapsing followed by an actual renewal, stops them.
+
 ## Upgrading from 1.1.0 to 1.1.1
 
 API-key audit actors now use the stable `api_key:<id>` format instead of the
