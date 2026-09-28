@@ -828,10 +828,12 @@ class SqliteHostRepository:
             raise
         return host_id
 
-    def list_all(self) -> list[HostEntry]:
+    def list_all(self, *, now: datetime | None = None) -> list[HostEntry]:
+        instant = _sql_now(now or datetime.now(UTC))
         with _connect(self.db_path) as conn:
             rows = conn.execute(
-                f"SELECT {host_projection_sql('h')} FROM hosts h ORDER BY h.added_at"
+                f"SELECT {host_projection_sql('h', '?')} FROM hosts h ORDER BY h.added_at",
+                (instant,),
             ).fetchall()
         return [self._row_to_host(r) for r in rows]
 
@@ -850,9 +852,10 @@ class SqliteHostRepository:
             return self.list_all()
         from cert_watch.database.dashboard import _add_effective_tag_filter
 
-        sql = f"SELECT {host_projection_sql('h')} FROM hosts h WHERE 1=1"
+        instant = _sql_now(datetime.now(UTC))
+        sql = f"SELECT {host_projection_sql('h', '?')} FROM hosts h WHERE 1=1"
         sql, params = _add_effective_tag_filter(
-            sql, [], scope_tags, col_cert=None, col_host="h.tags"
+            sql, [instant], scope_tags, col_cert=None, col_host="h.tags"
         )
         sql += " ORDER BY h.added_at"
         with _connect(self.db_path) as conn:
@@ -880,13 +883,16 @@ class SqliteHostRepository:
             added_at=_parse_iso(r["added_at"]),
         )
 
-    def list_page(self, *, offset: int = 0, limit: int = 50) -> list[HostEntry]:
+    def list_page(
+        self, *, offset: int = 0, limit: int = 50, now: datetime | None = None
+    ) -> list[HostEntry]:
         """Return a paginated slice of hosts ordered by `added_at`."""
+        instant = _sql_now(now or datetime.now(UTC))
         with _connect(self.db_path) as conn:
             rows = conn.execute(
-                f"SELECT {host_projection_sql('h')} FROM hosts h "
+                f"SELECT {host_projection_sql('h', '?')} FROM hosts h "
                 "ORDER BY h.added_at LIMIT ? OFFSET ?",
-                (limit, offset),
+                (instant, limit, offset),
             ).fetchall()
         return [self._row_to_host(r) for r in rows]
 
@@ -895,24 +901,28 @@ class SqliteHostRepository:
             row = conn.execute("SELECT COUNT(*) FROM hosts").fetchone()
         return row[0] if row else 0
 
-    def get_by_endpoint(self, hostname: str, port: int) -> HostEntry | None:
+    def get_by_endpoint(
+        self, hostname: str, port: int, *, now: datetime | None = None
+    ) -> HostEntry | None:
         """Return the host monitored at ``hostname:port`` under any spelling."""
         try:
             hostname = canonical_hostname(hostname)
         except ValueError:
             return None
+        instant = _sql_now(now or datetime.now(UTC))
         with _connect(self.db_path) as conn:
             r = conn.execute(
-                f"SELECT {host_projection_sql('h')} FROM hosts h "
-                "WHERE h.hostname = ? AND h.port = ?", (hostname, port)
+                f"SELECT {host_projection_sql('h', '?')} FROM hosts h "
+                "WHERE h.hostname = ? AND h.port = ?", (instant, hostname, port)
             ).fetchone()
         return self._row_to_host(r) if r else None
 
-    def get(self, host_id: str) -> HostEntry | None:
+    def get(self, host_id: str, *, now: datetime | None = None) -> HostEntry | None:
+        instant = _sql_now(now or datetime.now(UTC))
         with _connect(self.db_path) as conn:
             r = conn.execute(
-                f"SELECT {host_projection_sql('h')} FROM hosts h WHERE h.id = ?",
-                (host_id,),
+                f"SELECT {host_projection_sql('h', '?')} FROM hosts h WHERE h.id = ?",
+                (instant, host_id),
             ).fetchone()
         if not r:
             return None

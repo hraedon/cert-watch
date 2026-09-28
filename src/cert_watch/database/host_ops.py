@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 
+from cert_watch.database.connection import _sql_now
 from cert_watch.database.renewal_attempts import host_projection_sql
 from cert_watch.database.repo import HostEntry, SqliteHostRepository
 
@@ -20,9 +22,10 @@ class HostTargetLookup:
 
 def resolve_host_target(conn: sqlite3.Connection, resource_id: str) -> HostTargetLookup:
     """Resolve a host id or certificate id to its host without committing."""
+    instant = _sql_now(datetime.now(UTC))
     host_row = conn.execute(
-        f"SELECT {host_projection_sql('h')} FROM hosts h WHERE h.id = ?",
-        (resource_id,),
+        f"SELECT {host_projection_sql('h', '?')} FROM hosts h WHERE h.id = ?",
+        (instant, resource_id),
     ).fetchone()
     if host_row is not None:
         return HostTargetLookup("host", SqliteHostRepository._row_to_host(host_row))
@@ -38,8 +41,8 @@ def resolve_host_target(conn: sqlite3.Connection, resource_id: str) -> HostTarge
         return HostTargetLookup("no_host_associated")
 
     host_row = conn.execute(
-        f"SELECT {host_projection_sql('h')} FROM hosts h "
-        "WHERE h.hostname = ? AND h.port = ?", (hostname, port)
+        f"SELECT {host_projection_sql('h', '?')} FROM hosts h "
+        "WHERE h.hostname = ? AND h.port = ?", (instant, hostname, port)
     ).fetchone()
     if host_row is None:
         return HostTargetLookup("host_not_found")
@@ -57,8 +60,10 @@ def update_host_ownership(
     runbook_url: str | None,
 ) -> HostEntry | None:
     """Apply a partial ownership update without committing the transaction."""
+    instant = _sql_now(datetime.now(UTC))
     row = conn.execute(
-        f"SELECT {host_projection_sql('h')} FROM hosts h WHERE h.id = ?", (host_id,)
+        f"SELECT {host_projection_sql('h', '?')} FROM hosts h WHERE h.id = ?",
+        (instant, host_id),
     ).fetchone()
     if row is None:
         return None
@@ -79,6 +84,7 @@ def update_host_ownership(
         )
 
     updated = conn.execute(
-        f"SELECT {host_projection_sql('h')} FROM hosts h WHERE h.id = ?", (host_id,)
+        f"SELECT {host_projection_sql('h', '?')} FROM hosts h WHERE h.id = ?",
+        (instant, host_id),
     ).fetchone()
     return SqliteHostRepository._row_to_host(updated) if updated is not None else None

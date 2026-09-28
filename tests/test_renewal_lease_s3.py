@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 from cert_watch.alerting.rules.expiry import evaluate_all_certs
 from cert_watch.alerting.rules.renewal import evaluate_renewal_window
@@ -73,6 +74,119 @@ def _attempt(
             ),
         )
         conn.commit()
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["edit", "host_owner", "certificate_owner", "settings"],
+)
+@pytest.mark.parametrize("seen", [None, ""])
+@pytest.mark.parametrize("current_status", ["pending", "in_progress"])
+def test_html_status_change_requires_nonempty_rendered_status(
+    tmp_path: Path,
+    reload_app,
+    route: str,
+    seen: str | None,
+    current_status: str,
+) -> None:
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    repo = SqliteHostRepository(db)
+    host_id = repo.add(HOST, 443, owner_name="Original", scan_interval_hours=24)
+    if current_status == "in_progress":
+        _attempt(
+            db,
+            host_id,
+            "open",
+            lease=datetime.now(UTC) + timedelta(hours=1),
+            suppresses=True,
+        )
+    submitted_status = "pending" if current_status == "in_progress" else "in_progress"
+    cert_id = str(uuid.uuid4())
+    seed_certificate(
+        db,
+        Certificate(
+            subject=f"CN={HOST}",
+            issuer="CN=Test CA",
+            not_before=NOW - timedelta(days=30),
+            not_after=NOW + timedelta(days=30),
+            fingerprint_sha256="cached-form-fingerprint",
+        ),
+        cert_id=cert_id,
+        hostname=HOST,
+        port=443,
+    )
+    if route == "edit":
+        url = f"/hosts/{host_id}/edit"
+        form = {
+            "owner_name": "Changed",
+            "owner_email": "",
+            "owner_slack": "",
+            "renewal_method": "",
+            "runbook_url": "",
+            "scan_interval_hours": "6",
+            "threshold_days": "21",
+            "renewal_status": submitted_status,
+            "notes": "changed",
+            "tags": "changed",
+        }
+    elif route == "host_owner":
+        url = f"/hosts/{host_id}/owner"
+        form = {"owner_name": "Changed", "renewal_status": submitted_status}
+    elif route == "certificate_owner":
+        url = f"/certificates/{cert_id}/owner"
+        form = {"owner_name": "Changed", "renewal_status": submitted_status}
+    else:
+        url = f"/hosts/{host_id}/settings"
+        form = {
+            "scan_interval_hours": "6",
+            "threshold_days": "21",
+            "renewal_status": submitted_status,
+        }
+    if seen is not None:
+        form["renewal_status_seen"] = seen
+
+    with TestClient(reload_app().app) as client:
+        response = client.post(url, data=form, follow_redirects=False)
+
+    assert response.status_code == 303
+    assert "out%20of%20date" in response.headers["location"].lower()
+    assert "saved=1" not in response.headers["location"]
+    host = repo.get(host_id)
+    assert host is not None
+    assert host.owner_name == "Original"
+    assert host.scan_interval_hours == 24
+    assert host.renewal_status == current_status
+    with _connect(db) as conn:
+        assert conn.execute("SELECT count(*) FROM renewal_attempts").fetchone()[0] == (
+            1 if current_status == "in_progress" else 0
+        )
+
+
+def test_edit_form_highlights_invalid_rendered_status(tmp_path: Path, reload_app) -> None:
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    host_id = SqliteHostRepository(db).add(HOST, 443)
+    form = {
+        "owner_name": "",
+        "owner_email": "",
+        "owner_slack": "",
+        "renewal_method": "",
+        "runbook_url": "",
+        "scan_interval_hours": "",
+        "threshold_days": "",
+        "renewal_status": "pending",
+        "renewal_status_seen": "invalid",
+        "notes": "",
+        "tags": "",
+    }
+    with TestClient(reload_app().app) as client:
+        response = client.post(f"/hosts/{host_id}/edit", data=form)
+
+    assert response.status_code == 422
+    assert 'id="endpoint-renewal-status-error"' in response.text
+    assert 'id="endpoint-renewal-status"' in response.text
+    assert 'aria-invalid="true"' in response.text
 
 
 @pytest.mark.parametrize(
@@ -569,6 +683,12 @@ def test_migration_0047_preserves_s2_attempts_and_used_baseline(
                       julianday(lease_expires_at) IS NULL OR
                       julianday(lease_expires_at)<=julianday('now'))"""
         ).fetchone()[0]
+        cached = {
+            row["hostname"]: row["renewal_status"]
+            for row in conn.execute(
+                "SELECT hostname,renewal_status FROM hosts ORDER BY hostname"
+            ).fetchall()
+        }
     by_host: dict[str, list[tuple[object, ...]]] = {}
     for row in rows:
         by_host.setdefault(str(row[0]), []).append(tuple(row[1:]))
@@ -584,3 +704,11 @@ def test_migration_0047_preserves_s2_attempts_and_used_baseline(
     assert [row[0] for row in audits].count("renewal_report.migration_skip") == 2
     assert [row[0] for row in audits].count("renewal_report.create") == 1
     assert invalid_open == 0
+    assert cached == {
+        "badlease.example.test": "pending",
+        "demoted.example.test": "pending",
+        "failed.example.test": "pending",
+        "nulllease.example.test": "pending",
+        "open.example.test": "in_progress",
+        "used.example.test": "in_progress",
+    }

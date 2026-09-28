@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,7 @@ from cert_watch.auth.scope import (
     unknown_target_scope_error,
 )
 from cert_watch.database import HostEntry, SqliteHostRepository
-from cert_watch.database.connection import _connect, begin_immediate, get_write_lock
+from cert_watch.database.connection import _connect, _sql_now, begin_immediate, get_write_lock
 from cert_watch.database.metadata_ops import (
     update_certificate_tags as persist_certificate_tags,
 )
@@ -54,6 +55,7 @@ class HostEditUpdate:
     threshold_days: Any = None
     renewal_status: Any = None
     renewal_status_seen: Any = None
+    require_renewal_status_seen: bool = False
     notes: Any = ""
     tags: Any = ""
 
@@ -94,6 +96,7 @@ def _validate(
             runbook_url=update.runbook_url,
             renewal_status=update.renewal_status,
             renewal_status_seen=update.renewal_status_seen,
+            require_renewal_status_seen=update.require_renewal_status_seen,
         )
     )
     for field in (
@@ -231,6 +234,7 @@ def edit_host(
                 raise HostNotFoundError("certificate not found")
             from cert_watch.config import current_settings
 
+            received = datetime.now(UTC)
             derived_status, renewal_audit = write_through_renewal_status_on(
                 conn,
                 db_path,
@@ -238,13 +242,15 @@ def edit_host(
                 target.host_id,
                 ownership.renewal_status,
                 seen_status=ownership.renewal_status_seen,
+                require_seen_status=ownership.require_renewal_status_seen,
                 auth=auth,
                 actor=actor,
                 source_ip=source_ip,
+                now=received,
             )
             row = conn.execute(
-                f"SELECT {host_projection_sql('h')} FROM hosts h WHERE h.id = ?",
-                (target.host_id,),
+                f"SELECT {host_projection_sql('h', '?')} FROM hosts h WHERE h.id = ?",
+                (_sql_now(received), target.host_id),
             ).fetchone()
             assert row is not None
             updated = SqliteHostRepository(db_path)._row_to_host(row)

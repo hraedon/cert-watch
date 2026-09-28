@@ -401,6 +401,17 @@ async def api_update_host_owner(
 
     def parse() -> HostOwnershipUpdate:
         body = json_body(raw)
+        allowed = {
+            "owner_name",
+            "owner_email",
+            "owner_slack",
+            "renewal_status",
+            "renewal_method",
+            "runbook_url",
+        }
+        extra = body.keys() - allowed
+        if extra:
+            raise JsonBodyError(f"unknown field: {', '.join(sorted(extra))}")
         if "renewal_status" in body and body["renewal_status"] is None:
             raise JsonBodyError("renewal_status must be a string")
         return HostOwnershipUpdate(

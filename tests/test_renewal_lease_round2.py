@@ -314,6 +314,7 @@ def test_host_projection_uses_its_bound_request_instant(tmp_path) -> None:
             (request_now.isoformat(), host_id),
         ).fetchone()
     assert row["derived_renewal_status"] == "pending"
+    assert SqliteHostRepository(db).get(host_id, now=request_now).renewal_status == "pending"  # type: ignore[union-attr]
 
 
 @pytest.mark.parametrize("adapter", ["html", "json_patch", "json_put"])

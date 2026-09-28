@@ -9,9 +9,11 @@ from __future__ import annotations
 import logging
 import sqlite3
 from contextlib import AbstractContextManager, nullcontext
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from cert_watch.database.connection import _sql_now
 from cert_watch.database.renewal_attempts import live_attempt_exists_sql
 
 logger = logging.getLogger("cert_watch.alerts")
@@ -46,7 +48,7 @@ def _load_host_owner_maps(
         ).fetchone()
         attempt_status = (
             "CASE WHEN "
-            + live_attempt_exists_sql("h", "cw_utc_now()")
+            + live_attempt_exists_sql("h", "?")
             + " THEN 'in_progress' ELSE 'pending' END"
             if has_attempts is not None
             else "'pending'"
@@ -66,12 +68,14 @@ def _load_host_owner_maps(
             + ",".join(selected)
             + f",{attempt_status} AS derived_renewal_status FROM hosts h"
         )
-        params: list[Any] = []
+        params: list[Any] = (
+            [_sql_now(datetime.now(UTC))] if has_attempts is not None else []
+        )
         if endpoints is not None:
             if not endpoints:
                 return {}, {}
             sql += " WHERE " + " OR ".join("(h.hostname = ? AND h.port = ?)" for _ in endpoints)
-            params = [value for endpoint in endpoints for value in endpoint]
+            params.extend(value for endpoint in endpoints for value in endpoint)
         for row in active_conn.execute(sql, params).fetchall():
             key = (row["hostname"], row["port"])
             d = dict(row)

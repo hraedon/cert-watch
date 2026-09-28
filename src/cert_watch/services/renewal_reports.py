@@ -46,6 +46,10 @@ class RenewalReportRateLimitError(RenewalReportServiceError):
     pass
 
 
+class RenewalStatusOutOfDateError(ValueError):
+    """An HTML form omitted the status value it originally displayed."""
+
+
 @dataclass(frozen=True)
 class RenewalTarget:
     host_id: str
@@ -202,6 +206,7 @@ def write_through_renewal_status_on(
     status: str | None,
     *,
     seen_status: str | None = None,
+    require_seen_status: bool = False,
     auth: Any,
     actor: str,
     source_ip: str | None,
@@ -214,6 +219,8 @@ def write_through_renewal_status_on(
     attempt tables as report ingestion, and returns an audit event for export
     only after the caller commits.
     """
+    if require_seen_status and seen_status == "":
+        seen_status = None
     if status is not None and status not in {"pending", "in_progress"}:
         raise ValueError("invalid renewal status")
     if seen_status is not None and seen_status not in {"pending", "in_progress"}:
@@ -244,6 +251,15 @@ def write_through_renewal_status_on(
         )
         else "pending"
     )
+    if (
+        require_seen_status
+        and status is not None
+        and seen_status is None
+        and status != derived_status
+    ):
+        raise RenewalStatusOutOfDateError(
+            "The form is out of date; reload and try again."
+        )
     # HTML submits the value it rendered separately from the selected value.
     # An unchanged stale form is a no-op regardless of the state at commit.
     # JSON omits ``seen_status`` and retains explicit-intent semantics.
@@ -781,19 +797,20 @@ def expire_renewal_leases(db_path: str | Path, *, now: datetime | None = None) -
     current = (now or datetime.now(UTC)).astimezone(UTC)
     instant = current.isoformat()
     with get_write_lock(), _connect(db_path) as conn:
-        expiring = conn.execute(
-            "SELECT host_id FROM renewal_attempts WHERE is_current=1 AND state='open' "
-            "AND cw_epoch_ms(lease_expires_at)<=cw_epoch_ms(?)",
-            (instant,),
-        ).fetchall()
         cursor = conn.execute(
             "UPDATE renewal_attempts SET state='abandoned',suppresses_stalled=0,"
             "closed_reason='lease_expired' WHERE is_current=1 AND state='open' "
             "AND cw_epoch_ms(lease_expires_at)<=cw_epoch_ms(?)",
             (instant,),
         )
-        for row in expiring:
-            _cache_renewal_status(conn, str(row["host_id"]), now=current)
+        conn.execute(
+            "UPDATE hosts AS h SET renewal_status='pending' WHERE EXISTS ("
+            "SELECT 1 FROM renewal_attempts a WHERE a.host_id=h.id "
+            "AND a.is_current=1 AND a.state='abandoned' "
+            "AND a.closed_reason='lease_expired' "
+            "AND cw_epoch_ms(a.lease_expires_at)<=cw_epoch_ms(?))",
+            (instant,),
+        )
         conn.commit()
         return cursor.rowcount
 

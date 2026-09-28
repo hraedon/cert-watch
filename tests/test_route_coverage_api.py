@@ -294,6 +294,22 @@ def test_api_update_host_owner_invalid_status(reload_app, tmp_path):
     assert "renewal_status" in r.json()["error"]
 
 
+def test_api_update_host_owner_rejects_renewal_status_seen(reload_app, tmp_path):
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import SqliteHostRepository, init_schema
+
+    init_schema(db)
+    hid = SqliteHostRepository(db).add("h.example.com", 443)
+    with TestClient(app_mod.app) as client:
+        r = client.patch(
+            f"/api/hosts/{hid}/owner",
+            json={"renewal_status_seen": "pending"},
+        )
+    assert r.status_code == 400
+    assert r.json()["error"] == "unknown field: renewal_status_seen"
+
+
 def test_api_update_host_owner_invalid_email(reload_app, tmp_path):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"

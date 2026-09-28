@@ -12,6 +12,8 @@ from typing import Any
 
 from cert_watch.certificate_model import Certificate
 
+SQLITE_QUERY_CHUNK = 400
+
 _conn_local = threading.local()
 _write_lock = threading.RLock()
 

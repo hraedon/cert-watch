@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cert_watch.database.connection import _connect, _sql_now
+from cert_watch.database.connection import SQLITE_QUERY_CHUNK, _connect, _sql_now
 
 
 def renewal_attempt_is_live(
@@ -73,7 +73,7 @@ def endpoint_stall_suppression_exists_sql(
     )
 
 
-def host_projection_sql(host_alias: str = "h", now_sql: str = "cw_utc_now()") -> str:
+def host_projection_sql(host_alias: str, now_sql: str) -> str:
     """Select every host field while deriving the compatibility status."""
     names = (
         "id",
@@ -113,8 +113,8 @@ def endpoint_stall_suppressions(
     instant = _sql_now(now or datetime.now(UTC))
     suppressions: set[tuple[str, int]] = set()
     with _connect(db_path) as conn:
-        for offset in range(0, len(unique), 400):
-            chunk = unique[offset : offset + 400]
+        for offset in range(0, len(unique), SQLITE_QUERY_CHUNK):
+            chunk = unique[offset : offset + SQLITE_QUERY_CHUNK]
             endpoint_sql = " UNION ALL ".join(
                 "SELECT ? AS hostname,? AS port" for _ in chunk
             )

@@ -222,3 +222,11 @@ def upgrade(conn: sqlite3.Connection) -> None:
                VALUES (?,?,'migration:0047','renewal_report.create','host',?,?,NULL)""",
             (str(uuid.uuid4()), received_at, host_id, detail),
         )
+    conn.execute(
+        """UPDATE hosts AS h SET renewal_status=CASE WHEN EXISTS (
+               SELECT 1 FROM renewal_attempts a
+               WHERE a.host_id=h.id AND a.is_current=1 AND a.state='open'
+                 AND julianday(a.lease_expires_at)>julianday(?)
+           ) THEN 'in_progress' ELSE 'pending' END""",
+        (received_at,),
+    )

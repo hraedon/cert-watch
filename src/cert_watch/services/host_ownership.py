@@ -55,6 +55,7 @@ class HostOwnershipUpdate:
     owner_slack: str | None = None
     renewal_status: str | None = None
     renewal_status_seen: str | None = None
+    require_renewal_status_seen: bool = False
     renewal_method: str | None = None
     runbook_url: str | None = None
 
@@ -130,6 +131,7 @@ def _validate(update: HostOwnershipUpdate) -> HostOwnershipUpdate:
         owner_slack=normalized["owner_slack"],
         renewal_status=update.renewal_status,
         renewal_status_seen=update.renewal_status_seen,
+        require_renewal_status_seen=update.require_renewal_status_seen,
         renewal_method=normalized["renewal_method"],
         runbook_url=normalized["runbook_url"],
     )
@@ -149,7 +151,9 @@ def _validate(update: HostOwnershipUpdate) -> HostOwnershipUpdate:
                 "renewal_status must be 'pending' or 'in_progress'; "
                 "'renewed' is no longer supported",
             )
-    if update.renewal_status_seen is not None:
+    if update.renewal_status_seen is not None and not (
+        update.require_renewal_status_seen and update.renewal_status_seen == ""
+    ):
         if not isinstance(update.renewal_status_seen, str):
             raise HostOwnershipValidationError(
                 "renewal_status_seen", "renewal_status_seen must be a string"
@@ -268,6 +272,7 @@ def update_host_ownership(
             update = update()
         update = _validate(update)
         detail = asdict(update)
+        detail.pop("require_renewal_status_seen")
         conn = _connect(db_path)
         try:
             begin_immediate(conn)
@@ -305,6 +310,7 @@ def update_host_ownership(
                     host_id,
                     update.renewal_status,
                     seen_status=update.renewal_status_seen,
+                    require_seen_status=update.require_renewal_status_seen,
                     auth=auth,
                     actor=actor,
                     source_ip=source_ip,

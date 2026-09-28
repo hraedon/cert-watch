@@ -34,6 +34,10 @@ FORM = {
 }
 
 
+def _html_values(**changes):
+    return {**FORM, "renewal_status_seen": "pending", **changes}
+
+
 @pytest.fixture(autouse=True)
 def _no_startup_scan(monkeypatch):
     monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", lambda self: None)
@@ -86,7 +90,11 @@ def test_edit_host_form_round_trips_every_field(
         SqliteCertificateRepository(db).set_tags(resource_id, "old-cert-tag")
 
     with TestClient(reload_app().app) as client:
-        response = client.post(f"/hosts/{resource_id}/edit", data=FORM, follow_redirects=False)
+        response = client.post(
+            f"/hosts/{resource_id}/edit",
+            data=_html_values(),
+            follow_redirects=False,
+        )
         assert response.status_code == 303
         assert response.headers["location"] == (f"/certificates/{resource_id}?host_saved=1")
         page = client.get(response.headers["location"])
@@ -145,6 +153,8 @@ def _edit_values(adapter, **changes):
         "threshold_days": 21 if adapter == "json" else "21",
         **changes,
     }
+    if adapter == "html":
+        values["renewal_status_seen"] = "pending"
     return values
 
 
@@ -282,12 +292,11 @@ def test_invalid_combined_edit_is_atomic(tmp_path, reload_app, self_signed_leaf)
     with TestClient(reload_app().app) as client:
         response = client.post(
             f"/hosts/{host_id}/edit",
-            data={
-                **FORM,
-                "owner_name": "Unsaved owner",
-                "owner_email": "not-an-address",
-                "notes": "Unsaved note",
-            },
+            data=_html_values(
+                owner_name="Unsaved owner",
+                owner_email="not-an-address",
+                notes="Unsaved note",
+            ),
             follow_redirects=False,
         )
     assert response.status_code == 422
@@ -310,7 +319,7 @@ def test_combined_edit_rejects_an_unsafe_runbook_without_writing(tmp_path, reloa
     with TestClient(reload_app().app) as client:
         response = client.post(
             f"/hosts/{host_id}/edit",
-            data={**FORM, "runbook_url": "javascript:alert(1)"},
+            data=_html_values(runbook_url="javascript:alert(1)"),
         )
     assert response.status_code == 422
     assert "http(s) URL" in response.text
@@ -388,7 +397,9 @@ def test_edit_host_form_rate_limit_prevents_the_write(tmp_path, reload_app, monk
     before = SqliteHostRepository(db).get(host_id)
     monkeypatch.setattr("cert_watch.routes.hosts.check_rate_limit", lambda *_a: False)
     with TestClient(reload_app().app) as client:
-        response = client.post(f"/hosts/{host_id}/edit", data=FORM, follow_redirects=False)
+        response = client.post(
+            f"/hosts/{host_id}/edit", data=_html_values(), follow_redirects=False
+        )
     assert response.status_code == 303
     assert "rate%20limited" in response.headers["location"]
     assert SqliteHostRepository(db).get(host_id) == before
@@ -400,7 +411,9 @@ def test_edit_host_form_enforces_csrf(tmp_path, reload_app, csrf_strict):
     host_id = _host(db)
     before = SqliteHostRepository(db).get(host_id)
     with TestClient(reload_app().app) as client:
-        response = client.post(f"/hosts/{host_id}/edit", data=FORM, follow_redirects=False)
+        response = client.post(
+            f"/hosts/{host_id}/edit", data=_html_values(), follow_redirects=False
+        )
     assert response.status_code == 303
     assert "csrf" in response.headers["location"].lower()
     assert SqliteHostRepository(db).get(host_id) == before
@@ -420,7 +433,9 @@ def test_combined_edit_refuses_a_superseded_certificate_id(tmp_path, reload_app,
     before = SqliteHostRepository(db).get(host_id)
     api_body = {**FORM, "scan_interval_hours": 6, "threshold_days": 21}
     with TestClient(reload_app().app) as client:
-        form = client.post(f"/hosts/{old_id}/edit", data=FORM, follow_redirects=False)
+        form = client.post(
+            f"/hosts/{old_id}/edit", data=_html_values(), follow_redirects=False
+        )
         api = client.put(f"/api/hosts/{old_id}", json=api_body)
     assert urlsplit(form.headers["location"]).path == f"/certificates/{new_id}"
     assert "renewed" in parse_qs(urlsplit(form.headers["location"]).query)["error"][0]
@@ -603,7 +618,9 @@ def test_certificate_addressed_edit_requires_host_and_certificate_write_scope(
     app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-a")
     with _scoped_client(app, groups) as client:
         page = client.get(f"/certificates/{cert_id}")
-        form = client.post(f"/hosts/{cert_id}/edit", data=FORM, follow_redirects=False)
+        form = client.post(
+            f"/hosts/{cert_id}/edit", data=_html_values(), follow_redirects=False
+        )
         api = client.put(
             f"/api/hosts/{cert_id}",
             json={**FORM, "scan_interval_hours": 6, "threshold_days": 21},
