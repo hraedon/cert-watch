@@ -66,8 +66,9 @@ or the lease lapsing followed by an actual renewal, stops them.
 ### Migration 0048
 
 Migration **0048** adds verification counters and timestamps, including the
-accepted-success time that anchors grace and check bands, to renewal
-attempts and a short-lived endpoint scan-claim table. Existing attempts keep
+accepted-success time that anchors grace and check bands and the fingerprint
+that actually verified an attempt, to renewal attempts and a short-lived
+endpoint scan-claim table. Existing attempts keep
 their current state. New successful reports are verified by normal stored
 scans; the request path performs no network I/O. Configure the grace before an
 unchanged scan can raise `renewal_not_deployed` with

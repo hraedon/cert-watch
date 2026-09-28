@@ -31,7 +31,10 @@ All notable changes to cert-watch are documented in this file.
   and are verified only from stored leaf evidence. Expiry-aware check bands,
   a configurable 5–15 minute grace period, mismatch handling, and the routed
   `renewal_not_deployed` alert cover deployments that do not reach the
-  monitored endpoint without suppressing expiry alerts (#118 S4).
+  monitored endpoint without suppressing expiry alerts. Bare reports use only
+  safe predecessor observations from the prior 24 hours, verified endpoints
+  can open later renewal cycles, and evaluation errors back off exponentially
+  to the expiry-band cadence (#118 S4).
 
 ### Changed
 

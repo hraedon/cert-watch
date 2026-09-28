@@ -62,6 +62,19 @@ Accepted reports return status 202:
 {"report_id": "7f3a1b9c4d2e4870a6c5e8d1f2b3a490", "attempt_id": "…", "state": "open", "effect": "applied"}
 ```
 
+Send `new_fingerprint` whenever the automation knows the certificate it meant
+to deploy. That is the exact verification target. For a bare `succeeded`
+report, cert-watch can recognize a successor that was scanned before the
+report only when its replacement lineage was observed in the preceding 24
+hours, the endpoint has not flapped back to that leaf, and no earlier attempt
+has already verified or used that leaf as its baseline. Otherwise the served
+leaf becomes the new attempt's baseline and a later scan must observe a change.
+An explicit `cert_fingerprint` target naming the replaced certificate retains
+the seven-day target-lookup behavior described above.
+
+A first report whose `new_fingerprint` equals the baseline is stored with
+`"effect":"no_change"` and returns `"state":null`, because no attempt exists.
+
 `report_id` is an opaque random identifier and carries no ordering information.
 History is ordered newest-first by an internal sequence that is never exposed.
 A repeated `started` is retained but never extends the original lease. The default lease is 24

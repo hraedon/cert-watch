@@ -204,6 +204,7 @@ def evaluate_evidence_on(
     )
     if state == "verified":
         updates["closed_reason"] = reason
+        updates["verified_fingerprint"] = leaf
     elif state == "not_deployed" and not attempt["raised_at"]:
         updates["raised_at"] = started_at.isoformat()
     assignments = ",".join(f"{name}=?" for name in updates)
@@ -282,6 +283,50 @@ def mark_verification_blocked(
                        WHERE attempt_id=?""",
                     (started_at.astimezone(UTC).isoformat(), next_check.isoformat(),
                      attempt["attempt_id"]),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def mark_verification_evaluation_error(
+    db_path: str | Path,
+    hostname: str,
+    port: int,
+    *,
+    started_at: datetime,
+    settings: Settings,
+) -> None:
+    """Back off a stored-scan evaluation error without treating it as evidence."""
+    failed_at = started_at.astimezone(UTC)
+    with get_write_lock():
+        conn = _connect(db_path)
+        try:
+            begin_immediate(conn)
+            attempt = conn.execute(
+                """SELECT a.* FROM renewal_attempts a
+                   JOIN hosts h ON h.id=a.host_id
+                   WHERE h.hostname=? AND h.port=? AND a.is_current=1
+                     AND a.state IN ('verifying','not_deployed')""",
+                (hostname, port),
+            ).fetchone()
+            if attempt is not None:
+                band_delay = _following_check(attempt, failed_at, settings) - failed_at
+                floor = timedelta(minutes=5)
+                cap = max(floor, band_delay)
+                prior_failed = _instant(attempt["verification_blocked_at"])
+                prior_next = _instant(attempt["next_check_at"])
+                delay = floor
+                if prior_failed is not None and prior_next is not None:
+                    prior_delay = max(floor, prior_next - prior_failed)
+                    delay = min(cap, prior_delay * 2)
+                next_check = failed_at + min(delay, cap)
+                conn.execute(
+                    """UPDATE renewal_attempts
+                       SET verification_blocked_at=?,next_check_at=?
+                       WHERE attempt_id=?""",
+                    (failed_at.isoformat(), next_check.isoformat(), attempt["attempt_id"]),
                 )
             conn.commit()
         except Exception:

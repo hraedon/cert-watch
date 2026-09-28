@@ -439,7 +439,7 @@ def test_terminal_attempt_new_correlation_starts_new_cycle(estate, terminal):
     assert (second.state, second.effect) == ("open", "applied")
 
 
-@pytest.mark.parametrize("initial", ["verifying", "not_deployed"])
+@pytest.mark.parametrize("initial", ["verifying"])
 def test_future_verification_state_accepts_newer_failure(estate, initial):
     first, _ = _create(estate)
     with _connect(estate[0]) as conn:
@@ -448,6 +448,19 @@ def test_future_verification_state_accepts_newer_failure(estate, initial):
     failed, _ = _create(estate, "failed")
     assert failed.attempt_id == first.attempt_id
     assert (failed.state, failed.effect) == ("failed", "applied")
+
+
+def test_not_deployed_ignores_failed_report(estate):
+    first, _ = _create(estate)
+    with _connect(estate[0]) as conn:
+        conn.execute(
+            "UPDATE renewal_attempts SET state='not_deployed' WHERE host_id=?",
+            (estate[2],),
+        )
+        conn.commit()
+    failed, _ = _create(estate, "failed")
+    assert failed.attempt_id == first.attempt_id
+    assert (failed.state, failed.effect) == ("not_deployed", "no_change")
 
 
 def test_source_scoped_idempotency_and_collision(estate):
@@ -1056,6 +1069,23 @@ def test_unscanned_success_without_fingerprint_is_409_and_stores_nothing(report_
             """SELECT count(*) FROM renewal_reports r JOIN hosts h ON h.id=r.host_id
                WHERE h.hostname='unscanned.example.test'"""
         ).fetchone()[0] == 0
+
+
+def test_first_contradictory_report_response_has_null_state(report_client, estate):
+    client, headers, _db = report_client
+    response = client.post(
+        "/api/renewal-reports",
+        headers=headers,
+        json={
+            "hostname": HOST,
+            "port": 443,
+            "outcome": "succeeded",
+            "new_fingerprint": estate[4],
+        },
+    )
+    assert response.status_code == 202
+    assert response.json()["state"] is None
+    assert response.json()["effect"] == "no_change"
 
 
 @pytest.mark.parametrize(

@@ -163,6 +163,22 @@ class SchedulerContext:
             )
         except Exception:
             logger.exception("renewal verification failed for %s:%s", hostname, port)
+            try:
+                from cert_watch.renewal_verification import (
+                    mark_verification_evaluation_error,
+                )
+
+                mark_verification_evaluation_error(
+                    config.settings.db_path,
+                    hostname,
+                    port,
+                    started_at=started_at,
+                    settings=config.settings,
+                )
+            except Exception:
+                logger.exception(
+                    "could not back off renewal verification for %s:%s", hostname, port
+                )
         finally:
             release_host_scan_claim(
                 config.settings.db_path, hostname, port, owner=self._scan_claim_owner

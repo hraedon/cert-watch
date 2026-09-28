@@ -45,10 +45,30 @@ was serving when the attempt opened:
 
 A failed network scan or database store is not verification evidence. It sets
 the attempt's blocked timestamp, leaves the state and alert unchanged, and
-reschedules using the same band. A certificate different from both the
+reschedules using the same band. If evaluating an otherwise stored scan fails,
+cert-watch retries with exponential backoff from five minutes up to that band's
+cadence. A certificate different from both the
 baseline and a supplied `new_fingerprint` is a mismatch and raises the same
 warning only on a qualifying post-grace scan. The report's free-form message, tool and
 correlation identifier are never copied into the alert or its delivery.
+
+#### S4 verification rules
+
+- A bare success can use the current leaf's predecessor as its baseline only
+  when that replacement was observed in the last 24 hours, the current leaf
+  has never appeared as an old lineage fingerprint on the endpoint, and no
+  earlier attempt has verified or used the current leaf as its baseline.
+  This applies after any terminal attempt. Send `new_fingerprint` for exact
+  verification; an explicit `cert_fingerprint` predecessor target still uses
+  the seven-day target lookup window.
+- A verified attempt owns late reports with its correlation. Bare successes
+  and new correlations received within 24 hours of its accepted success are
+  also duplicates. After that window, or when `new_fingerprint` names a leaf
+  different from the verified leaf, a success opens a new renewal cycle.
+- Reports never move an attempt out of `not_deployed`. In particular, a
+  `failed` report is retained with `no_change`; only stored scan evidence for
+  the expected or observed successor verifies the attempt and closes its
+  alert.
 
 ### Expiry thresholds
 

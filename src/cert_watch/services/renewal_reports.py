@@ -71,7 +71,7 @@ class RenewalReportInput:
 class RenewalReportResult:
     report_id: str
     attempt_id: str
-    state: str
+    state: str | None
     effect: str
 
 
@@ -442,9 +442,10 @@ def _report_baseline(
     received: datetime,
     use_current_predecessor: bool,
 ) -> tuple[str | None, str | None]:
-    """Keep a target's recent predecessor as the attempt baseline."""
+    """Choose explicit target evidence or a safe, recent predecessor."""
     candidate = target.baseline_fingerprint
-    cutoff = (received - timedelta(days=7)).isoformat()
+    explicit_cutoff = (received - timedelta(days=7)).isoformat()
+    observation_cutoff = (received - timedelta(hours=24)).isoformat()
     if use_current_predecessor and current_fingerprint is not None:
         predecessor = conn.execute(
             """SELECT lower(cl.old_fingerprint) AS fingerprint,
@@ -461,8 +462,28 @@ def _report_baseline(
                WHERE cl.hostname=? AND cl.port=?
                  AND lower(current.fingerprint_sha256)=?
                  AND cl.old_fingerprint IS NOT NULL AND cl.created_at>=?
+                 AND NOT EXISTS (
+                     SELECT 1 FROM certificate_lineage flap
+                     WHERE flap.hostname=cl.hostname AND flap.port=cl.port
+                       AND lower(flap.old_fingerprint)=?
+                 )
+                 AND NOT EXISTS (
+                     SELECT 1 FROM renewal_attempts used
+                     JOIN hosts used_host ON used_host.id=used.host_id
+                     WHERE used_host.hostname=cl.hostname AND used_host.port=cl.port
+                       AND (lower(used.baseline_fingerprint)=?
+                            OR lower(used.verified_fingerprint)=?)
+                 )
                ORDER BY cl.created_at DESC LIMIT 1""",
-            (target.hostname, target.port, current_fingerprint, cutoff),
+            (
+                target.hostname,
+                target.port,
+                current_fingerprint,
+                observation_cutoff,
+                current_fingerprint,
+                current_fingerprint,
+                current_fingerprint,
+            ),
         ).fetchone()
         if predecessor is not None:
             return str(predecessor["fingerprint"]), (
@@ -475,11 +496,38 @@ def _report_baseline(
            JOIN certificates c ON c.id=cl.new_cert_id
            WHERE cl.hostname=? AND cl.port=? AND lower(cl.old_fingerprint)=?
              AND lower(c.fingerprint_sha256)=? AND cl.created_at>=? LIMIT 1""",
-        (target.hostname, target.port, candidate, current_fingerprint, cutoff),
+        (target.hostname, target.port, candidate, current_fingerprint, explicit_cutoff),
     ).fetchone()
     if recent is not None:
         return candidate, target.baseline_not_after
     return current_fingerprint, current_not_after
+
+
+def _fingerprint_not_after(
+    conn: sqlite3.Connection,
+    target: RenewalTarget,
+    fingerprint: str,
+) -> str | None:
+    row = conn.execute(
+        """SELECT not_after FROM (
+               SELECT c.not_after AS not_after, c.created_at AS observed_at
+               FROM certificates c
+               WHERE c.hostname=? AND c.port=? AND lower(c.fingerprint_sha256)=?
+               UNION ALL
+               SELECT ch.not_after, ch.scanned_at
+               FROM cert_history ch
+               WHERE ch.hostname=? AND ch.port=? AND lower(ch.fingerprint_sha256)=?
+           ) ORDER BY observed_at DESC LIMIT 1""",
+        (
+            target.hostname,
+            target.port,
+            fingerprint,
+            target.hostname,
+            target.port,
+            fingerprint,
+        ),
+    ).fetchone()
+    return str(row["not_after"]) if row is not None and row["not_after"] else None
 
 
 def _initial_evidence_on(
@@ -489,7 +537,7 @@ def _initial_evidence_on(
     received: datetime,
     *,
     use_current_predecessor: bool,
-) -> tuple[str | None, str | None, str | None]:
+) -> tuple[str | None, str | None, str | None, str | None]:
     current_fingerprint, current_not_after = _current_leaf(conn, target.host_id)
     baseline_fingerprint, baseline_not_after = _report_baseline(
         conn,
@@ -507,7 +555,12 @@ def _initial_evidence_on(
         raise RenewalReportConflictError(
             "endpoint has not been scanned yet; report again after its first scan"
         )
-    return current_fingerprint, baseline_fingerprint, baseline_not_after
+    return (
+        current_fingerprint,
+        current_not_after,
+        baseline_fingerprint,
+        baseline_not_after,
+    )
 
 
 def _insert_report_on(
@@ -655,9 +708,20 @@ def _update_succeeded_attempt_on(
         conn.execute(
             f"""UPDATE renewal_attempts SET state=?,suppresses_stalled=0,
                       new_fingerprint={fingerprint_sql},
-                      success_received_at=?,next_check_at=?,closed_reason=NULL
+                      success_received_at=?,
+                      next_check_at=CASE
+                          WHEN next_check_at IS NOT NULL AND next_check_at<=?
+                          THEN next_check_at ELSE ? END,
+                      closed_reason=NULL
                WHERE attempt_id=?""",
-            (state, report.new_fingerprint, received_at, received_at, attempt_id),
+            (
+                state,
+                report.new_fingerprint,
+                received_at,
+                received_at,
+                received_at,
+                attempt_id,
+            ),
         )
         return
     conn.execute(
@@ -666,6 +730,87 @@ def _update_succeeded_attempt_on(
            WHERE attempt_id=?""",
         (state, report.new_fingerprint, attempt_id),
     )
+
+
+def _reduce_verified_success(
+    conn: sqlite3.Connection,
+    target: RenewalTarget,
+    attempt: sqlite3.Row,
+    report: RenewalReportInput,
+    *,
+    received: datetime,
+    same_correlation: bool,
+    baseline_fingerprint: str | None,
+    baseline_not_after: str | None,
+) -> tuple[str, str, bool, str, str | None, str | None]:
+    """Separate a verified attempt's late reports from a new renewal cycle."""
+    verified_leaf = (
+        str(attempt["verified_fingerprint"]).lower()
+        if attempt["verified_fingerprint"]
+        else None
+    )
+    explicit_new_leaf = bool(
+        report.new_fingerprint
+        and verified_leaf
+        and report.new_fingerprint.lower() != verified_leaf
+    )
+    succeeded_at = datetime.fromisoformat(
+        str(attempt["success_received_at"] or attempt["received_at"])
+    )
+    if succeeded_at.tzinfo is None:
+        succeeded_at = succeeded_at.replace(tzinfo=UTC)
+    duplicate_window = received <= succeeded_at.astimezone(UTC) + timedelta(hours=24)
+    if same_correlation or (duplicate_window and not explicit_new_leaf):
+        return (
+            "verified",
+            "ignored_late",
+            False,
+            str(attempt["attempt_id"]),
+            baseline_fingerprint,
+            baseline_not_after,
+        )
+    if explicit_new_leaf and verified_leaf is not None:
+        baseline_fingerprint = verified_leaf
+        baseline_not_after = _fingerprint_not_after(conn, target, verified_leaf)
+    return (
+        "verifying",
+        "applied",
+        True,
+        uuid.uuid4().hex,
+        baseline_fingerprint,
+        baseline_not_after,
+    )
+
+
+def _correlation_owner_on(
+    conn: sqlite3.Connection,
+    host_id: str,
+    source: str,
+    correlation_id: str | None,
+    *,
+    received: datetime,
+) -> sqlite3.Row | None:
+    if not correlation_id:
+        return None
+    owner = conn.execute(
+        """SELECT a.* FROM renewal_attempt_correlations ac
+           JOIN renewal_attempts a ON a.attempt_id=ac.attempt_id
+           WHERE ac.host_id=? AND ac.source=? AND ac.correlation_id=?""",
+        (host_id, source, correlation_id),
+    ).fetchone()
+    if owner is not None:
+        return cast(sqlite3.Row, owner)
+    correlation_cutoff = (received - timedelta(days=1)).isoformat()
+    correlation_count = int(
+        conn.execute(
+            """SELECT count(*) FROM renewal_attempt_correlations
+               WHERE host_id=? AND source=? AND created_at>=?""",
+            (host_id, source, correlation_cutoff),
+        ).fetchone()[0]
+    )
+    if correlation_count >= 1_000:
+        raise RenewalReportRateLimitError("rate limited")
+    return None
 
 
 def create_report(
@@ -740,22 +885,21 @@ def create_report(
             ).fetchone()
             attempt = _expire_current_attempt_on(conn, target.host_id, attempt, received=received)
 
-            current_fingerprint, baseline_fingerprint, baseline_not_after = _initial_evidence_on(
+            (
+                current_fingerprint,
+                current_not_after,
+                baseline_fingerprint,
+                baseline_not_after,
+            ) = _initial_evidence_on(
                 conn,
                 target,
                 report,
                 received,
-                use_current_predecessor=attempt is None and report.outcome == "succeeded",
+                use_current_predecessor=False,
             )
 
             new_attempt = attempt is None
             prior_state = str(attempt["state"]) if attempt is not None else None
-            contradictory = bool(
-                report.outcome == "succeeded"
-                and report.new_fingerprint
-                and baseline_fingerprint
-                and report.new_fingerprint.lower() == baseline_fingerprint.lower()
-            )
             effect = "applied"
             state = {
                 "started": "open",
@@ -763,25 +907,13 @@ def create_report(
                 "succeeded": "verifying",
             }[report.outcome]
             attempt_id = uuid.uuid4().hex
-            correlation_owner = None
-            if report.correlation_id:
-                correlation_owner = conn.execute(
-                    """SELECT a.* FROM renewal_attempt_correlations ac
-                       JOIN renewal_attempts a ON a.attempt_id=ac.attempt_id
-                       WHERE ac.host_id=? AND ac.source=? AND ac.correlation_id=?""",
-                    (target.host_id, source, report.correlation_id),
-                ).fetchone()
-                if correlation_owner is None:
-                    correlation_cutoff = (received - timedelta(days=1)).isoformat()
-                    correlation_count = int(
-                        conn.execute(
-                            """SELECT count(*) FROM renewal_attempt_correlations
-                               WHERE host_id=? AND source=? AND created_at>=?""",
-                            (target.host_id, source, correlation_cutoff),
-                        ).fetchone()[0]
-                    )
-                    if correlation_count >= 1_000:
-                        raise RenewalReportRateLimitError("rate limited")
+            correlation_owner = _correlation_owner_on(
+                conn,
+                target.host_id,
+                source,
+                report.correlation_id,
+                received=received,
+            )
 
             # While correlation ownership is retained, a stale retry belongs
             # to its original attempt and cannot reopen newer work or mint
@@ -813,7 +945,9 @@ def create_report(
                     else:
                         state, effect = "failed", "applied"
                 elif current_state in ("verifying", "not_deployed"):
-                    if report.outcome == "failed":
+                    if report.outcome == "failed" and current_state == "not_deployed":
+                        state, effect = "not_deployed", "no_change"
+                    elif report.outcome == "failed":
                         state, effect = "failed", "applied"
                     elif report.outcome == "succeeded":
                         state = current_state
@@ -832,12 +966,27 @@ def create_report(
                     state, effect = "failed", "no_change"
                 elif current_state == "failed" and report.outcome == "succeeded":
                     state, effect = "verifying", "applied"
-                elif current_state == "verified" and (
-                    report.outcome == "succeeded"
-                    or (
-                        report.outcome == "failed"
-                        and attempt["baseline_fingerprint"] == baseline_fingerprint
+                elif current_state == "verified" and report.outcome == "succeeded":
+                    (
+                        state,
+                        effect,
+                        new_attempt,
+                        attempt_id,
+                        baseline_fingerprint,
+                        baseline_not_after,
+                    ) = _reduce_verified_success(
+                        conn,
+                        target,
+                        attempt,
+                        report,
+                        received=received,
+                        same_correlation=same_correlation,
+                        baseline_fingerprint=baseline_fingerprint,
+                        baseline_not_after=baseline_not_after,
                     )
+                elif current_state == "verified" and (
+                    report.outcome == "failed"
+                    and attempt["baseline_fingerprint"] == baseline_fingerprint
                 ):
                     state, effect, new_attempt = "verified", "ignored_late", False
                 elif report.outcome == "started" and same_correlation:
@@ -845,6 +994,34 @@ def create_report(
                 else:
                     new_attempt = True
                     attempt_id = uuid.uuid4().hex
+
+            if (
+                new_attempt
+                and report.outcome == "succeeded"
+                and (
+                    report.new_fingerprint is None
+                    or (
+                        prior_state != "verified"
+                        and current_fingerprint is not None
+                        and report.new_fingerprint.lower() == current_fingerprint
+                    )
+                )
+            ):
+                baseline_fingerprint, baseline_not_after = _report_baseline(
+                    conn,
+                    target,
+                    current_fingerprint,
+                    current_not_after,
+                    received=received,
+                    use_current_predecessor=True,
+                )
+
+            contradictory = bool(
+                report.outcome == "succeeded"
+                and report.new_fingerprint
+                and baseline_fingerprint
+                and report.new_fingerprint.lower() == baseline_fingerprint.lower()
+            )
 
             # Preserve the report for audit/history, but a claimed fingerprint
             # that is the baseline is not renewal evidence and changes no live
@@ -970,7 +1147,8 @@ def create_report(
                     (target.host_id, source, report.correlation_id, attempt_id, received_at),
                 )
 
-            result = RenewalReportResult(report_id, attempt_id, state, effect)
+            response_state = None if contradictory and attempt is None else state
+            result = RenewalReportResult(report_id, attempt_id, response_state, effect)
             response_body = json.dumps(result.__dict__, separators=(",", ":"), sort_keys=True)
             _store_idempotency_on(
                 conn,

@@ -190,6 +190,16 @@ def _record_verification_success(
         )
     except Exception:
         logger.exception("renewal verification failed for %s:%d", hostname, port)
+        try:
+            from cert_watch.renewal_verification import mark_verification_evaluation_error
+
+            mark_verification_evaluation_error(
+                db_path, hostname, port, started_at=started_at, settings=settings
+            )
+        except Exception:
+            logger.exception(
+                "could not back off renewal verification for %s:%d", hostname, port
+            )
 
 
 def _scoped_tags(auth: Any, tags: str) -> str:

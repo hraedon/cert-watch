@@ -278,14 +278,16 @@ def test_report_storm_limits_immediate_check_to_one_per_five_minutes(estate):
     assert row["success_received_at"] == NOW.isoformat()
 
 
-def _post(estate, outcome, at, *, new_fingerprint=None):
+def _post(estate, outcome, at, *, new_fingerprint=None, correlation_id=None):
     db, _host_id, _cert_id, _baseline, settings = estate
     auth = AuthContext.renewal_report_key("key", principal_id="key", binding="all", bound_tags=())
     return create_report(
         db,
         settings,
         resolve_target(db, auth, hostname=HOST, port=443),
-        RenewalReportInput(outcome, None, "tool", None, new_fingerprint, None),
+        RenewalReportInput(
+            outcome, None, "tool", correlation_id, new_fingerprint, None
+        ),
         auth=auth,
         actor="api_key:key",
         source_ip=None,
@@ -323,7 +325,7 @@ def test_failed_then_succeeded_replaces_reported_fingerprint(estate):
 def test_baseline_fingerprint_claim_is_stored_but_never_applied(estate):
     db, _host_id, _cert_id, baseline, _settings = estate
     result = _post(estate, "succeeded", NOW, new_fingerprint=baseline)
-    assert (result.state, result.effect) == ("open", "no_change")
+    assert (result.state, result.effect) == (None, "no_change")
     assert _row(db) is None
     with _connect(db) as conn:
         report = conn.execute(
@@ -452,6 +454,235 @@ def test_hostname_success_uses_recent_lineage_predecessor(
     row = _row(db)
     assert row["baseline_fingerprint"] == baseline
     assert (result.state, row["verification_reason"]) == ("verified", reason)
+    assert row["verified_fingerprint"] == successor.fingerprint_sha256
+
+
+def _set_lineage_observed_at(db, observed_at):
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE certificate_lineage SET created_at=? WHERE hostname=? AND port=?",
+            (observed_at.isoformat(), HOST, 443),
+        )
+        conn.commit()
+
+
+def test_bare_success_ignores_predecessor_observed_three_days_ago(estate):
+    db, _host_id, _cert_id, _baseline, settings = estate
+    current = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    store_scanned(ScannedEntry(host=HOST, port=443, leaf=current, chain=[]), db)
+    _set_lineage_observed_at(db, NOW - timedelta(days=3))
+
+    result = _post(estate, "succeeded", NOW)
+    assert result.state == "verifying"
+    assert _row(db)["baseline_fingerprint"] == current.fingerprint_sha256
+    evaluate_after_scan(
+        db,
+        HOST,
+        443,
+        current.fingerprint_sha256,
+        started_at=NOW + timedelta(hours=25),
+        settings=settings,
+    )
+    assert _row(db)["state"] == "not_deployed"
+
+
+def test_bare_success_uses_predecessor_observed_two_hours_ago(estate):
+    db, _host_id, _cert_id, baseline, _settings = estate
+    current = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    store_scanned(ScannedEntry(host=HOST, port=443, leaf=current, chain=[]), db)
+    _set_lineage_observed_at(db, NOW - timedelta(hours=2))
+
+    result = _post(estate, "succeeded", NOW)
+    row = _row(db)
+    assert row["baseline_fingerprint"] == baseline
+    assert (result.state, row["verification_reason"]) == (
+        "verified",
+        "observed_successor",
+    )
+
+
+def test_bare_success_does_not_verify_a_flap_to_an_old_leaf(estate):
+    db, _host_id, _cert_id, baseline, _settings = estate
+    with _connect(db) as conn:
+        raw = conn.execute(
+            "SELECT raw_der FROM certificates WHERE lower(fingerprint_sha256)=?",
+            (baseline.lower(),),
+        ).fetchone()[0]
+    successor = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    store_scanned(ScannedEntry(host=HOST, port=443, leaf=successor, chain=[]), db)
+    store_scanned(
+        ScannedEntry(host=HOST, port=443, leaf=parse_certificate(bytes(raw)), chain=[]),
+        db,
+    )
+
+    result = _post(estate, "succeeded", NOW)
+    row = _row(db)
+    assert result.state == "verifying"
+    assert row["baseline_fingerprint"] == baseline
+
+
+@pytest.mark.parametrize("terminal", ["abandoned", "cancelled", "failed"])
+def test_recent_predecessor_applies_after_terminal_attempt(estate, terminal):
+    db, _host_id, _cert_id, baseline, _settings = estate
+    _post(estate, "started", NOW - timedelta(days=2))
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE renewal_attempts SET state=?,suppresses_stalled=0 WHERE is_current=1",
+            (terminal,),
+        )
+        conn.commit()
+    current = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    store_scanned(ScannedEntry(host=HOST, port=443, leaf=current, chain=[]), db)
+    _set_lineage_observed_at(db, NOW - timedelta(hours=2))
+
+    result = _post(estate, "succeeded", NOW)
+    row = _row(db)
+    assert row["baseline_fingerprint"] == baseline
+    assert result.state == "verified"
+
+
+def _verified_first_cycle(estate):
+    db, _host_id, _cert_id, _baseline, settings = estate
+    first = _post(estate, "succeeded", NOW, correlation_id="cycle-1")
+    deployed = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    store_scanned(ScannedEntry(host=HOST, port=443, leaf=deployed, chain=[]), db)
+    evaluate_after_scan(
+        db,
+        HOST,
+        443,
+        deployed.fingerprint_sha256,
+        started_at=NOW + timedelta(minutes=5),
+        settings=settings,
+    )
+    assert _row(db)["state"] == "verified"
+    return first, deployed
+
+
+def test_verified_attempt_accepts_and_verifies_a_later_cycle(estate):
+    db, _host_id, _cert_id, _baseline, settings = estate
+    first, deployed = _verified_first_cycle(estate)
+    second = _post(estate, "succeeded", NOW + timedelta(days=2))
+    assert second.attempt_id != first.attempt_id
+    assert _row(db)["baseline_fingerprint"] == deployed.fingerprint_sha256
+
+    replacement = parse_certificate(_make_cert(HOST, days_valid=120).der)
+    store_scanned(ScannedEntry(host=HOST, port=443, leaf=replacement, chain=[]), db)
+    evaluate_after_scan(
+        db,
+        HOST,
+        443,
+        replacement.fingerprint_sha256,
+        started_at=NOW + timedelta(days=2, minutes=5),
+        settings=settings,
+    )
+    assert _row(db)["state"] == "verified"
+
+
+def test_verified_attempt_later_failed_deploy_raises(estate):
+    db, _host_id, _cert_id, _baseline, settings = estate
+    first, deployed = _verified_first_cycle(estate)
+    second = _post(estate, "succeeded", NOW + timedelta(days=2))
+    assert second.attempt_id != first.attempt_id
+    evaluate_after_scan(
+        db,
+        HOST,
+        443,
+        deployed.fingerprint_sha256,
+        started_at=NOW + timedelta(days=3, hours=1),
+        settings=settings,
+    )
+    assert _row(db)["state"] == "not_deployed"
+
+
+def test_verified_attempt_duplicate_window_and_owned_correlation_are_late(estate):
+    first, _deployed = _verified_first_cycle(estate)
+    bare = _post(estate, "succeeded", NOW + timedelta(hours=1))
+    new_correlation = _post(
+        estate,
+        "succeeded",
+        NOW + timedelta(hours=2),
+        correlation_id="duplicate-cycle",
+    )
+    owned = _post(
+        estate,
+        "succeeded",
+        NOW + timedelta(days=2),
+        correlation_id="cycle-1",
+    )
+    assert {
+        (bare.attempt_id, bare.effect),
+        (new_correlation.attempt_id, new_correlation.effect),
+        (owned.attempt_id, owned.effect),
+    } == {(first.attempt_id, "ignored_late")}
+
+
+def test_new_fingerprint_opens_cycle_inside_verified_duplicate_window(estate):
+    first, _deployed = _verified_first_cycle(estate)
+    result = _post(
+        estate,
+        "succeeded",
+        NOW + timedelta(hours=1),
+        new_fingerprint="c" * 64,
+        correlation_id="cycle-2",
+    )
+    assert result.attempt_id != first.attempt_id
+    assert result.state == "verifying"
+
+
+def test_new_fingerprint_verifies_already_stored_leaf_in_next_cycle(estate):
+    db, _host_id, _cert_id, _baseline, _settings = estate
+    first, _deployed = _verified_first_cycle(estate)
+    replacement = parse_certificate(_make_cert(HOST, days_valid=120).der)
+    store_scanned(ScannedEntry(host=HOST, port=443, leaf=replacement, chain=[]), db)
+    result = _post(
+        estate,
+        "succeeded",
+        NOW + timedelta(hours=2),
+        new_fingerprint=replacement.fingerprint_sha256,
+        correlation_id="cycle-2",
+    )
+    assert result.attempt_id != first.attempt_id
+    assert result.state == "verified"
+
+
+def test_failed_then_succeeded_keeps_unrun_due_check(estate):
+    db, _host_id, _cert_id, _baseline, _settings = estate
+    _post(estate, "succeeded", NOW)
+    first_check = _row(db)["next_check_at"]
+    _post(estate, "failed", NOW + timedelta(minutes=1))
+    _post(estate, "succeeded", NOW + timedelta(minutes=30))
+    row = _row(db)
+    assert row["next_check_at"] == first_check
+    assert row["success_received_at"] == (NOW + timedelta(minutes=30)).isoformat()
+
+
+def test_post_scan_evaluation_errors_back_off_to_band_cadence(estate, monkeypatch):
+    from cert_watch.services.host_management import _record_verification_success
+
+    db, _host_id, _cert_id, baseline, settings = estate
+    _attempt(estate, not_after=NOW - timedelta(minutes=1))
+
+    def fail_evaluation(*_args, **_kwargs):
+        raise RuntimeError("evaluation failed")
+
+    monkeypatch.setattr(
+        "cert_watch.renewal_verification.evaluate_after_scan", fail_evaluation
+    )
+    expected_delays = (5, 10, 15, 15)
+    failed_at = NOW
+    for delay in expected_delays:
+        _record_verification_success(
+            db,
+            HOST,
+            443,
+            baseline,
+            started_at=failed_at,
+            settings=settings,
+        )
+        assert datetime.fromisoformat(_row(db)["next_check_at"]) == failed_at + timedelta(
+            minutes=delay
+        )
+        failed_at += timedelta(minutes=delay)
 
 
 def test_expired_attempt_scheduler_rechecks_on_fifteen_minute_grid(estate):

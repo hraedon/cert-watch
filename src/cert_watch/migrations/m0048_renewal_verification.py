@@ -19,6 +19,7 @@ def upgrade(conn: sqlite3.Connection) -> None:
         "verification_blocked_at": "TEXT",
         "raised_at": "TEXT",
         "verification_reason": "TEXT",
+        "verified_fingerprint": "TEXT",
         "success_received_at": "TEXT",
     }
     for name, definition in additions.items():
