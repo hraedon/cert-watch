@@ -267,12 +267,14 @@ def _record_failed_report_on(
     if restarted:
         conn.execute(
             """UPDATE renewal_attempts
-               SET failure_attempt_id=?,failure_reported_at=?,
+               SET new_fingerprint=?,
+                   failure_attempt_id=?,failure_reported_at=?,
                    failure_cleared_at=NULL,
                    failure_expected_fingerprint=?,
                    rule_due_at=?
                WHERE attempt_id=?""",
             (
+                reported_fingerprint,
                 uuid.uuid4().hex,
                 received_at,
                 reported_fingerprint,
@@ -286,8 +288,10 @@ def _record_failed_report_on(
            SET state=?,suppresses_stalled=0,
                failure_attempt_id=COALESCE(failure_attempt_id,attempt_id),
                failure_reported_at=COALESCE(failure_reported_at,?),
-               failure_expected_fingerprint=COALESCE(
-                   failure_expected_fingerprint,new_fingerprint,?),
+               failure_expected_fingerprint=CASE
+                   WHEN failure_reported_at IS NULL THEN ?
+                   WHEN ? IS NOT NULL THEN ?
+                   ELSE failure_expected_fingerprint END,
                rule_due_at=?,
                closed_reason=CASE
                    WHEN ?='failed' THEN 'reported_failed' ELSE closed_reason END
@@ -295,6 +299,8 @@ def _record_failed_report_on(
         (
             state,
             received_at,
+            reported_fingerprint,
+            reported_fingerprint,
             reported_fingerprint,
             received_at,
             state,
@@ -864,6 +870,11 @@ def _update_succeeded_attempt_on(
         conn.execute(
             f"""UPDATE renewal_attempts SET state=?,suppresses_stalled=0,
                       new_fingerprint={fingerprint_sql},
+                      failure_expected_fingerprint=CASE
+                          WHEN failure_reported_at IS NOT NULL
+                               AND failure_cleared_at IS NULL
+                               AND ? IS NOT NULL THEN ?
+                          ELSE failure_expected_fingerprint END,
                       success_received_at=?,
                       next_check_at=CASE
                           WHEN next_check_at IS NOT NULL AND next_check_at<=?
@@ -872,6 +883,8 @@ def _update_succeeded_attempt_on(
                WHERE attempt_id=?""",
             (
                 state,
+                report.new_fingerprint,
+                report.new_fingerprint,
                 report.new_fingerprint,
                 received_at,
                 received_at,
@@ -882,9 +895,20 @@ def _update_succeeded_attempt_on(
         return
     conn.execute(
         f"""UPDATE renewal_attempts SET state=?,suppresses_stalled=0,
-                  new_fingerprint={fingerprint_sql}
+                  new_fingerprint={fingerprint_sql},
+                  failure_expected_fingerprint=CASE
+                      WHEN failure_reported_at IS NOT NULL
+                           AND failure_cleared_at IS NULL
+                           AND ? IS NOT NULL THEN ?
+                      ELSE failure_expected_fingerprint END
            WHERE attempt_id=?""",
-        (state, report.new_fingerprint, attempt_id),
+        (
+            state,
+            report.new_fingerprint,
+            report.new_fingerprint,
+            report.new_fingerprint,
+            attempt_id,
+        ),
     )
 
 
@@ -1275,8 +1299,14 @@ def create_report(
                         or (attempt_id if state == "failed" else None),
                         carried_failure_at
                         or (received_at if state == "failed" else None),
-                        carried_failure_expected
-                        or (report.new_fingerprint if state == "failed" else None),
+                        (
+                            report.new_fingerprint
+                            if carried_failure_id
+                            and report.outcome in {"failed", "succeeded"}
+                            and report.new_fingerprint
+                            else carried_failure_expected
+                            or (report.new_fingerprint if state == "failed" else None)
+                        ),
                         carried_failure_at
                         or (received_at if state == "failed" else None),
                         claims_baseline,

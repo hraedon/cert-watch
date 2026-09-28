@@ -479,6 +479,7 @@ class Scheduler:
     def _run_loop(self, stop_event: threading.Event) -> None:
         next_cycle_allowed = 0.0
         rule_failure_count = 0
+        unconsumed_rule_wake_logged = False
         daily_deadline: datetime | None = None
         daily_schedule: tuple[int, int] | None = None
         try:
@@ -535,9 +536,25 @@ class Scheduler:
                         alert_succeeded = self.run_cycle(stop_event=stop_event)
                     finally:
                         self._cycle_lock.release()
-                        if alert_succeeded:
+                        rule_wake_unconsumed = False
+                        if alert_succeeded and not stop_event.is_set():
+                            rule_wake_unconsumed = (
+                                _seconds_until_next_rule_pass(
+                                    self.context.settings.db_path,
+                                    now=self.clock.now(),
+                                )
+                                == 0
+                            )
+                            if rule_wake_unconsumed and not unconsumed_rule_wake_logged:
+                                logger.warning(
+                                    "scheduler alert_fn left a renewal rule wake "
+                                    "unconsumed; backing off"
+                                )
+                                unconsumed_rule_wake_logged = True
+                        if alert_succeeded and not rule_wake_unconsumed:
                             rule_failure_count = 0
                             rule_backoff = 60.0
+                            unconsumed_rule_wake_logged = False
                         else:
                             rule_failure_count += 1
                             rule_backoff = min(

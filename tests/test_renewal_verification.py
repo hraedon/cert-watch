@@ -308,6 +308,28 @@ def _post(estate, outcome, at, *, new_fingerprint=None, correlation_id=None):
     )[0]
 
 
+def _serve(estate, leaf, observed_at):
+    db, _host_id, _cert_id, _baseline, settings = estate
+    store_scanned(
+        ScannedEntry(
+            host=HOST,
+            port=443,
+            leaf=leaf,
+            chain=[],
+            scanned_at=observed_at,
+        ),
+        db,
+    )
+    return evaluate_after_scan(
+        db,
+        HOST,
+        443,
+        leaf.fingerprint_sha256,
+        started_at=observed_at,
+        settings=settings,
+    )
+
+
 @pytest.mark.parametrize("first_outcome", ["started", "failed"])
 def test_grace_is_anchored_to_each_succeeded_report(estate, first_outcome):
     db, _host_id, _cert_id, baseline, settings = estate
@@ -1313,7 +1335,7 @@ def test_manual_and_succeeded_attempts_carry_failure_origin(estate):
     assert latest["failure_cleared_at"] is None
 
 
-def test_successor_scan_clears_failed_condition_without_rewriting_attempt(estate):
+def test_successor_scan_verifies_failed_attempt_and_clears_condition(estate):
     db, _host_id, _cert_id, _baseline, settings = estate
     failed = _post(estate, "failed", NOW)
     repo = SqliteAlertRepository(db)
@@ -1339,7 +1361,8 @@ def test_successor_scan_clears_failed_condition_without_rewriting_attempt(estate
         started_at=observed_at,
         settings=settings,
     )
-    assert result is not None and result.state == "failed"
+    assert result is not None and result.state == "verified"
+    assert result.reason == "observed_successor"
     assert _row(db)["failure_cleared_at"] == observed_at.isoformat()
     row = _row(db)
     assert row["failure_attempt_id"] == failed.attempt_id
@@ -1568,51 +1591,107 @@ def test_failure_after_manual_clear_opens_new_condition(estate):
     assert second_alert.dedupe_key != first_alert.dedupe_key
 
 
-@pytest.mark.parametrize("fresh_expected", ["b" * 64, None])
-def test_failure_restart_uses_only_fresh_report_fingerprint(
-    estate, fresh_expected
-):
+def test_failure_restart_uses_only_fresh_report_fingerprint(estate):
     db, host_id, _cert_id, _baseline, _settings = estate
-    old_expected = "a" * 64
-    _post(estate, "succeeded", NOW, new_fingerprint=old_expected)
-    _post(estate, "failed", NOW + timedelta(minutes=1))
+    old_expected = parse_certificate(_make_cert(HOST, days_valid=70).der)
+    fresh_expected = parse_certificate(_make_cert(HOST, days_valid=80).der)
+    _post(
+        estate,
+        "failed",
+        NOW,
+        new_fingerprint=old_expected.fingerprint_sha256,
+    )
     assert clear_renewal_failure(
         db,
         host_id,
         auth=AuthContext.system(),
         actor="system",
         source_ip=None,
-        now=NOW + timedelta(minutes=2),
+        now=NOW + timedelta(minutes=1),
     )
 
     _post(
         estate,
         "failed",
-        NOW + timedelta(minutes=3),
-        new_fingerprint=fresh_expected,
+        NOW + timedelta(minutes=2),
+        new_fingerprint=fresh_expected.fingerprint_sha256,
     )
-    assert _row(db)["failure_expected_fingerprint"] == fresh_expected
+    row = _row(db)
+    assert row["failure_expected_fingerprint"] == fresh_expected.fingerprint_sha256
+    assert row["new_fingerprint"] == fresh_expected.fingerprint_sha256
+
+    stale_result = _serve(estate, old_expected, NOW + timedelta(minutes=5))
+    row = _row(db)
+    assert stale_result is not None and stale_result.state == "failed"
+    assert row["failure_cleared_at"] is None
+
+    fresh_result = _serve(estate, fresh_expected, NOW + timedelta(minutes=10))
+    row = _row(db)
+    assert fresh_result is not None and fresh_result.state == "verified"
+    assert row["failure_cleared_at"] == (NOW + timedelta(minutes=10)).isoformat()
 
 
-def test_started_carrier_failure_fingerprint_does_not_enter_s4(estate):
-    db, _host_id, _cert_id, _baseline, settings = estate
+def test_failure_restart_without_fingerprint_resets_expectation_and_claim(estate):
+    db, host_id, _cert_id, _baseline, _settings = estate
+    old_expected = parse_certificate(_make_cert(HOST, days_valid=70).der)
+    successor = parse_certificate(_make_cert(HOST, days_valid=80).der)
+    _post(
+        estate,
+        "failed",
+        NOW,
+        new_fingerprint=old_expected.fingerprint_sha256,
+    )
+    assert clear_renewal_failure(
+        db,
+        host_id,
+        auth=AuthContext.system(),
+        actor="system",
+        source_ip=None,
+        now=NOW + timedelta(minutes=1),
+    )
+
+    _post(estate, "failed", NOW + timedelta(minutes=2))
+    row = _row(db)
+    assert row["failure_expected_fingerprint"] is None
+    assert row["new_fingerprint"] is None
+
+    result = _serve(estate, successor, NOW + timedelta(minutes=5))
+    row = _row(db)
+    assert result is not None and result.state == "verified"
+    assert result.reason == "observed_successor"
+    assert row["failure_cleared_at"] == (NOW + timedelta(minutes=5)).isoformat()
+
+
+def test_failure_expectation_tracks_latest_failed_or_succeeded_fingerprint(estate):
+    db, _host_id, _cert_id, _baseline, _settings = estate
+    first = "a" * 64
+    second = "b" * 64
+    latest = "c" * 64
+    _post(estate, "failed", NOW, new_fingerprint=first)
+    _post(estate, "failed", NOW + timedelta(minutes=1), new_fingerprint=second)
+    assert _row(db)["failure_expected_fingerprint"] == second
+
+    _post(estate, "succeeded", NOW + timedelta(minutes=2), new_fingerprint=latest)
+    assert _row(db)["failure_expected_fingerprint"] == latest
+
+    _post(estate, "failed", NOW + timedelta(minutes=3))
+    assert _row(db)["failure_expected_fingerprint"] == latest
+
+
+def test_started_carrier_observed_successor_verifies_and_clears_failure(estate):
+    db, _host_id, _cert_id, _baseline, _settings = estate
     repo = SqliteAlertRepository(db)
     expected = parse_certificate(_make_cert(HOST, days_valid=90).der)
     third = parse_certificate(_make_cert(HOST, days_valid=100).der)
     _post(estate, "failed", NOW, new_fingerprint=expected.fingerprint_sha256)
     _post(estate, "started", NOW + timedelta(minutes=1))
 
-    for offset in (timedelta(minutes=10), timedelta(hours=25), timedelta(hours=26)):
-        evaluate_after_scan(
-            db,
-            HOST,
-            443,
-            third.fingerprint_sha256,
-            started_at=NOW + offset,
-            settings=settings,
-        )
+    result = _serve(estate, third, NOW + timedelta(minutes=10))
     evaluate_renewal_report_alerts(db, repo)
-    assert _row(db)["state"] == "open"
+    row = _row(db)
+    assert result is not None and result.state == "verified"
+    assert result.reason == "observed_successor"
+    assert row["failure_cleared_at"] == (NOW + timedelta(minutes=10)).isoformat()
     with _connect(db) as conn:
         assert conn.execute(
             "SELECT count(*) FROM alerts WHERE alert_type='renewal_not_deployed'"
@@ -1686,28 +1765,81 @@ def test_failure_after_clear_restarts_not_deployed_condition_in_place(estate):
     assert open_types == {"renewal_failed", "renewal_not_deployed"}
 
 
-def test_carried_failure_keeps_expected_fingerprint_across_third_leaf(estate):
-    db, _host_id, _cert_id, _baseline, settings = estate
-    expected = "a" * 64
-    third = "b" * 64
-    _post(estate, "succeeded", NOW, new_fingerprint=expected)
-    failed = _post(estate, "failed", NOW + timedelta(minutes=1))
-    started = _post(estate, "started", NOW + timedelta(minutes=2))
-    row = _row(db)
-    assert started.attempt_id != failed.attempt_id
-    assert row["new_fingerprint"] is None
-    assert row["failure_expected_fingerprint"] == expected
-
-    result = evaluate_after_scan(
-        db,
-        HOST,
-        443,
-        third,
-        started_at=NOW + timedelta(minutes=10),
-        settings=settings,
+def test_bare_success_observed_successor_verifies_and_clears_failure(estate):
+    db, _host_id, _cert_id, _baseline, _settings = estate
+    expected = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    successor = parse_certificate(_make_cert(HOST, days_valid=100).der)
+    _post(
+        estate,
+        "failed",
+        NOW,
+        new_fingerprint=expected.fingerprint_sha256,
     )
+    _post(estate, "succeeded", NOW + timedelta(minutes=1))
+
+    result = _serve(estate, successor, NOW + timedelta(minutes=10))
     row = _row(db)
-    assert result is not None and result.state != "verified"
+    assert result is not None and result.state == "verified"
+    assert result.reason == "observed_successor"
+    assert row["failure_cleared_at"] == (NOW + timedelta(minutes=10)).isoformat()
+
+
+def test_failed_report_does_not_clear_on_unrelated_leaf_without_new_report(estate):
+    db, _host_id, _cert_id, _baseline, _settings = estate
+    expected = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    unrelated = parse_certificate(_make_cert(HOST, days_valid=100).der)
+    _post(
+        estate,
+        "failed",
+        NOW,
+        new_fingerprint=expected.fingerprint_sha256,
+    )
+
+    result = _serve(estate, unrelated, NOW + timedelta(minutes=5))
+    row = _row(db)
+    assert result is not None and result.state == "failed"
+    assert row["failure_cleared_at"] is None
+
+
+def test_not_deployed_failure_clears_only_when_condition_expectation_matches(
+    estate,
+):
+    db, _host_id, _cert_id, _baseline, _settings = estate
+    attempt_expected = parse_certificate(_make_cert(HOST, days_valid=70).der)
+    failure_expected = parse_certificate(_make_cert(HOST, days_valid=80).der)
+    unrelated = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    _attempt(estate, state="not_deployed", expected=attempt_expected.fingerprint_sha256)
+    _post(
+        estate,
+        "failed",
+        NOW + timedelta(minutes=1),
+        new_fingerprint=failure_expected.fingerprint_sha256,
+    )
+
+    unrelated_result = _serve(estate, unrelated, NOW + timedelta(minutes=5))
+    row = _row(db)
+    assert unrelated_result is not None and unrelated_result.state == "not_deployed"
+    assert row["failure_cleared_at"] is None
+
+    expected_result = _serve(estate, failure_expected, NOW + timedelta(minutes=10))
+    row = _row(db)
+    assert expected_result is not None and expected_result.state == "not_deployed"
+    assert row["failure_cleared_at"] == (NOW + timedelta(minutes=10)).isoformat()
+
+
+def test_not_deployed_failure_without_expectation_ignores_unrelated_successor(
+    estate,
+):
+    db, _host_id, _cert_id, _baseline, _settings = estate
+    attempt_expected = parse_certificate(_make_cert(HOST, days_valid=70).der)
+    unrelated = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    _attempt(estate, state="not_deployed", expected=attempt_expected.fingerprint_sha256)
+    _post(estate, "failed", NOW + timedelta(minutes=1))
+    assert _row(db)["failure_expected_fingerprint"] is None
+
+    result = _serve(estate, unrelated, NOW + timedelta(minutes=5))
+    row = _row(db)
+    assert result is not None and result.state == "not_deployed"
     assert row["failure_cleared_at"] is None
 
 
@@ -1725,7 +1857,7 @@ def test_carrier_reported_fingerprint_overrides_failure_expectation(estate):
         new_fingerprint=carrier_expected,
     )
     row = _row(db)
-    assert row["failure_expected_fingerprint"] == original_expected
+    assert row["failure_expected_fingerprint"] == carrier_expected
     assert row["new_fingerprint"] == carrier_expected
 
     result = evaluate_after_scan(
@@ -1832,6 +1964,55 @@ def test_failed_rule_pass_backs_off_instead_of_busy_loop(estate, caplog):
     assert gaps == sorted(gaps)
     assert gaps[:3] == [60, 120, 240]
     assert caplog.text.count("scheduler alert_fn failed") == len(runs)
+
+
+def test_unconsumed_rule_wake_backs_off_after_normal_rule_pass(estate, caplog):
+    db, _host_id, _cert_id, _baseline, settings = estate
+    record_scan_history(
+        db,
+        ScanHistory(HOST, 443, "success", scanned_at=NOW - timedelta(hours=1)),
+    )
+    _post(estate, "failed", NOW - timedelta(minutes=1))
+    context = SchedulerContext(settings, None, None)
+    runs: list[datetime] = []
+
+    class Clock:
+        current = NOW
+
+        def now(self):
+            return self.current
+
+        def monotonic(self):
+            return self.current.timestamp()
+
+        def wait(self, event, timeout):
+            self.current += timedelta(seconds=timeout)
+            if self.current >= NOW + timedelta(hours=1):
+                scheduler.stop_event.set()
+                event.set()
+            return False
+
+    def leave_wake_unconsumed():
+        runs.append(clock.current)
+        return {"alerts": 0}
+
+    clock = Clock()
+    context.scan_all = lambda: {}
+    context.run_alerts = leave_wake_unconsumed
+    context.maybe_run_weekly_digest = lambda: {}
+    context.maintenance = lambda: None
+    scheduler = Scheduler(context, clock=clock, shutdown_timeout=1)
+    with caplog.at_level("WARNING", logger="cert_watch.scheduler"):
+        scheduler._run_loop(scheduler.stop_event)
+
+    gaps = [
+        (later - earlier).total_seconds()
+        for earlier, later in pairwise(runs)
+    ]
+    assert 2 <= len(runs) <= 7
+    assert gaps == sorted(gaps)
+    assert gaps[:3] == [60, 120, 240]
+    assert caplog.text.count("left a renewal rule wake unconsumed") == 1
 
 
 def test_pre_scan_failure_keeps_one_provider_incident_across_leaf_changes(

@@ -69,11 +69,11 @@ def _failure_clear_reason(
     )
     if baseline is not None and leaf == baseline:
         return None
-    expected_value = (
-        attempt["new_fingerprint"] or attempt["failure_expected_fingerprint"]
-    )
+    expected_value = attempt["failure_expected_fingerprint"]
     if expected_value:
         return "reported_fingerprint" if leaf == str(expected_value).lower() else None
+    if attempt["state"] == "not_deployed":
+        return None
     return "observed_successor" if baseline is not None else None
 
 
@@ -216,7 +216,7 @@ def evaluate_evidence_on(
     failure_open = bool(
         attempt["failure_reported_at"] and not attempt["failure_cleared_at"]
     )
-    if state not in {"open", "verifying", "not_deployed"} and not failure_open:
+    if state not in {"open", "verifying", "not_deployed", "failed"} and not failure_open:
         return VerificationResult(state, attempt["next_check_at"], attempt["verification_reason"])
     leaf = leaf_fingerprint.lower() if leaf_fingerprint else None
     baseline = (
@@ -246,17 +246,13 @@ def evaluate_evidence_on(
         _failure_clear_reason(attempt, leaf) if failure_open else None
     )
     verification_reason = _attempt_verification_reason(attempt, leaf)
-    if state == "open" and failure_open and expected is None:
-        # A started report is not a success claim. Stored evidence may clear
-        # its independent failure condition, but cannot start S4 verification.
-        verification_reason = None
     if verification_reason is not None:
         state, reason = "verified", verification_reason
-    elif failure_open and state not in {"open", "verifying", "not_deployed"}:
+    elif state == "failed":
         # Failure-only states have no verification scan cadence.  An ordinary
         # stored scan may still prove the successor and close the condition,
         # but a baseline observation never changes their state.
-        if failure_clear_reason is not None:
+        if failure_open and failure_clear_reason is not None:
             _clear_failure_condition_on(conn, attempt, started_at.isoformat())
         return VerificationResult(state, attempt["next_check_at"], None)
     elif not count_check:
@@ -307,10 +303,13 @@ def evaluate_evidence_on(
         verification_reason=reason,
         next_check_at=next_check.isoformat() if next_check else None,
     )
+    clear_failure = failure_open and (
+        state == "verified" or failure_clear_reason is not None
+    )
     if state == "verified":
         updates["closed_reason"] = reason
         updates["verified_fingerprint"] = leaf
-        if failure_clear_reason is not None:
+        if clear_failure:
             updates["failure_cleared_at"] = started_at.isoformat()
             updates["rule_due_at"] = started_at.isoformat()
     elif state == "not_deployed" and not attempt["raised_at"]:
@@ -320,7 +319,7 @@ def evaluate_evidence_on(
         f"UPDATE renewal_attempts SET {assignments} WHERE attempt_id=?",
         (*updates.values(), attempt["attempt_id"]),
     )
-    if failure_clear_reason is not None:
+    if clear_failure:
         _clear_failure_condition_on(conn, attempt, started_at.isoformat())
     return VerificationResult(
         state, next_check.isoformat() if next_check else None, reason

@@ -12,7 +12,7 @@ step.
 | **Expiry warning** | A certificate crosses an expiry threshold (see below). | Once per threshold. The next threshold is a new alert. |
 | **Expired** | A certificate has expired. | Once. |
 | **Renewal stalled** | A certificate is inside its renewal window (`CERT_WATCH_RENEWAL_WINDOW_DAYS`, 30 by default) and no successor has appeared. | Once per certificate, paused during the first live renewal-attempt lease for that served certificate. The weekly renewal digest is the reminder. |
-| **Renewal failed** | Renewal automation reports failure for an endpoint with a current scanned leaf. A failure reported after `not_deployed` is recorded on that same renewal cycle and raises this alert alongside the deployment warning. | Once per continuous failure condition. Later started, manual in-progress, or succeeded attempts carry the condition without opening another provider incident. It closes only when stored scan evidence satisfies the cycle's baseline and expected-fingerprint rule, the endpoint is deleted, or an operator uses the explicit renewal-failure clear action. A failure after a manual clear starts a new incident on the same attempt without changing its state. |
+| **Renewal failed** | Renewal automation reports failure for an endpoint with a current scanned leaf. A failure reported after `not_deployed` is recorded on that same renewal cycle and raises this alert alongside the deployment warning. | Once per continuous failure condition. Later started, manual in-progress, or succeeded attempts carry the condition without opening another provider incident. A failure after a manual clear starts a new incident on the same attempt without changing its state. See the clearing rule below. |
 | **Renewal not deployed** | Renewal automation reported success, but a qualifying stored scan still sees the previous certificate or a different certificate than the reported fingerprint. | Once per renewal attempt. It closes when a later scan verifies the successor or the endpoint is deleted. |
 | **Policy violation** | A scan finds a critical or warning finding from the posture policy, such as SHA-1, short keys or an old TLS version. | Once while the violation persists. If it clears and comes back, again. |
 | **Drift** | A scan sees a high-severity change: a new issuer, a smaller key, a signature downgrade to SHA-1, a TLS version downgrade, or a posture-grade drop. Turn off with `CERT_WATCH_DRIFT_ALERTS=0`. | Each drift is its own alert. |
@@ -25,6 +25,14 @@ condition and the automation-facing `renewal_needed` webhook; the overdue event
 is still recorded. It never suppresses expiry warnings or expired alerts.
 Repeated starts do not extend or re-grant the lease. Renewal completion is
 established by observing a successor certificate, not by an operator report.
+
+**A failure condition clears when ANY of these happens:**
+- (a) The attempt carrying it reaches `verified` under the unmodified S4 rules. S4 uses only that attempt's own new_fingerprint, and S4 observed-successor verification runs normally for open, verifying and failed attempts. A carried failure must NOT block or alter any S4 transition. This fixes Opus R5-1/R5-2 and DeepSeek R5-2/R5-3.
+- (b) A stored scan leaf L ≠ baseline, where L equals E. E is the MOST RECENT new_fingerprint reported on this condition by any failed or succeeded report since the condition started or last restarted.
+  - If no report since then carried a new_fingerprint, any L ≠ baseline clears it.
+  - Store E as failure_expected_fingerprint, updated on each such report, and reset on restart-after-clear to the restarting report's value or NULL. This fixes DeepSeek R5-1.
+- (c) A manual clear.
+- (d) Endpoint deletion.
 
 ### Renewal verification
 

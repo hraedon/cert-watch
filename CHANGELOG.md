@@ -39,9 +39,10 @@ All notable changes to cert-watch are documented in this file.
   endpoint-cycle `renewal_failed` alert with fixed, non-report-derived text.
   The attempt that first reports the failure supplies the stable provider key;
   later started, manual in-progress, and succeeded attempts carry the same
-  condition and incident. It closes only when stored scan evidence verifies a
-  carrying attempt using the same baseline and reported-fingerprint rules as
-  successful-report verification, the endpoint
+  condition and incident. It closes when its carrying attempt verifies under
+  the unchanged deployment rules, when a non-baseline stored leaf matches the
+  latest fingerprint carried by a failure or success report in the condition
+  (or any successor when none was reported), when the endpoint
   is deleted, or an authorized operator uses the new HTML/JSON explicit clear
   action. A later failure after a manual clear restarts a new condition and
   provider incident on the same renewal attempt without changing its state.
