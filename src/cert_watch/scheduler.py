@@ -138,7 +138,7 @@ def _host_scan_deadlines(
                 ON sh.hostname = h.hostname AND sh.port = h.port
             LEFT JOIN renewal_attempts a
                 ON a.host_id=h.id AND a.is_current=1
-                  AND a.state IN ('verifying','not_deployed')
+                  AND a.state IN ('failed','verifying','not_deployed')
             LEFT JOIN host_scan_claims claim ON claim.host_id=h.id
             GROUP BY h.id,h.hostname,h.port,h.scan_interval_hours,
                      a.next_check_at,claim.claim_expires_at

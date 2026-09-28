@@ -35,6 +35,13 @@ All notable changes to cert-watch are documented in this file.
   safe predecessor observations from the prior 24 hours, verified endpoints
   can open later renewal cycles, and evaluation errors back off exponentially
   to the expiry-band cadence (#118 S4).
+- Failed renewal reports now wake the alert rule pass and raise an
+  attempt-scoped `renewal_failed` alert with fixed, non-report-derived text.
+  The alert survives a bare success claim until stored scan verification, and
+  failures reported after `not_deployed` raise both conditions. Renewal
+  digests now include durable **Renewal failed** and **Reported but not
+  deployed** sections using current owner routing without depending on Event
+  stream retention (#118 S5).
 
 ### Changed
 
@@ -60,6 +67,8 @@ All notable changes to cert-watch are documented in this file.
   reports. See [UPGRADING.md](UPGRADING.md).
 - Migration 0048 adds renewal-verification evidence fields and short-lived
   endpoint scan claims. See [UPGRADING.md](UPGRADING.md).
+- Migration 0049 adds and backfills the first accepted renewal-failure
+  timestamp used by alerts and digests. See [UPGRADING.md](UPGRADING.md).
 - Migration 0045 adds explicit binding metadata to API keys. Existing keys
   remain bound to all endpoints. See [UPGRADING.md](UPGRADING.md).
 

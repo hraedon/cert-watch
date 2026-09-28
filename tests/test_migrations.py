@@ -36,6 +36,41 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
 
 
+def test_migration_0049_backfills_first_accepted_failure(tmp_path: Path) -> None:
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.migrations.m0049_renewal_failure_marker import upgrade
+
+    db = tmp_path / "failure-marker.sqlite3"
+    init_schema(db)
+    host_id = SqliteHostRepository(db).add("failure-marker.example.test", 443)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                suppresses_stalled,received_at,baseline_lease_claimed)
+               VALUES ('attempt',?,1,'test','not_deployed',1,0,?,1)""",
+            (host_id, "2026-09-20T00:00:00+00:00"),
+        )
+        for report_id, received_at, effect in (
+            ("ignored", "2026-09-21T00:00:00+00:00", "ignored_late"),
+            ("first", "2026-09-22T00:00:00+00:00", "no_change"),
+            ("repeat", "2026-09-23T00:00:00+00:00", "no_change"),
+        ):
+            conn.execute(
+                """INSERT INTO renewal_reports
+                   (report_id,host_id,hostname_snapshot,port_snapshot,outcome,
+                    received_at,source,effect,attempt_id)
+                   VALUES (?,?,?,443,'failed',?,'test',?,'attempt')""",
+                (report_id, host_id, "failure-marker.example.test", received_at, effect),
+            )
+        upgrade(conn)
+        upgrade(conn)
+        marker = conn.execute(
+            "SELECT failure_reported_at FROM renewal_attempts WHERE attempt_id='attempt'"
+        ).fetchone()[0]
+    assert marker == "2026-09-22T00:00:00+00:00"
+
+
 def _run_concurrent_migration(
     db_path: str,
     start: Any,
@@ -1005,7 +1040,7 @@ def test_migration_0033_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
 
     assert run_pending_migrations(db, backup=False) == [
         "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044",
-        "0045", "0046", "0047", "0048",
+        "0045", "0046", "0047", "0048", "0049",
     ]
     with sqlite3.connect(str(db)) as conn:
         assert "deferred_since" in _table_columns(conn, "alerts")
@@ -1030,7 +1065,7 @@ def test_migration_0033_tolerates_a_column_added_by_hand_without_the_ledger(
 
     assert run_pending_migrations(db, backup=False) == [
         "0033", "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044",
-        "0045", "0046", "0047", "0048",
+        "0045", "0046", "0047", "0048", "0049",
     ]
 
 
@@ -1073,7 +1108,7 @@ def test_migration_0034_backfills_existing_alerts_with_their_trigger_row(
 
     assert run_pending_migrations(db, backup=False) == [
         "0034", "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044",
-        "0045", "0046", "0047", "0048",
+        "0045", "0046", "0047", "0048", "0049",
     ]
     with sqlite3.connect(str(db)) as conn:
         row = conn.execute(
@@ -1106,7 +1141,7 @@ def test_migration_0034_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
 
     assert run_pending_migrations(db, backup=False) == [
         "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044",
-        "0045", "0046", "0047", "0048",
+        "0045", "0046", "0047", "0048", "0049",
     ]
     with sqlite3.connect(str(db)) as conn:
         assert "trigger_cert_id" in _table_columns(conn, "alerts")
@@ -1131,7 +1166,7 @@ def test_migration_0034_tolerates_a_column_added_by_hand_without_the_ledger(
 
     assert run_pending_migrations(db, backup=False) == [
         "0034", "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044",
-        "0045", "0046", "0047", "0048",
+        "0045", "0046", "0047", "0048", "0049",
     ]
 
 
@@ -1183,7 +1218,7 @@ def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) ->
         "0041",
         "0042",
         "0043",
-        "0044", "0045", "0046", "0047", "0048",
+        "0044", "0045", "0046", "0047", "0048", "0049",
     ]
 
     with sqlite3.connect(str(db)) as conn:
@@ -1221,7 +1256,7 @@ def test_reconciled_migrations_upgrade_old_review_feature_database(
         "0041",
         "0042",
         "0043",
-        "0044", "0045", "0046", "0047", "0048",
+        "0044", "0045", "0046", "0047", "0048", "0049",
     ]
 
     with sqlite3.connect(str(db)) as conn:
@@ -1805,7 +1840,7 @@ def test_migration_0044_versions_and_refreshes_existing_0043_cache(
 
     monkeypatch.setattr(runner, "_MIGRATIONS", migrations)
     assert runner.run_pending_migrations(db, backup=False) == [
-        "0044", "0045", "0046", "0047", "0048"
+        "0044", "0045", "0046", "0047", "0048", "0049"
     ]
     with sqlite3.connect(str(db)) as conn:
         row = conn.execute(

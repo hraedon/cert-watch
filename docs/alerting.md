@@ -12,6 +12,7 @@ step.
 | **Expiry warning** | A certificate crosses an expiry threshold (see below). | Once per threshold. The next threshold is a new alert. |
 | **Expired** | A certificate has expired. | Once. |
 | **Renewal stalled** | A certificate is inside its renewal window (`CERT_WATCH_RENEWAL_WINDOW_DAYS`, 30 by default) and no successor has appeared. | Once per certificate, paused during the first live renewal-attempt lease for that served certificate. The weekly renewal digest is the reminder. |
+| **Renewal failed** | Renewal automation reports failure for an endpoint with a current scanned leaf. A failure reported after `not_deployed` is recorded on that same attempt and raises this alert alongside the deployment warning. | Once per renewal attempt. A bare success claim does not close it; verification, a stored successor, a successor attempt, manual cancellation, or endpoint deletion does. |
 | **Renewal not deployed** | Renewal automation reported success, but a qualifying stored scan still sees the previous certificate or a different certificate than the reported fingerprint. | Once per renewal attempt. It closes when a later scan verifies the successor or the endpoint is deleted. |
 | **Policy violation** | A scan finds a critical or warning finding from the posture policy, such as SHA-1, short keys or an old TLS version. | Once while the violation persists. If it clears and comes back, again. |
 | **Drift** | A scan sees a high-severity change: a new issuer, a smaller key, a signature downgrade to SHA-1, a TLS version downgrade, or a posture-grade drop. Turn off with `CERT_WATCH_DRIFT_ALERTS=0`. | Each drift is its own alert. |
@@ -68,9 +69,14 @@ correlation identifier are never copied into the alert or its delivery.
   also duplicates. After that window, or when `new_fingerprint` names a leaf
   different from the verified leaf, a success opens a new renewal cycle.
 - Reports never move an attempt out of `not_deployed`. In particular, a
-  `failed` report is retained with `no_change`; only stored scan evidence for
-  the expected or observed successor verifies the attempt and closes its
-  alert.
+  `failed` report is retained with `no_change` and records the attempt's first
+  `failure_reported_at` marker. That marker raises `renewal_failed` alongside
+  `renewal_not_deployed`; only stored scan evidence for the expected or
+  observed successor verifies the attempt and closes both alerts.
+- Failure alert text is fixed server wording with an endpoint-detail link. It
+  never contains the report message, tool, correlation identifier, reporting
+  key, or recipient identities. An endpoint with no scanned leaf retains its
+  attempt history but cannot carry either certificate-bound renewal alert.
 
 ### Expiry thresholds
 
@@ -200,12 +206,21 @@ rescan that finds the same certificate doesn't count as a renewal.
 | Digest | Sent | Contents |
 |---|---|---|
 | **Expiry digest** (digest mode only) | Once per week per recipient | Certificates expiring within the window (the largest alert-group digest window, 30 days by default); a global version and one per host owner |
-| **Renewal digest** | Weekly | Renewals seen, renewals overdue, and certificates whose replacement has a shorter lifetime |
+| **Renewal digest** | Weekly | Renewals seen, renewals overdue, shorter replacement lifetimes, and unresolved **Renewal failed** and **Reported but not deployed** attempt transitions during the digest period |
 | **Orphan notice** | Weekly when there are orphans, to local administrator accounts with an email | Certificates nobody specific is watching |
 
 Each digest is claimed per recipient and per period. So a restart, a second
 process or a changed setting mid-week never sends one twice, and a partial
 failure retries only the recipients that didn't get it.
+
+The two renewal-problem sections read durable attempt transition timestamps,
+not Event stream or alert-delivery rows. Each attempt appears at most once in
+each applicable section. Verified, cancelled, and superseded attempts are
+omitted rather than repeated as both a problem and a recovery. Owner copies use
+the endpoint's owner email when the digest is sent; the global copy and delivery
+ledger behave like the existing renewal sections. Digest content includes only
+the endpoint and transition time, never report text, tool or correlation data,
+key identity, tags, or recipient identities.
 
 ## The renewal webhook
 

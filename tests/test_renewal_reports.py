@@ -1212,6 +1212,20 @@ def test_succeeded_is_accepted_and_stored(report_client):
         assert conn.execute("SELECT count(*) FROM renewal_reports").fetchone()[0] == 1
 
 
+@pytest.mark.parametrize("outcome", ["succeeded", "failed"])
+def test_terminal_report_wakes_scheduler_once(report_client, monkeypatch, outcome):
+    client, headers, _db = report_client
+    wakeups = []
+    monkeypatch.setattr(
+        "cert_watch.scheduler.wake_scheduler", lambda scheduler: wakeups.append(scheduler)
+    )
+    keyed = {**headers, "Idempotency-Key": f"wake-{outcome}"}
+    body = {"hostname": HOST, "port": 443, "outcome": outcome}
+    assert client.post("/api/renewal-reports", headers=keyed, json=body).status_code == 202
+    assert client.post("/api/renewal-reports", headers=keyed, json=body).status_code == 202
+    assert len(wakeups) == 1
+
+
 def test_succeeded_reserves_idempotency_key(report_client):
     client, headers, _db = report_client
     keyed = {**headers, "Idempotency-Key": "deploy-7"}

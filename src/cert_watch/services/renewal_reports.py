@@ -1073,9 +1073,9 @@ def create_report(
                        (attempt_id,host_id,is_current,source,state,opened_seq,baseline_fingerprint,
                         baseline_not_after,new_fingerprint,lease_expires_at,
                         suppresses_stalled,received_at,next_check_at,closed_reason,
-                        success_received_at,
+                        success_received_at,failure_reported_at,
                         baseline_lease_claimed)
-                       VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         attempt_id,
                         target.host_id,
@@ -1092,17 +1092,32 @@ def create_report(
                         lease,
                         suppresses,
                         received_at,
-                        received_at if state == "verifying" else None,
+                        received_at if state in {"failed", "verifying"} else None,
                         None if state in {"open", "verifying"} else "reported_failed",
                         received_at if state == "verifying" else None,
+                        received_at if state == "failed" else None,
                         claims_baseline,
                     ),
                 )
-            elif effect == "applied" and state == "failed":
+            elif report.outcome == "failed" and effect in {"applied", "no_change"}:
                 conn.execute(
-                    "UPDATE renewal_attempts SET state='failed',suppresses_stalled=0,"
-                    "closed_reason='reported_failed' WHERE attempt_id=?",
-                    (attempt_id,),
+                    """UPDATE renewal_attempts
+                       SET state=?,suppresses_stalled=0,
+                           failure_reported_at=COALESCE(failure_reported_at,?),
+                           next_check_at=CASE
+                               WHEN next_check_at IS NULL OR next_check_at>?
+                               THEN ? ELSE next_check_at END,
+                           closed_reason=CASE
+                               WHEN ?='failed' THEN 'reported_failed' ELSE closed_reason END
+                       WHERE attempt_id=?""",
+                    (
+                        state,
+                        received_at,
+                        received_at,
+                        received_at,
+                        state,
+                        attempt_id,
+                    ),
                 )
             elif (
                 report.outcome == "succeeded"

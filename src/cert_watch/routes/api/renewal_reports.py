@@ -241,7 +241,7 @@ async def api_create_renewal_report(
         return JSONResponse(status_code=409, content={"error": str(exc)})
     except RenewalReportRateLimitError:
         return JSONResponse(status_code=429, content={"error": "rate limited"})
-    if not _replayed and body.outcome == "succeeded":
+    if not _replayed and body.outcome in {"succeeded", "failed"}:
         from cert_watch.scheduler import wake_scheduler
 
         wake_scheduler(getattr(request.app.state, "scheduler", None))

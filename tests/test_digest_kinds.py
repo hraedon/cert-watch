@@ -5,10 +5,14 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from cert_watch.alerting import AlertConfig
+from cert_watch.alerting.digest.engine import DigestEngine
 from cert_watch.alerting.digest.expiry import ExpiryDigestKind
-from cert_watch.alerting.digest.renewal import RenewalDigestKind
+from cert_watch.alerting.digest.renewal import RenewalDigestKind, build_renewal_digest
+from cert_watch.alerting.model import SendResult
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import SqliteHostRepository, init_schema
+from cert_watch.database.connection import _connect
+from cert_watch.database.digest_deliveries import digest_period_key
 from cert_watch.events import Event, emit_event
 from tests._helpers import seed_certificate
 
@@ -120,3 +124,151 @@ def test_concrete_kinds_produce_no_empty_noise(tmp_path) -> None:
 
     assert ExpiryDigestKind(_config(["ops@example.test"])).targets(db, NOW, 30) == []
     assert RenewalDigestKind(_config(["ops@example.test"])).targets(db, NOW, 7) == []
+
+
+def _seed_problem_attempt(
+    db,
+    hostname: str,
+    *,
+    attempt_id: str,
+    state: str,
+    failure_at: datetime | None = None,
+    raised_at: datetime | None = None,
+) -> None:
+    with _connect(db) as conn:
+        host_id = conn.execute(
+            "SELECT id FROM hosts WHERE hostname=?", (hostname,)
+        ).fetchone()[0]
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                suppresses_stalled,received_at,failure_reported_at,raised_at,
+                baseline_lease_claimed)
+               VALUES (?,?,1,'api_key:private-key-id',?,1,0,?,?,?,1)""",
+            (
+                attempt_id,
+                host_id,
+                state,
+                (failure_at or raised_at or NOW).isoformat(),
+                failure_at.isoformat() if failure_at else None,
+                raised_at.isoformat() if raised_at else None,
+            ),
+        )
+        if failure_at:
+            conn.execute(
+                """INSERT INTO renewal_reports
+                   (report_id,host_id,hostname_snapshot,port_snapshot,outcome,message,
+                    tool,correlation_id,received_at,source,effect,attempt_id)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    f"report-{attempt_id}",
+                    host_id,
+                    hostname,
+                    443,
+                    "failed",
+                    "private report message",
+                    "private-tool",
+                    "private-correlation",
+                    failure_at.isoformat(),
+                    "api_key:private-key-id",
+                    "applied",
+                    attempt_id,
+                ),
+            )
+        conn.commit()
+
+
+def test_renewal_problem_digest_uses_attempts_current_owner_and_ledger(tmp_path) -> None:
+    db = tmp_path / "digest.sqlite3"
+    init_schema(db)
+    hosts = SqliteHostRepository(db)
+    hosts.add(
+        "failed.example.test",
+        owner_email="old-owner@example.test",
+        tags="scope-before",
+    )
+    hosts.add("unowned.example.test", tags="scope-before")
+    hosts.add("recovered.example.test", owner_email="recovered@example.test")
+    failure_at = NOW - timedelta(days=1)
+    raised_at = NOW - timedelta(hours=12)
+    _seed_problem_attempt(
+        db,
+        "failed.example.test",
+        attempt_id="failed-attempt",
+        state="verifying",
+        failure_at=failure_at,
+    )
+    _seed_problem_attempt(
+        db,
+        "unowned.example.test",
+        attempt_id="not-deployed-attempt",
+        state="not_deployed",
+        failure_at=failure_at,
+        raised_at=raised_at,
+    )
+    _seed_problem_attempt(
+        db,
+        "recovered.example.test",
+        attempt_id="recovered-attempt",
+        state="verified",
+        failure_at=failure_at,
+        raised_at=raised_at,
+    )
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE hosts SET owner_email='new-owner@example.test',tags='scope-after' "
+            "WHERE hostname='failed.example.test'"
+        )
+        conn.execute(
+            "UPDATE hosts SET tags='scope-after' WHERE hostname='unowned.example.test'"
+        )
+        conn.execute("DELETE FROM event_log")
+        conn.commit()
+
+    digests = build_renewal_digest(db, cadence_days=7, now=NOW)
+    by_owner = {digest.owner_email: digest for digest in digests}
+    assert set(by_owner) == {"new-owner@example.test", ""}
+    assert (by_owner["new-owner@example.test"].failed_count, by_owner[""].failed_count) == (
+        1,
+        1,
+    )
+    assert by_owner[""].not_deployed_count == 1
+    assert all("recovered.example.test" not in entry for d in digests for entry in d.failed_entries)
+
+    kind = RenewalDigestKind(_config(["new-owner@example.test"]))
+    targets = kind.targets(db, NOW, 7)
+    owner = next(target for target in targets if target.key == "new-owner@example.test")
+    unowned = next(target for target in targets if target.key == "_unowned")
+    assert owner.smtp_recipients == ()
+    assert unowned.smtp_recipients == ()
+    rendered = "\n".join(kind.render(target).body for target in targets)
+    assert "Renewal failed: 2" in rendered
+    assert "Reported but not deployed: 1" in rendered
+    assert "2026-09-22 12:00 UTC" in rendered
+    for private in (
+        "private report message",
+        "private-tool",
+        "private-correlation",
+        "private-key-id",
+        "new-owner@example.test",
+        "old-owner@example.test",
+        "scope-before",
+        "scope-after",
+    ):
+        assert private not in rendered
+
+    sent = []
+
+    class SMTP:
+        channel = "smtp"
+        destination_id = ""
+
+        def send(self, message):
+            sent.append(message)
+            return SendResult("accepted", accepted=message.recipients)
+
+    period = digest_period_key("renewal", 7, now=NOW)
+    engine = DigestEngine(db, [SMTP()], clock=lambda: NOW)
+    first = engine.run(kind, period)
+    retry = engine.run(kind, period)
+    assert (first.sent, retry.sent, retry.skipped, len(sent)) == (1, 0, 1, 1)

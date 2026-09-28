@@ -75,6 +75,16 @@ unchanged scan can raise `renewal_not_deployed` with
 `renewal_verify_grace_minutes` (5 minutes by default, accepted range 5–15).
 Rollback requires restoring the pre-migration backup.
 
+### Migration 0049
+
+Migration **0049** adds `failure_reported_at` to renewal attempts and backfills
+it from the first retained, accepted failed report for each attempt. This
+durable transition marker lets `renewal_failed` remain open across a bare
+success claim and lets renewal digests work when Event stream storage is
+disabled or purged. Existing report messages, tools, correlations, key
+identities and recipient identities are not copied into the marker or digest.
+Rollback requires restoring the pre-migration backup.
+
 ## Upgrading from 1.1.0 to 1.1.1
 
 API-key audit actors now use the stable `api_key:<id>` format instead of the

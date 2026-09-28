@@ -29,6 +29,10 @@ class RenewalDigest:
     shortened_hosts: list[str]
     owner_email: str = ""
     host_expiry: dict[str, str | None] = field(default_factory=dict)
+    failed_count: int = 0
+    failed_entries: list[str] = field(default_factory=list)
+    not_deployed_count: int = 0
+    not_deployed_entries: list[str] = field(default_factory=list)
 
 
 def _parse_event_payload(payload_raw: str) -> dict[str, Any]:
@@ -87,6 +91,18 @@ def build_renewal_digest(
                AND timestamp >= ?""",
             (cutoff,),
         ).fetchall()
+        problem_rows = conn.execute(
+            """SELECT a.attempt_id,a.state,a.failure_reported_at,a.raised_at,
+                      h.hostname,h.port,h.owner_email
+               FROM renewal_attempts a
+               JOIN hosts h ON h.id=a.host_id
+               WHERE a.is_current=1 AND (
+                  (a.failure_reported_at>=? AND a.failure_reported_at<=?
+                      AND a.state NOT IN ('verified','cancelled'))
+                  OR (a.raised_at>=? AND a.raised_at<=? AND a.state='not_deployed'))
+               ORDER BY COALESCE(a.failure_reported_at,a.raised_at),a.opened_seq""",
+            (cutoff, current.isoformat(), cutoff, current.isoformat()),
+        ).fetchall()
 
     renewed_by_endpoint: dict[_Endpoint, int] = {}
     for row in renewed_rows:
@@ -100,7 +116,11 @@ def build_renewal_digest(
         if endpoint is not None:
             overdue_by_endpoint[endpoint] = overdue_by_endpoint.get(endpoint, 0) + 1
 
-    endpoints = renewed_by_endpoint.keys() | overdue_by_endpoint.keys()
+    problem_endpoints = {
+        (str(row["hostname"]), int(row["port"])) for row in problem_rows
+    }
+    activity_endpoints = renewed_by_endpoint.keys() | overdue_by_endpoint.keys()
+    endpoints = activity_endpoints | problem_endpoints
     if not endpoints:
         return []
 
@@ -128,7 +148,7 @@ def build_renewal_digest(
 
     shortened_endpoints = {
         endpoint
-        for endpoint in endpoints
+        for endpoint in activity_endpoints
         if endpoint[1] is not None
         and compute_host_analytics(
             db_path,
@@ -173,6 +193,20 @@ def build_renewal_digest(
         digest.shortened_count += 1
         digest.shortened_hosts.append(_endpoint_label(endpoint))
 
+    for row in problem_rows:
+        endpoint = (str(row["hostname"]), int(row["port"]))
+        digest = _ensure_owner(str(row["owner_email"] or ""))
+        if row["failure_reported_at"] and row["state"] not in {"verified", "cancelled"}:
+            digest.failed_count += 1
+            digest.failed_entries.append(
+                f"{_endpoint_label(endpoint)} at {_fmt_transition(row['failure_reported_at'])}"
+            )
+        if row["raised_at"] and row["state"] == "not_deployed":
+            digest.not_deployed_count += 1
+            digest.not_deployed_entries.append(
+                f"{_endpoint_label(endpoint)} at {_fmt_transition(row['raised_at'])}"
+            )
+
     expiry_by_label = {
         _endpoint_label(endpoint): value for endpoint, value in current_expiry.items()
     }
@@ -198,6 +232,14 @@ def _fmt_expiry(not_after: str | None) -> str:
         return ""
 
 
+def _fmt_transition(value: str) -> str:
+    """Render a durable attempt transition in an unambiguous UTC form."""
+    try:
+        return _parse_iso(value).astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    except (ValueError, TypeError):
+        return "time unavailable"
+
+
 def _merge_owner_address_variants(
     digests: list[RenewalDigest],
 ) -> list[RenewalDigest]:
@@ -212,10 +254,14 @@ def _merge_owner_address_variants(
         existing.renewed_count += digest.renewed_count
         existing.overdue_count += digest.overdue_count
         existing.shortened_count += digest.shortened_count
+        existing.failed_count += digest.failed_count
+        existing.not_deployed_count += digest.not_deployed_count
         for destination, additions in (
             (existing.renewed_hosts, digest.renewed_hosts),
             (existing.overdue_hosts, digest.overdue_hosts),
             (existing.shortened_hosts, digest.shortened_hosts),
+            (existing.failed_entries, digest.failed_entries),
+            (existing.not_deployed_entries, digest.not_deployed_entries),
         ):
             destination.extend(host for host in additions if host not in destination)
         existing.host_expiry.update(digest.host_expiry)
@@ -238,6 +284,12 @@ def _build_digest_message(digest: RenewalDigest) -> str:
         lines.extend(("", f"Lifetimes shortened: {digest.shortened_count}"))
         for host in digest.shortened_hosts:
             lines.append(f"  - {host}{_fmt_expiry(expiry.get(host))}")
+    if digest.failed_count:
+        lines.extend(("", f"Renewal failed: {digest.failed_count}"))
+        lines.extend(f"  - {entry}" for entry in digest.failed_entries)
+    if digest.not_deployed_count:
+        lines.extend(("", f"Reported but not deployed: {digest.not_deployed_count}"))
+        lines.extend(f"  - {entry}" for entry in digest.not_deployed_entries)
     return "\n".join(lines)
 
 
@@ -251,6 +303,12 @@ def _aggregate(digests: list[RenewalDigest], cadence_days: int) -> RenewalDigest
         shortened_count=sum(digest.shortened_count for digest in digests),
         shortened_hosts=sorted({host for d in digests for host in d.shortened_hosts}),
         host_expiry={host: expiry for d in digests for host, expiry in d.host_expiry.items()},
+        failed_count=sum(digest.failed_count for digest in digests),
+        failed_entries=sorted(entry for d in digests for entry in d.failed_entries),
+        not_deployed_count=sum(digest.not_deployed_count for digest in digests),
+        not_deployed_entries=sorted(
+            entry for d in digests for entry in d.not_deployed_entries
+        ),
     )
 
 
@@ -317,7 +375,8 @@ class RenewalDigestKind:
         return OutboundMessage.from_digest(
             subject=(
                 f"[cert-watch] Renewal Digest: {digest.renewed_count} renewed, "
-                f"{digest.overdue_count} overdue"
+                f"{digest.overdue_count} overdue, {digest.failed_count} failed, "
+                f"{digest.not_deployed_count} not deployed"
             ),
             body=_build_digest_message(digest),
             severity="renewal_digest",

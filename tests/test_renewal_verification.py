@@ -880,13 +880,19 @@ def test_unattempted_host_honors_pending_verification_check(tmp_path):
 
 
 @pytest.mark.parametrize("kind", ["pagerduty", "alertmanager"])
-@pytest.mark.parametrize("alert_type", ["expiry_warning", "renewal_not_deployed"])
+@pytest.mark.parametrize(
+    "alert_type", ["expiry_warning", "renewal_not_deployed", "renewal_failed"]
+)
 @pytest.mark.parametrize("status", ["sending", "sent"])
 def test_host_delete_resolves_every_sent_alert_type(
     estate, monkeypatch, kind, alert_type, status
 ):
     db, host_id, cert_id, _baseline, _settings = estate
-    dedupe_key = f"{alert_type}:attempt" if alert_type == "renewal_not_deployed" else "expiry:key"
+    dedupe_key = (
+        f"{alert_type}:attempt"
+        if alert_type in {"renewal_not_deployed", "renewal_failed"}
+        else "expiry:key"
+    )
     alert = Alert(
         cert_id=cert_id,
         trigger_cert_id=cert_id,
@@ -1057,3 +1063,117 @@ def test_alert_open_close_and_provider_incident_keys(estate, monkeypatch):
         == 1
     )
     assert delivered[-1]["alerts"][0]["labels"]["cert_watch_dedupe_key"] == msg.incident_key
+
+
+def test_failed_report_wakes_rule_pass_and_uses_only_fixed_text(estate):
+    db, _host_id, cert_id, _baseline, settings = estate
+    auth = AuthContext.renewal_report_key(
+        "visible-key-name", principal_id="key-id", binding="all", bound_tags=()
+    )
+    target = resolve_target(db, auth, hostname=HOST, port=443)
+    result, _ = create_report(
+        db,
+        settings,
+        target,
+        RenewalReportInput(
+            "failed",
+            "private failure detail",
+            "private-tool",
+            "private-correlation",
+            None,
+            None,
+        ),
+        auth=auth,
+        actor="api_key:key-id",
+        source_ip=None,
+        idempotency_key=None,
+        body_sha256="failure",
+        now=NOW,
+    )
+    row = _row(db)
+    assert row["failure_reported_at"] == NOW.isoformat()
+    assert _seconds_until_next_scan(db, 6, 0, now=NOW) == 0
+
+    [created] = evaluate_renewal_report_alerts(
+        db, SqliteAlertRepository(db), base_url="https://certs.example.test"
+    )
+    assert created.alert_type == "renewal_failed"
+    assert created.trigger_cert_id == cert_id
+    assert result.attempt_id in (created.dedupe_key or "")
+    assert created.message == (
+        f"Renewal automation reported a failure for {HOST}:443 at {NOW.isoformat()}. "
+        f"Details: https://certs.example.test/certificates/{cert_id}"
+    )
+    for private in (
+        "private failure detail",
+        "private-tool",
+        "private-correlation",
+        "visible-key-name",
+        "key-id",
+    ):
+        assert private not in created.message
+    assert _row(db)["next_check_at"] is None
+
+
+def test_not_deployed_failed_report_marks_attempt_and_opens_both_alerts(estate):
+    db, _host_id, _cert_id, _baseline, _settings = estate
+    attempt_id = _attempt(
+        estate, state="not_deployed", not_after=NOW + timedelta(days=2)
+    )
+    result = _post(estate, "failed", NOW + timedelta(minutes=1))
+    row = _row(db)
+    assert (result.state, result.effect) == ("not_deployed", "no_change")
+    assert row["failure_reported_at"] == (NOW + timedelta(minutes=1)).isoformat()
+    created = evaluate_renewal_report_alerts(db, SqliteAlertRepository(db))
+    assert {alert.alert_type for alert in created} == {
+        "renewal_failed",
+        "renewal_not_deployed",
+    }
+    assert all(attempt_id in (alert.dedupe_key or "") for alert in created)
+
+
+def test_failure_alert_survives_success_claim_until_scan_verifies(estate):
+    db, _host_id, _cert_id, _baseline, settings = estate
+    failed = _post(estate, "failed", NOW)
+    repo = SqliteAlertRepository(db)
+    [created] = evaluate_renewal_report_alerts(db, repo)
+
+    succeeded = _post(estate, "succeeded", NOW + timedelta(minutes=1))
+    assert succeeded.attempt_id == failed.attempt_id
+    assert _row(db)["state"] == "verifying"
+    assert evaluate_renewal_report_alerts(db, repo) == []
+    with _connect(db) as conn:
+        assert conn.execute(
+            "SELECT closed_at FROM alerts WHERE id=?", (created.id,)
+        ).fetchone()[0] is None
+        conn.execute("UPDATE alerts SET status='sent' WHERE id=?", (created.id,))
+        conn.commit()
+
+    evaluate_after_scan(
+        db,
+        HOST,
+        443,
+        "e" * 64,
+        started_at=NOW + timedelta(minutes=5),
+        settings=settings,
+    )
+    closed: list[Alert] = []
+    evaluate_renewal_report_alerts(db, repo, closed_sent=closed)
+    assert [alert.id for alert in closed] == [created.id]
+
+
+def test_failed_attempt_without_scanned_leaf_has_no_alert(tmp_path):
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    host_id = SqliteHostRepository(db).add("unscanned.example.test", 443)
+    with _connect(db) as conn:
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                suppresses_stalled,received_at,next_check_at,failure_reported_at,
+                baseline_lease_claimed)
+               VALUES ('attempt',?,1,'test','failed',1,0,?,?,?,1)""",
+            (host_id, NOW.isoformat(), NOW.isoformat(), NOW.isoformat()),
+        )
+        conn.commit()
+    assert evaluate_renewal_report_alerts(db, SqliteAlertRepository(db)) == []
