@@ -230,6 +230,7 @@ def _starts_failure_after_clear(
 ) -> bool:
     return bool(
         attempt is not None
+        and attempt["state"] not in {"verified", "abandoned"}
         and report.outcome == "failed"
         and attempt["failure_reported_at"]
         and attempt["failure_cleared_at"]
@@ -255,6 +256,43 @@ def _restart_failure_after_clear(
     return state, effect, new_attempt, attempt_id, False
 
 
+def _preserve_carrier_failure_state(
+    *,
+    carried_failure_id: str | None,
+    report: RenewalReportInput,
+    current_state: str,
+    effect: str,
+    new_attempt: bool,
+    state: str,
+) -> str:
+    """Keep repeat failure evidence out of the renewal state machine."""
+    if (
+        carried_failure_id is not None
+        and report.outcome == "failed"
+        and current_state not in {"verified", "abandoned"}
+        and effect != "ignored_late"
+        and not new_attempt
+    ):
+        return current_state
+    return state
+
+
+def _reduce_open_report(
+    report: RenewalReportInput,
+    *,
+    carried_failure_id: str | None,
+    same_correlation: bool,
+    attempt_id: str,
+) -> tuple[str, str, bool, str]:
+    if report.outcome == "started":
+        if carried_failure_id is not None and not same_correlation:
+            return "open", "applied", True, uuid.uuid4().hex
+        return "open", "duplicate", False, attempt_id
+    if report.outcome == "succeeded":
+        return "verifying", "applied", False, attempt_id
+    return "failed", "applied", False, attempt_id
+
+
 def _record_failed_report_on(
     conn: sqlite3.Connection,
     *,
@@ -263,20 +301,29 @@ def _record_failed_report_on(
     received_at: str,
     reported_fingerprint: str | None,
     restarted: bool,
+    carried: bool,
 ) -> None:
-    if restarted:
+    if restarted or carried:
         conn.execute(
             """UPDATE renewal_attempts
-               SET new_fingerprint=?,
-                   failure_attempt_id=?,failure_reported_at=?,
-                   failure_cleared_at=NULL,
-                   failure_expected_fingerprint=?,
+               SET failure_attempt_id=CASE WHEN ? THEN ? ELSE failure_attempt_id END,
+                   failure_reported_at=CASE WHEN ? THEN ? ELSE failure_reported_at END,
+                   failure_cleared_at=CASE WHEN ? THEN NULL ELSE failure_cleared_at END,
+                   failure_expected_fingerprint=CASE
+                       WHEN ? THEN ?
+                       WHEN ? IS NOT NULL THEN ?
+                       ELSE failure_expected_fingerprint END,
                    rule_due_at=?
                WHERE attempt_id=?""",
             (
-                reported_fingerprint,
+                restarted,
                 uuid.uuid4().hex,
+                restarted,
                 received_at,
+                restarted,
+                restarted,
+                reported_fingerprint,
+                reported_fingerprint,
                 reported_fingerprint,
                 received_at,
                 attempt_id,
@@ -866,6 +913,9 @@ def _update_succeeded_attempt_on(
 ) -> None:
     """Apply a success without moving an existing verification anchor/check."""
     fingerprint_sql = "?" if prior_state == "failed" else "COALESCE(new_fingerprint,?)"
+    # A fingerprint on a success report updates the open failure condition's
+    # expectation independently of the attempt's own renewal claim. Bare
+    # reports deliberately leave the condition expectation unchanged.
     if state == "verifying" and prior_state != "verifying":
         conn.execute(
             f"""UPDATE renewal_attempts SET state=?,suppresses_stalled=0,
@@ -1124,12 +1174,12 @@ def create_report(
                 if effect == "ignored_late":
                     pass
                 elif current_state == "open":
-                    if report.outcome == "started":
-                        state, effect = "open", "duplicate"
-                    elif report.outcome == "succeeded":
-                        state, effect = "verifying", "applied"
-                    else:
-                        state, effect = "failed", "applied"
+                    state, effect, new_attempt, attempt_id = _reduce_open_report(
+                        report,
+                        carried_failure_id=carried_failure_id,
+                        same_correlation=same_correlation,
+                        attempt_id=attempt_id,
+                    )
                 elif current_state in ("verifying", "not_deployed"):
                     if report.outcome == "failed" and current_state == "not_deployed":
                         state, effect = "not_deployed", "no_change"
@@ -1170,16 +1220,20 @@ def create_report(
                         baseline_fingerprint=baseline_fingerprint,
                         baseline_not_after=baseline_not_after,
                     )
-                elif current_state == "verified" and (
-                    report.outcome == "failed"
-                    and attempt["baseline_fingerprint"] == baseline_fingerprint
-                ):
-                    state, effect, new_attempt = "verified", "ignored_late", False
                 elif report.outcome == "started" and same_correlation:
                     state, effect, new_attempt = current_state, "ignored_late", False
                 else:
                     new_attempt = True
                     attempt_id = uuid.uuid4().hex
+
+                state = _preserve_carrier_failure_state(
+                    carried_failure_id=carried_failure_id,
+                    report=report,
+                    current_state=current_state,
+                    effect=effect,
+                    new_attempt=new_attempt,
+                    state=state,
+                )
 
                 # A manual clear ends the old failure condition. Any later
                 # accepted failure starts a new cycle, even when the ordinary
@@ -1320,6 +1374,7 @@ def create_report(
                     received_at=received_at,
                     reported_fingerprint=report.new_fingerprint,
                     restarted=restarted_failure,
+                    carried=carried_failure_id is not None,
                 )
             elif (
                 report.outcome == "succeeded"

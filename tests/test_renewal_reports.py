@@ -1006,7 +1006,9 @@ def test_aggressive_purge_preserves_retained_report_attempt_states(estate):
     history = list_reports(estate[0], target, auth=auth, page=1, limit=50, now=NOW)
     states = {item["report_id"]: item["state"] for item in history["items"]}
     assert states[failed.report_id] == "failed"
-    assert states[started.report_id] == "failed"
+    # The carried failure does not rewrite the started attempt; its expired
+    # lease is what eventually makes that attempt abandoned.
+    assert states[started.report_id] == "abandoned"
     assert states[current.report_id] == "abandoned"
     with _connect(estate[0]) as conn:
         assert (

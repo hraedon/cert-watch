@@ -1591,10 +1591,11 @@ def test_failure_after_manual_clear_opens_new_condition(estate):
     assert second_alert.dedupe_key != first_alert.dedupe_key
 
 
-def test_failure_restart_uses_only_fresh_report_fingerprint(estate):
+def test_failure_restart_updates_condition_without_rewriting_attempt_claim(estate):
     db, host_id, _cert_id, _baseline, _settings = estate
     old_expected = parse_certificate(_make_cert(HOST, days_valid=70).der)
     fresh_expected = parse_certificate(_make_cert(HOST, days_valid=80).der)
+    unrelated = parse_certificate(_make_cert(HOST, days_valid=90).der)
     _post(
         estate,
         "failed",
@@ -1618,20 +1619,20 @@ def test_failure_restart_uses_only_fresh_report_fingerprint(estate):
     )
     row = _row(db)
     assert row["failure_expected_fingerprint"] == fresh_expected.fingerprint_sha256
-    assert row["new_fingerprint"] == fresh_expected.fingerprint_sha256
+    assert row["new_fingerprint"] == old_expected.fingerprint_sha256
 
-    stale_result = _serve(estate, old_expected, NOW + timedelta(minutes=5))
+    unrelated_result = _serve(estate, unrelated, NOW + timedelta(minutes=5))
     row = _row(db)
-    assert stale_result is not None and stale_result.state == "failed"
+    assert unrelated_result is not None and unrelated_result.state == "failed"
     assert row["failure_cleared_at"] is None
 
     fresh_result = _serve(estate, fresh_expected, NOW + timedelta(minutes=10))
     row = _row(db)
-    assert fresh_result is not None and fresh_result.state == "verified"
+    assert fresh_result is not None and fresh_result.state == "failed"
     assert row["failure_cleared_at"] == (NOW + timedelta(minutes=10)).isoformat()
 
 
-def test_failure_restart_without_fingerprint_resets_expectation_and_claim(estate):
+def test_failure_restart_without_fingerprint_preserves_attempt_claim(estate):
     db, host_id, _cert_id, _baseline, _settings = estate
     old_expected = parse_certificate(_make_cert(HOST, days_valid=70).der)
     successor = parse_certificate(_make_cert(HOST, days_valid=80).der)
@@ -1653,13 +1654,106 @@ def test_failure_restart_without_fingerprint_resets_expectation_and_claim(estate
     _post(estate, "failed", NOW + timedelta(minutes=2))
     row = _row(db)
     assert row["failure_expected_fingerprint"] is None
-    assert row["new_fingerprint"] is None
+    assert row["new_fingerprint"] == old_expected.fingerprint_sha256
 
     result = _serve(estate, successor, NOW + timedelta(minutes=5))
     row = _row(db)
+    assert result is not None and result.state == "failed"
+    assert row["failure_cleared_at"] is None
+
+    result = _serve(estate, old_expected, NOW + timedelta(minutes=10))
+    row = _row(db)
     assert result is not None and result.state == "verified"
-    assert result.reason == "observed_successor"
-    assert row["failure_cleared_at"] == (NOW + timedelta(minutes=5)).isoformat()
+    assert result.reason == "reported_fingerprint"
+    assert row["failure_cleared_at"] == (NOW + timedelta(minutes=10)).isoformat()
+
+
+def test_failed_report_on_carrier_changes_only_failure_evidence(estate):
+    db, _host_id, _cert_id, _baseline, _settings = estate
+    first = parse_certificate(_make_cert(HOST, days_valid=70).der)
+    claim = parse_certificate(_make_cert(HOST, days_valid=80).der)
+    latest = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    _post(estate, "failed", NOW, new_fingerprint=first.fingerprint_sha256)
+    _post(
+        estate,
+        "succeeded",
+        NOW + timedelta(minutes=1),
+        new_fingerprint=claim.fingerprint_sha256,
+    )
+    before = _row(db)
+    s4_fields = (
+        "state",
+        "baseline_fingerprint",
+        "baseline_not_after",
+        "new_fingerprint",
+        "success_received_at",
+        "verification_reason",
+        "verified_fingerprint",
+        "raised_at",
+        "closed_reason",
+        "checks_done",
+        "last_check_at",
+        "next_check_at",
+    )
+    before_s4 = tuple(before[name] for name in s4_fields)
+
+    result = _post(
+        estate,
+        "failed",
+        NOW + timedelta(minutes=2),
+        new_fingerprint=latest.fingerprint_sha256,
+    )
+    after = _row(db)
+    assert result.state == "verifying"
+    assert tuple(after[name] for name in s4_fields) == before_s4
+    assert after["failure_expected_fingerprint"] == latest.fingerprint_sha256
+
+
+def test_failure_after_verified_opens_new_cycle_and_baseline_scan_does_not_clear(
+    estate,
+):
+    db, _host_id, _cert_id, _baseline, _settings = estate
+    successor = parse_certificate(_make_cert(HOST, days_valid=80).der)
+    expected = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    first = _post(
+        estate,
+        "succeeded",
+        NOW,
+        new_fingerprint=successor.fingerprint_sha256,
+    )
+    verified = _serve(estate, successor, NOW + timedelta(minutes=5))
+    assert verified is not None and verified.state == "verified"
+    verified_row = _row(db)
+
+    failed = _post(
+        estate,
+        "failed",
+        NOW + timedelta(minutes=10),
+        new_fingerprint=expected.fingerprint_sha256,
+    )
+    failed_row = _row(db)
+    assert failed.attempt_id != first.attempt_id
+    assert (failed_row["state"], failed_row["baseline_fingerprint"]) == (
+        "failed",
+        successor.fingerprint_sha256,
+    )
+    assert failed_row["failure_cleared_at"] is None
+    with _connect(db) as conn:
+        old = conn.execute(
+            "SELECT * FROM renewal_attempts WHERE attempt_id=?", (first.attempt_id,)
+        ).fetchone()
+    assert old["state"] == "verified"
+    assert old["verified_fingerprint"] == verified_row["verified_fingerprint"]
+
+    baseline_result = _serve(estate, successor, NOW + timedelta(minutes=15))
+    assert baseline_result is not None and baseline_result.state == "failed"
+    assert _row(db)["failure_cleared_at"] is None
+
+    expected_result = _serve(estate, expected, NOW + timedelta(minutes=20))
+    assert expected_result is not None and expected_result.state == "verified"
+    assert _row(db)["failure_cleared_at"] == (
+        NOW + timedelta(minutes=20)
+    ).isoformat()
 
 
 def test_failure_expectation_tracks_latest_failed_or_succeeded_fingerprint(estate):
@@ -1798,6 +1892,96 @@ def test_failed_report_does_not_clear_on_unrelated_leaf_without_new_report(estat
     result = _serve(estate, unrelated, NOW + timedelta(minutes=5))
     row = _row(db)
     assert result is not None and result.state == "failed"
+    assert row["failure_cleared_at"] is None
+
+
+@pytest.mark.parametrize("state", ["open", "verifying", "failed", "not_deployed"])
+def test_unserved_attempt_claim_blocks_unrelated_failure_clear_in_every_state(
+    estate, state
+):
+    db, _host_id, _cert_id, _baseline, settings = estate
+    claim = parse_certificate(_make_cert(HOST, days_valid=80).der)
+    unrelated = parse_certificate(_make_cert(HOST, days_valid=90).der)
+    attempt_id = _attempt(estate, state=state, expected=claim.fingerprint_sha256)
+    with _connect(db) as conn:
+        conn.execute(
+            """UPDATE renewal_attempts
+               SET failure_attempt_id=attempt_id,failure_reported_at=?,
+                   failure_expected_fingerprint=NULL
+               WHERE attempt_id=?""",
+            (NOW.isoformat(), attempt_id),
+        )
+        conn.commit()
+
+    evaluate_after_scan(
+        db,
+        HOST,
+        443,
+        unrelated.fingerprint_sha256,
+        started_at=NOW + timedelta(minutes=10),
+        settings=settings,
+    )
+    assert _row(db)["failure_cleared_at"] is None
+
+
+def test_existing_verified_state_is_not_a_new_verification_transition(estate):
+    db, _host_id, _cert_id, baseline, settings = estate
+    verified_leaf = "a" * 64
+    expected = "b" * 64
+    attempt_id = _attempt(estate, state="verified", expected=verified_leaf)
+    with _connect(db) as conn:
+        conn.execute(
+            """UPDATE renewal_attempts
+               SET verified_fingerprint=?,verification_reason='reported_fingerprint',
+                   closed_reason='reported_fingerprint',
+                   failure_attempt_id=attempt_id,failure_reported_at=?,
+                   failure_expected_fingerprint=?
+               WHERE attempt_id=?""",
+            (verified_leaf, NOW.isoformat(), expected, attempt_id),
+        )
+        conn.commit()
+
+    result = evaluate_after_scan(
+        db,
+        HOST,
+        443,
+        baseline,
+        started_at=NOW + timedelta(minutes=10),
+        settings=settings,
+    )
+    row = _row(db)
+    assert result is not None and (result.state, result.reason) == ("verified", None)
+    assert row["failure_cleared_at"] is None
+    assert row["verified_fingerprint"] == verified_leaf
+    assert row["verification_reason"] == "reported_fingerprint"
+    assert row["closed_reason"] == "reported_fingerprint"
+
+
+def test_verification_transition_must_follow_failure_report(estate):
+    db, _host_id, _cert_id, _baseline, settings = estate
+    claim = "a" * 64
+    condition_expected = "b" * 64
+    attempt_id = _attempt(estate, state="verifying", expected=claim)
+    with _connect(db) as conn:
+        conn.execute(
+            """UPDATE renewal_attempts
+               SET failure_attempt_id=attempt_id,failure_reported_at=?,
+                   failure_expected_fingerprint=?
+               WHERE attempt_id=?""",
+            (NOW.isoformat(), condition_expected, attempt_id),
+        )
+        conn.commit()
+
+    result = evaluate_after_scan(
+        db,
+        HOST,
+        443,
+        claim,
+        started_at=NOW,
+        settings=settings,
+    )
+    row = _row(db)
+    assert result is not None and result.state == "verified"
     assert row["failure_cleared_at"] is None
 
 

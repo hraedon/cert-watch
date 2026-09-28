@@ -12,7 +12,7 @@ step.
 | **Expiry warning** | A certificate crosses an expiry threshold (see below). | Once per threshold. The next threshold is a new alert. |
 | **Expired** | A certificate has expired. | Once. |
 | **Renewal stalled** | A certificate is inside its renewal window (`CERT_WATCH_RENEWAL_WINDOW_DAYS`, 30 by default) and no successor has appeared. | Once per certificate, paused during the first live renewal-attempt lease for that served certificate. The weekly renewal digest is the reminder. |
-| **Renewal failed** | Renewal automation reports failure for an endpoint with a current scanned leaf. A failure reported after `not_deployed` is recorded on that same renewal cycle and raises this alert alongside the deployment warning. | Once per continuous failure condition. Later started, manual in-progress, or succeeded attempts carry the condition without opening another provider incident. A failure after a manual clear starts a new incident on the same attempt without changing its state. See the clearing rule below. |
+| **Renewal failed** | Renewal automation reports failure for an endpoint with a current scanned leaf. A failure reported after a deployment warning is recorded on that same renewal cycle and raises this alert alongside the warning. | Once per continuous failure condition. Later started, manual in-progress, or succeeded attempts carry the condition without opening another provider incident. A failure after a manual clear starts a new incident on the same active attempt without changing its renewal state. See the clearing rule below. |
 | **Renewal not deployed** | Renewal automation reported success, but a qualifying stored scan still sees the previous certificate or a different certificate than the reported fingerprint. | Once per renewal attempt. It closes when a later scan verifies the successor or the endpoint is deleted. |
 | **Policy violation** | A scan finds a critical or warning finding from the posture policy, such as SHA-1, short keys or an old TLS version. | Once while the violation persists. If it clears and comes back, again. |
 | **Drift** | A scan sees a high-severity change: a new issuer, a smaller key, a signature downgrade to SHA-1, a TLS version downgrade, or a posture-grade drop. Turn off with `CERT_WATCH_DRIFT_ALERTS=0`. | Each drift is its own alert. |
@@ -26,13 +26,29 @@ is still recorded. It never suppresses expiry warnings or expired alerts.
 Repeated starts do not extend or re-grant the lease. Renewal completion is
 established by observing a successor certificate, not by an operator report.
 
-**A failure condition clears when ANY of these happens:**
-- (a) The attempt carrying it reaches `verified` under the unmodified S4 rules. S4 uses only that attempt's own new_fingerprint, and S4 observed-successor verification runs normally for open, verifying and failed attempts. A carried failure must NOT block or alter any S4 transition. This fixes Opus R5-1/R5-2 and DeepSeek R5-2/R5-3.
-- (b) A stored scan leaf L ≠ baseline, where L equals E. E is the MOST RECENT new_fingerprint reported on this condition by any failed or succeeded report since the condition started or last restarted.
-  - If no report since then carried a new_fingerprint, any L ≠ baseline clears it.
-  - Store E as failure_expected_fingerprint, updated on each such report, and reset on restart-after-clear to the restarting report's value or NULL. This fixes DeepSeek R5-1.
-- (c) A manual clear.
-- (d) Endpoint deletion.
+**A failure condition clears when any of these happens:**
+
+- A scan after the failure report moves the carrying renewal attempt into the
+  verified state. Open, verifying, failed, and deployment-warning attempts are
+  all eligible for this transition. A failure report never changes the
+  attempt's own certificate claim or other verification details.
+- A stored scan sees a certificate other than the attempt's baseline and it
+  matches the most recent certificate fingerprint named by a failed or
+  succeeded report during this failure condition. If no such fingerprint was
+  reported, any non-baseline certificate normally clears the failure. The
+  exception is an attempt whose own reported certificate has not yet been
+  served: an unrelated certificate does not clear its failure in any state.
+  If a later report names a different fingerprint, that newer fingerprint can
+  clear the failure while the renewal itself continues to be judged against
+  its original claim.
+- An operator clears the failure manually.
+- The endpoint is deleted.
+
+A scan that still serves the baseline never clears a failure. After a manual
+clear, another failure can restart the condition in place only on a
+non-terminal attempt; the restart leaves the renewal state and claim intact.
+If the previous attempt is already verified, the failure opens a new attempt
+whose baseline is the certificate currently being served.
 
 ### Renewal verification
 
@@ -56,36 +72,36 @@ A failed network scan or database store is not verification evidence. It sets
 the attempt's blocked timestamp, leaves the state and alert unchanged, and
 reschedules using the same band. If evaluating an otherwise stored scan fails,
 cert-watch retries with exponential backoff from five minutes up to that band's
-cadence. A certificate different from both the
-baseline and a supplied `new_fingerprint` is a mismatch and raises the same
-warning only on a qualifying post-grace scan. The report's free-form message, tool and
-correlation identifier are never copied into the alert or its delivery.
+cadence. A certificate different from both the baseline and a supplied
+replacement fingerprint is a mismatch and raises the same warning only on a
+qualifying post-grace scan. The report's free-form message, tool and correlation
+identifier are never copied into the alert or its delivery.
 
-#### S4 verification rules
+#### Renewal verification details
 
 - Any success, whether it addresses the endpoint by hostname or by an explicit
   `cert_fingerprint`, can use the current leaf's predecessor as its baseline
   only when that replacement was observed in the last 24 hours, the current
   leaf has never appeared as an old lineage fingerprint on the endpoint, and
   no earlier attempt has verified or used the current leaf as its baseline.
-  This applies after any terminal attempt. Send `new_fingerprint` for exact
-  verification. An explicit predecessor target still has a seven-day endpoint
-  lookup window, but that wider addressing window does not change the baseline
-  rules.
+  This applies after any terminal attempt. Send a replacement fingerprint for
+  exact verification. An explicit predecessor target still has a seven-day
+  endpoint lookup window, but that wider addressing window does not change the
+  baseline rules.
 - A verified attempt owns late reports with its correlation. Bare successes
   and new correlations received within 24 hours of its accepted success are
-  also duplicates. After that window, or when `new_fingerprint` names a leaf
+  also duplicates. After that window, or when the report names a leaf
   different from the verified leaf, a success opens a new renewal cycle.
-- Reports never move an attempt out of `not_deployed`. In particular, a
-  `failed` report is retained with `no_change` and records the attempt's first
-  `failure_reported_at` marker. That marker raises `renewal_failed` alongside
-  `renewal_not_deployed`; only stored scan evidence for the expected or
-  observed successor verifies the attempt and closes both alerts.
+- Reports never move an attempt out of the deployment-warning state. In
+  particular, a `failed` report is retained without changing the deployment
+  decision. It raises a renewal-failed alert alongside the deployment warning;
+  only stored scan evidence for the expected or observed successor verifies
+  the attempt and closes both alerts.
 - A failure belongs to the endpoint's renewal cycle, not just the attempt row
   that first received it. Any later attempt opened before resolution carries
   the original failure identifier and report time. A `started` report, a live
   lease, a bare success claim, lease expiry, or the compatibility
-  `renewal_status=pending` write-through does not clear it. Failed and other
+  legacy pending-status write-through does not clear it. Failed and other
   failure-marked attempts are evaluated when an ordinary scan is stored; a
   successor leaf verifies the carrying attempt and resolves the same provider
   incident.

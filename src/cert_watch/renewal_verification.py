@@ -72,7 +72,15 @@ def _failure_clear_reason(
     expected_value = attempt["failure_expected_fingerprint"]
     if expected_value:
         return "reported_fingerprint" if leaf == str(expected_value).lower() else None
-    if attempt["state"] == "not_deployed":
+    own_claim = attempt["new_fingerprint"]
+    own_claim_unserved = bool(
+        own_claim
+        and (
+            not attempt["verified_fingerprint"]
+            or str(attempt["verified_fingerprint"]).lower() != str(own_claim).lower()
+        )
+    )
+    if own_claim_unserved and leaf != str(own_claim).lower():
         return None
     return "observed_successor" if baseline is not None else None
 
@@ -245,6 +253,13 @@ def evaluate_evidence_on(
     failure_clear_reason = (
         _failure_clear_reason(attempt, leaf) if failure_open else None
     )
+    if state == "verified":
+        # Verified is terminal. Legacy or raced rows that still carry an open
+        # failure may satisfy the independent evidence rule, but an ordinary
+        # scan cannot make the completed attempt transition into verified again.
+        if failure_open and failure_clear_reason is not None:
+            _clear_failure_condition_on(conn, attempt, started_at.isoformat())
+        return VerificationResult(state, attempt["next_check_at"], None)
     verification_reason = _attempt_verification_reason(attempt, leaf)
     if verification_reason is not None:
         state, reason = "verified", verification_reason
@@ -303,10 +318,17 @@ def evaluate_evidence_on(
         verification_reason=reason,
         next_check_at=next_check.isoformat() if next_check else None,
     )
-    clear_failure = failure_open and (
-        state == "verified" or failure_clear_reason is not None
+    failure_reported_at = _instant(attempt["failure_reported_at"])
+    reached_verified_after_failure = bool(
+        verification_reason is not None
+        and str(attempt["state"]) != "verified"
+        and failure_reported_at is not None
+        and started_at > failure_reported_at
     )
-    if state == "verified":
+    clear_failure = failure_open and (
+        reached_verified_after_failure or failure_clear_reason is not None
+    )
+    if verification_reason is not None:
         updates["closed_reason"] = reason
         updates["verified_fingerprint"] = leaf
         if clear_failure:
