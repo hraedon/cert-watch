@@ -41,7 +41,8 @@ def upgrade(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """CREATE TABLE IF NOT EXISTS renewal_reports (
-               seq INTEGER PRIMARY KEY,
+               seq INTEGER PRIMARY KEY AUTOINCREMENT,
+               report_id TEXT NOT NULL UNIQUE,
                host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
                hostname_snapshot TEXT NOT NULL,
                port_snapshot INTEGER NOT NULL,

@@ -311,7 +311,19 @@ def test_out_of_order_timestamp_never_controls_reduction(estate):
         correlation_id="ordered",
         occurred_at="2025-01-01T00:00:00+00:00",
     )
-    assert failed.report_id > opened.report_id
+    auth = _auth("key-a", "prod")
+    history = list_reports(
+        estate[0],
+        resolve_target(estate[0], auth, hostname=HOST, port=443),
+        auth=auth,
+        page=1,
+        limit=50,
+        now=NOW,
+    )
+    assert [item["report_id"] for item in history["items"]] == [
+        failed.report_id,
+        opened.report_id,
+    ]
     assert failed.state == "failed"
 
 
@@ -493,9 +505,7 @@ def test_idempotency_key_cannot_move_to_another_resolved_endpoint(estate):
         )
 
 
-def test_idempotency_rows_for_hidden_and_deleted_hosts_are_both_replaced(
-    estate, report_client
-):
+def test_idempotency_rows_for_hidden_and_deleted_hosts_are_both_replaced(estate, report_client):
     client, headers, db = report_client
     moved_id = estate[1].add("moved.example.test", 443, tags="prod")
     deleted_id = estate[1].add("deleted.example.test", 443, tags="prod")
@@ -802,6 +812,77 @@ def test_history_redaction_and_report_key_ownership(estate):
     assert {"message", "tool", "source", "correlation_id"}.isdisjoint(cert_redacted["items"][0])
 
 
+def test_report_ids_are_opaque_across_endpoints_and_teams(estate):
+    prod_auth = _auth("key-prod", "prod")
+    other_auth = _auth("key-other", "other")
+    first, _ = _create(estate, auth=prod_auth)
+    other_target = resolve_target(estate[0], other_auth, hostname="other.example.test", port=443)
+    other, _ = create_report(
+        estate[0],
+        estate[5],
+        other_target,
+        _report("started"),
+        auth=other_auth,
+        actor="api_key:key-other",
+        source_ip=None,
+        idempotency_key=None,
+        body_sha256="other",
+        now=NOW,
+    )
+    second, _ = _create(estate, auth=prod_auth)
+
+    for result in (first, other, second):
+        assert len(result.report_id) == 32
+        int(result.report_id, 16)
+    assert len({first.report_id, other.report_id, second.report_id}) == 3
+
+    prod_target = resolve_target(estate[0], prod_auth, hostname=HOST, port=443)
+    visible = list_reports(estate[0], prod_target, auth=prod_auth, page=1, limit=50, now=NOW)
+    assert [item["report_id"] for item in visible["items"]] == [
+        second.report_id,
+        first.report_id,
+    ]
+    assert other.report_id not in {item["report_id"] for item in visible["items"]}
+    with _connect(estate[0]) as conn:
+        rows = conn.execute("SELECT seq,report_id FROM renewal_reports ORDER BY seq").fetchall()
+    assert all(str(row["seq"]) != row["report_id"] for row in rows)
+
+
+def test_report_id_is_not_reused_after_newest_report_is_deleted(estate):
+    first, _ = _create(estate)
+    with _connect(estate[0]) as conn:
+        first_seq = conn.execute(
+            "SELECT seq FROM renewal_reports WHERE report_id=?", (first.report_id,)
+        ).fetchone()[0]
+        conn.execute("DELETE FROM renewal_reports WHERE report_id=?", (first.report_id,))
+        conn.commit()
+    second, _ = _create(estate)
+    with _connect(estate[0]) as conn:
+        second_seq = conn.execute(
+            "SELECT seq FROM renewal_reports WHERE report_id=?", (second.report_id,)
+        ).fetchone()[0]
+    assert second.report_id != first.report_id
+    assert second_seq > first_seq
+
+
+def test_renewal_report_sequence_is_internal_autoincrement(estate):
+    with _connect(estate[0]) as conn:
+        table_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='renewal_reports'"
+        ).fetchone()[0]
+        columns = {row["name"]: row for row in conn.execute("PRAGMA table_info(renewal_reports)")}
+        report_id_indexes = [
+            row
+            for row in conn.execute("PRAGMA index_list(renewal_reports)")
+            if [item["name"] for item in conn.execute(f"PRAGMA index_info('{row['name']}')")]
+            == ["report_id"]
+        ]
+    assert "seq INTEGER PRIMARY KEY AUTOINCREMENT" in table_sql
+    assert columns["report_id"]["type"] == "TEXT"
+    assert columns["report_id"]["notnull"] == 1
+    assert len(report_id_indexes) == 1 and report_id_indexes[0]["unique"] == 1
+
+
 def test_delete_then_readd_has_no_history(estate):
     auth = _auth("key-a", "prod")
     _create(estate, auth=auth, idempotency_key="delete-me", body_sha256="body")
@@ -850,13 +931,24 @@ def test_retention_keeps_current_and_latest_lease_per_baseline(estate):
             "SELECT baseline_fingerprint,is_current,lease_expires_at "
             "FROM renewal_attempts ORDER BY opened_seq"
         ).fetchall()
-        assert len(attempts) == 2
-        assert [row["baseline_fingerprint"] for row in attempts] == [estate[4], "c" * 64]
-        assert [row["is_current"] for row in attempts] == [0, 1]
-        assert all(row["lease_expires_at"] for row in attempts)
-        assert conn.execute(
-            "SELECT count(*) FROM renewal_attempt_correlations"
-        ).fetchone()[0] == 0
+        assert len(attempts) == 3
+        assert [row["baseline_fingerprint"] for row in attempts] == [
+            estate[4],
+            estate[4],
+            "c" * 64,
+        ]
+        assert [row["is_current"] for row in attempts] == [0, 0, 1]
+        assert attempts[0]["lease_expires_at"] is None
+        assert all(row["lease_expires_at"] for row in attempts[1:])
+        assert (
+            conn.execute(
+                """SELECT count(*) FROM renewal_reports r
+               LEFT JOIN renewal_attempts a ON a.attempt_id=r.attempt_id
+               WHERE a.attempt_id IS NULL"""
+            ).fetchone()[0]
+            == 0
+        )
+        assert conn.execute("SELECT count(*) FROM renewal_attempt_correlations").fetchone()[0] == 0
 
     with _connect(estate[0]) as conn:
         conn.execute(
@@ -871,6 +963,41 @@ def test_retention_keeps_current_and_latest_lease_per_baseline(estate):
             (returned.attempt_id,),
         ).fetchone()[0]
     assert suppresses == 0
+
+
+def test_aggressive_purge_preserves_retained_report_attempt_states(estate):
+    old = NOW - timedelta(days=100)
+    failed, _ = _create(estate, "failed", now=old)
+    started, _ = _create(estate, correlation_id="current", now=old + timedelta(minutes=1))
+    _create(
+        estate,
+        "failed",
+        correlation_id="current",
+        now=old + timedelta(minutes=2),
+    )
+    current, _ = _create(
+        estate,
+        correlation_id="replacement",
+        now=old + timedelta(minutes=3),
+    )
+
+    purge_renewal_reports(estate[0], 1, now=NOW)
+    auth = _auth("key-a", "prod")
+    target = resolve_target(estate[0], auth, hostname=HOST, port=443)
+    history = list_reports(estate[0], target, auth=auth, page=1, limit=50, now=NOW)
+    states = {item["report_id"]: item["state"] for item in history["items"]}
+    assert states[failed.report_id] == "failed"
+    assert states[started.report_id] == "failed"
+    assert states[current.report_id] == "abandoned"
+    with _connect(estate[0]) as conn:
+        assert (
+            conn.execute(
+                """SELECT count(*) FROM renewal_reports r
+               LEFT JOIN renewal_attempts a ON a.attempt_id=r.attempt_id
+               WHERE a.attempt_id IS NULL"""
+            ).fetchone()[0]
+            == 0
+        )
 
 
 def test_zero_retention_keeps_reports_but_idempotency_expires(estate):
@@ -1058,6 +1185,16 @@ def test_idempotency_hashes_the_canonical_validated_body(report_client):
     )
     assert first.status_code == replay.status_code == 202
     assert first.content == replay.content
+    report_id = first.json()["report_id"]
+    assert len(report_id) == 32
+    int(report_id, 16)
+    history = client.get(
+        "/api/renewal-reports",
+        headers=headers,
+        params={"hostname": HOST, "port": 443},
+    )
+    assert history.status_code == 200
+    assert history.json()["items"][0]["report_id"] == report_id
 
 
 def test_message_is_confined_to_report_storage(report_client, caplog):
@@ -1125,9 +1262,7 @@ def test_get_bounds_pagination(report_client, params):
 def test_service_bounds_pagination(estate):
     auth = _auth("key-a", "prod")
     target = resolve_target(estate[0], auth, hostname=HOST, port=443)
-    result = list_reports(
-        estate[0], target, auth=auth, page=10**30, limit=10**30, now=NOW
-    )
+    result = list_reports(estate[0], target, auth=auth, page=10**30, limit=10**30, now=NOW)
     assert (result["page"], result["limit"], result["items"]) == (10_000, 100, [])
 
 

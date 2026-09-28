@@ -76,8 +76,9 @@ database.
 
 ### Migration 0046
 
-Migration **0046** adds the append-only renewal report ledger, retained attempt
-and correlation history, a one-current-attempt-per-endpoint projection, and
+Migration **0046** adds the append-only renewal report ledger with opaque public
+identifiers and an internal non-reusing sequence, retained attempt and
+correlation history, a one-current-attempt-per-endpoint projection, and
 source-and-endpoint-scoped idempotency records. It does not backfill or
 reinterpret the existing `renewal_status` column; that compatibility
 transition is intentionally deferred to the next slice. Endpoint deletion

@@ -53,11 +53,12 @@ replay lookup.
 Accepted reports return status 202:
 
 ```json
-{"report_id": 42, "attempt_id": "…", "state": "open", "effect": "applied"}
+{"report_id": "7f3a1b9c4d2e4870a6c5e8d1f2b3a490", "attempt_id": "…", "state": "open", "effect": "applied"}
 ```
 
-Reports are ordered only by the monotonic `report_id`. A repeated `started`
-is retained but never extends the original lease. The default lease is 24
+`report_id` is an opaque random identifier and carries no ordering information.
+History is ordered newest-first by an internal sequence that is never exposed.
+A repeated `started` is retained but never extends the original lease. The default lease is 24
 hours (`CERT_WATCH_RENEWAL_REPORT_LEASE_HOURS`, range 1–168). A lapsed lease
 becomes `abandoned` without raising an alert. A partial unique index marks at
 most one attempt as current for an endpoint. Repeated
@@ -94,7 +95,10 @@ Each endpoint retains at least its newest 50 reports plus every report newer
 than `history_retention_days`. Non-current attempts and correlation ownership
 also expire after that interval. Maintenance preserves the newest granted
 stall lease for every endpoint/baseline pair so retention cannot grant a
-second suppression lease. Idempotency records expire after seven days.
+second suppression lease. A retry that reuses a correlation older than the
+retention interval is treated as new and can appear as in progress, but it
+never receives another stall-suppression lease for the same endpoint and
+baseline. Idempotency records expire after seven days.
 Deleting an endpoint deletes its reports, attempt and correlation history, and
 idempotency records, so re-adding the same address does not inherit private
 history.

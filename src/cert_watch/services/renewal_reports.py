@@ -64,7 +64,7 @@ class RenewalReportInput:
 
 @dataclass(frozen=True)
 class RenewalReportResult:
-    report_id: int
+    report_id: str
     attempt_id: str
     state: str
     effect: str
@@ -351,13 +351,15 @@ def create_report(
                     new_attempt = True
                     attempt_id = uuid.uuid4().hex
 
+            report_id = uuid.uuid4().hex
             cursor = conn.execute(
                 """INSERT INTO renewal_reports
-                   (host_id,hostname_snapshot,port_snapshot,outcome,message,tool,
+                   (report_id,host_id,hostname_snapshot,port_snapshot,outcome,message,tool,
                     correlation_id,new_fingerprint,occurred_at,received_at,source,
                     effect,attempt_id)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
+                    report_id,
                     target.host_id,
                     host["hostname"],
                     host["port"],
@@ -434,7 +436,7 @@ def create_report(
                     (target.host_id, source, report.correlation_id, attempt_id, received_at),
                 )
 
-            result = RenewalReportResult(seq, attempt_id, state, effect)
+            result = RenewalReportResult(report_id, attempt_id, state, effect)
             response_body = json.dumps(result.__dict__, separators=(",", ":"), sort_keys=True)
             if idempotency_key:
                 conn.execute(
@@ -551,7 +553,7 @@ def list_reports(
     items: list[dict[str, Any]] = []
     for row in rows:
         item = {
-            "report_id": row["seq"],
+            "report_id": row["report_id"],
             "attempt_id": row["attempt_id"],
             "outcome": row["outcome"],
             "occurred_at": row["occurred_at"],
@@ -609,6 +611,10 @@ def purge_renewal_reports(
             conn.execute(
                 """DELETE FROM renewal_attempts AS a
                    WHERE a.received_at < ? AND a.is_current=0
+                     AND NOT EXISTS (
+                         SELECT 1 FROM renewal_reports r
+                         WHERE r.attempt_id=a.attempt_id
+                     )
                      AND a.attempt_id NOT IN (
                          SELECT kept.attempt_id FROM renewal_attempts kept
                          WHERE kept.host_id=a.host_id

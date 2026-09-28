@@ -33,11 +33,12 @@ All notable changes to cert-watch are documented in this file.
 - Added durable, append-only renewal reports and retained attempt history with
   at most one current attempt per endpoint, strict JSON-only 16 KiB ingestion,
   live host-tag targeting, recent-leaf fingerprint lookup, endpoint-bound
-  source idempotency, non-extending leases, redacted bounded history,
+  source idempotency, opaque report identifiers, non-extending leases, redacted bounded history,
   retention and delete/re-add isolation. Renewal success reports fail closed
   with 503 until scan verification ships (#118 S2).
   Attempts and correlation ownership follow history retention while preserving
-  current attempts and one stall-lease record per endpoint/baseline; reporting
+  every attempt referenced by retained history, current attempts, and one
+  stall-lease record per endpoint/baseline; reporting
   keys can create at most 1,000 correlations per endpoint per rolling day.
 
 ### Fixed
