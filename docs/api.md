@@ -29,13 +29,14 @@ the endpoints. Uploaded certificates cannot be targeted.
 `outcome` is required and is `started`, `failed` or `succeeded`. S2 accepts
 `started` and `failed`; until deployment verification ships, `succeeded`
 returns `503 {"error":"renewal verification is not available yet"}` and
-stores nothing. Optional fields are:
+stores nothing. It still counts against both request-rate limits, so a 429 can
+mask that 503 after a caller exhausts either budget. Optional fields are:
 
 | Field | Contract |
 |---|---|
 | `message` | At most 2,000 Unicode code points after NFC normalization. C0/C1 controls other than tab/newline and bidi overrides are rejected. |
 | `tool` | 1–64 characters matching `[A-Za-z0-9._+-]`. |
-| `correlation_id` | 1–128 printable, non-space ASCII characters (`0x21`–`0x7e`); informational, not an idempotency key. |
+| `correlation_id` | 1–128 printable, non-space ASCII characters (`0x21`–`0x7e`). It identifies one renewal attempt; reusing it for later work is recorded as late and ignored unless that report itself opens a replacement attempt. It is not an idempotency key. |
 | `new_fingerprint` | A 64-character SHA-256 hexadecimal fingerprint. |
 | `occurred_at` | ISO 8601 with a UTC offset. Stored for history, never used to order or reduce reports. |
 
@@ -43,9 +44,11 @@ The optional `Idempotency-Key` header is 1–128 printable ASCII characters and
 is scoped to the reporting key and resolved endpoint. Duplicate header lines
 return 400. Repeating the same key, endpoint and canonical body returns the
 saved response. Reusing it with another body or an endpoint that resolves to a
-different `host_id` returns 409. A different report key may reuse the same
-value. Target existence and the live binding are checked before every replay
-lookup.
+different `host_id` returns 409 while the original endpoint remains in the
+caller's live binding. If that endpoint is gone or out of binding, its row is
+replaced and the request is processed fresh. A different report key may reuse
+the same value. Target existence and the live binding are checked before every
+replay lookup.
 
 Accepted reports return status 202:
 
@@ -56,13 +59,18 @@ Accepted reports return status 202:
 Reports are ordered only by the monotonic `report_id`. A repeated `started`
 is retained but never extends the original lease. The default lease is 24
 hours (`CERT_WATCH_RENEWAL_REPORT_LEASE_HOURS`, range 1–168). A lapsed lease
-becomes `abandoned` without raising an alert. Every attempt is retained, while
-a partial unique index marks at most one as current for an endpoint. Repeated
+becomes `abandoned` without raising an alert. A partial unique index marks at
+most one attempt as current for an endpoint. Repeated
 `failed` reports are retained without changing the state. Correlation
-ownership is retained separately from report retention, so a late report stays
-attached to its finished attempt and cannot reopen work. Only the first
-attempt for an endpoint and baseline leaf can suppress a stalled signal,
+ownership moves when its report opens a new attempt, so an identical retry
+resolves to that current attempt. Until retention removes the ownership row, a
+late report stays attached to its finished attempt and cannot reopen work.
+Only the first attempt for an endpoint and baseline leaf can suppress a stalled signal,
 including across intervening baselines and cancelled attempts.
+
+Each reporting key may create at most 1,000 correlation IDs per endpoint in a
+rolling 24-hour period. Further new correlations return the same
+`429 {"error":"rate limited"}` response as the request-rate limits.
 
 ### `GET /api/renewal-reports?hostname=…&port=…`
 
@@ -83,7 +91,10 @@ deliberately retains `tool` and `correlation_id` for administrators, but stores
 only the message length and hash rather than its text.
 
 Each endpoint retains at least its newest 50 reports plus every report newer
-than `history_retention_days`. Idempotency records expire after seven days.
+than `history_retention_days`. Non-current attempts and correlation ownership
+also expire after that interval. Maintenance preserves the newest granted
+stall lease for every endpoint/baseline pair so retention cannot grant a
+second suppression lease. Idempotency records expire after seven days.
 Deleting an endpoint deletes its reports, attempt and correlation history, and
 idempotency records, so re-adding the same address does not inherit private
 history.

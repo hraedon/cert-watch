@@ -36,6 +36,9 @@ All notable changes to cert-watch are documented in this file.
   source idempotency, non-extending leases, redacted bounded history,
   retention and delete/re-add isolation. Renewal success reports fail closed
   with 503 until scan verification ships (#118 S2).
+  Attempts and correlation ownership follow history retention while preserving
+  current attempts and one stall-lease record per endpoint/baseline; reporting
+  keys can create at most 1,000 correlations per endpoint per rolling day.
 
 ### Fixed
 

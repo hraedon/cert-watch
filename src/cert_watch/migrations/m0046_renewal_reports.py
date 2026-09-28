@@ -36,6 +36,10 @@ def upgrade(conn: sqlite3.Connection) -> None:
         "ON certificate_lineage(old_fingerprint, created_at)"
     )
     conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_certificates_endpoint_leaf_head "
+        "ON certificates(hostname, port, is_leaf, source, created_at)"
+    )
+    conn.execute(
         """CREATE TABLE IF NOT EXISTS renewal_reports (
                seq INTEGER PRIMARY KEY,
                host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
@@ -93,8 +97,8 @@ def upgrade(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_renewal_attempts_host_opened "
         "ON renewal_attempts(host_id, opened_seq DESC)"
     )
-    # Reports are retention-bound, but correlation ownership is not: a stale
-    # retry must remain late after its report rows have aged out.
+    # Correlation ownership has its own timestamp so maintenance can bound it
+    # without depending on the separately retained report ledger.
     conn.execute(
         """CREATE TABLE IF NOT EXISTS renewal_attempt_correlations (
                host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
@@ -102,8 +106,17 @@ def upgrade(conn: sqlite3.Connection) -> None:
                correlation_id TEXT NOT NULL,
                attempt_id TEXT NOT NULL REFERENCES renewal_attempts(attempt_id)
                    ON DELETE CASCADE,
+               created_at TEXT NOT NULL,
                PRIMARY KEY (host_id, source, correlation_id)
            )"""
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_renewal_attempt_correlations_created "
+        "ON renewal_attempt_correlations(created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_renewal_attempt_correlations_daily_cap "
+        "ON renewal_attempt_correlations(host_id, source, created_at)"
     )
     conn.execute(
         """CREATE TABLE IF NOT EXISTS renewal_idempotency (

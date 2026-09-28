@@ -37,6 +37,10 @@ class RenewalReportUnavailableError(RenewalReportServiceError):
     pass
 
 
+class RenewalReportRateLimitError(RenewalReportServiceError):
+    pass
+
+
 @dataclass(frozen=True)
 class RenewalTarget:
     host_id: str
@@ -228,11 +232,23 @@ def create_report(
                 raise
 
             if idempotency_key:
+                binding_clause, binding_params = _binding_clause(auth)
                 old = conn.execute(
-                    "SELECT host_id,body_sha256,response_body FROM renewal_idempotency "
-                    "WHERE source=? AND key=?",
-                    (source, idempotency_key),
+                    f"""SELECT ri.host_id,ri.body_sha256,ri.response_body,
+                               EXISTS(SELECT 1 FROM hosts h
+                                      WHERE h.id=ri.host_id AND {binding_clause}) AS in_binding
+                        FROM renewal_idempotency ri WHERE ri.source=? AND ri.key=?""",
+                    [*binding_params, source, idempotency_key],
                 ).fetchone()
+                if old is not None and not old["in_binding"]:
+                    # An idempotency row is visible only while its endpoint is
+                    # live in this caller's binding. Replacing an invisible row
+                    # makes moved and deleted endpoints indistinguishable.
+                    conn.execute(
+                        "DELETE FROM renewal_idempotency WHERE source=? AND key=?",
+                        (source, idempotency_key),
+                    )
+                    old = None
                 if old is not None:
                     if old["host_id"] != target.host_id or old["body_sha256"] != body_sha256:
                         raise RenewalReportConflictError("idempotency key reused")
@@ -273,10 +289,21 @@ def create_report(
                        WHERE ac.host_id=? AND ac.source=? AND ac.correlation_id=?""",
                     (target.host_id, source, report.correlation_id),
                 ).fetchone()
+                if correlation_owner is None:
+                    correlation_cutoff = (received - timedelta(days=1)).isoformat()
+                    correlation_count = int(
+                        conn.execute(
+                            """SELECT count(*) FROM renewal_attempt_correlations
+                               WHERE host_id=? AND source=? AND created_at>=?""",
+                            (target.host_id, source, correlation_cutoff),
+                        ).fetchone()[0]
+                    )
+                    if correlation_count >= 1_000:
+                        raise RenewalReportRateLimitError("rate limited")
 
-            # Correlation ownership outlives report retention. Once a newer
-            # cycle is current, a stale retry belongs to its original attempt
-            # and can never reopen work or mint another suppression lease.
+            # While correlation ownership is retained, a stale retry belongs
+            # to its original attempt and cannot reopen newer work or mint
+            # another suppression lease.
             if correlation_owner is not None and (
                 attempt is None or correlation_owner["attempt_id"] != attempt["attempt_id"]
             ):
@@ -399,9 +426,12 @@ def create_report(
 
             if report.correlation_id and effect != "ignored_late":
                 conn.execute(
-                    """INSERT OR IGNORE INTO renewal_attempt_correlations
-                       (host_id,source,correlation_id,attempt_id) VALUES (?,?,?,?)""",
-                    (target.host_id, source, report.correlation_id, attempt_id),
+                    """INSERT INTO renewal_attempt_correlations
+                       (host_id,source,correlation_id,attempt_id,created_at)
+                       VALUES (?,?,?,?,?)
+                       ON CONFLICT(host_id,source,correlation_id) DO UPDATE SET
+                           attempt_id=excluded.attempt_id""",
+                    (target.host_id, source, report.correlation_id, attempt_id, received_at),
                 )
 
             result = RenewalReportResult(seq, attempt_id, state, effect)
@@ -487,6 +517,8 @@ def list_reports(
     limit: int,
     now: datetime | None = None,
 ) -> dict[str, Any]:
+    page = max(1, min(page, 10_000))
+    limit = max(1, min(limit, 100))
     source_filter = ""
     params: list[Any] = [target.host_id]
     is_report_key = getattr(auth, "principal_kind", "") == "renewal-report"
@@ -505,9 +537,12 @@ def list_reports(
         rows = conn.execute(
             f"""SELECT r.*, CASE
                      WHEN a.state='open' AND a.lease_expires_at<=? THEN 'abandoned'
-                     ELSE a.state END AS state
+                     ELSE COALESCE(
+                         a.state,
+                         CASE WHEN r.outcome='failed' THEN 'failed' ELSE 'abandoned' END
+                     ) END AS state
                 FROM renewal_reports r
-                JOIN renewal_attempts a ON a.attempt_id=r.attempt_id
+                LEFT JOIN renewal_attempts a ON a.attempt_id=r.attempt_id
                 WHERE r.host_id=?{source_filter}
                 ORDER BY r.seq DESC LIMIT ? OFFSET ?""",
             [current, *params, limit, offset],
@@ -552,20 +587,37 @@ def expire_renewal_leases(db_path: str | Path, *, now: datetime | None = None) -
 def purge_renewal_reports(
     db_path: str | Path, retention_days: int, *, now: datetime | None = None
 ) -> int:
-    """Keep each endpoint's newest 50 reports plus every row inside retention."""
+    """Apply report, attempt, correlation and idempotency retention."""
     instant = now or datetime.now(UTC)
     cutoff = instant - timedelta(days=max(retention_days, 0))
     with get_write_lock(), _connect(db_path) as conn:
         deleted = 0
         if retention_days > 0:
+            cutoff_iso = cutoff.astimezone(UTC).isoformat()
             deleted = conn.execute(
                 """DELETE FROM renewal_reports AS r
                    WHERE r.received_at < ? AND r.seq NOT IN (
                        SELECT kept.seq FROM renewal_reports kept
                        WHERE kept.host_id=r.host_id ORDER BY kept.seq DESC LIMIT 50
                    )""",
-                (cutoff.astimezone(UTC).isoformat(),),
+                (cutoff_iso,),
             ).rowcount
+            conn.execute(
+                "DELETE FROM renewal_attempt_correlations WHERE created_at < ?",
+                (cutoff_iso,),
+            )
+            conn.execute(
+                """DELETE FROM renewal_attempts AS a
+                   WHERE a.received_at < ? AND a.is_current=0
+                     AND a.attempt_id NOT IN (
+                         SELECT kept.attempt_id FROM renewal_attempts kept
+                         WHERE kept.host_id=a.host_id
+                           AND kept.baseline_fingerprint IS a.baseline_fingerprint
+                           AND kept.lease_expires_at IS NOT NULL
+                         ORDER BY kept.opened_seq DESC LIMIT 1
+                     )""",
+                (cutoff_iso,),
+            )
         conn.execute(
             "DELETE FROM renewal_idempotency WHERE created_at < ?",
             ((instant - timedelta(days=7)).astimezone(UTC).isoformat(),),

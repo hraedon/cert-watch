@@ -31,6 +31,7 @@ from cert_watch.services.renewal_reports import (
     RenewalReportConflictError,
     RenewalReportInput,
     RenewalReportNotFoundError,
+    RenewalReportRateLimitError,
     RenewalReportServiceError,
     RenewalReportUnavailableError,
     create_report,
@@ -244,6 +245,8 @@ async def api_create_renewal_report(
         return JSONResponse(status_code=404, content={"error": str(exc)})
     except RenewalReportConflictError as exc:
         return JSONResponse(status_code=409, content={"error": str(exc)})
+    except RenewalReportRateLimitError:
+        return JSONResponse(status_code=429, content={"error": "rate limited"})
     except RenewalReportUnavailableError as exc:
         return JSONResponse(status_code=503, content={"error": str(exc)})
     return JSONResponse(status_code=202, content=result.__dict__)
