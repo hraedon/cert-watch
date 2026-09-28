@@ -33,7 +33,6 @@ from cert_watch.services.renewal_reports import (
     RenewalReportNotFoundError,
     RenewalReportRateLimitError,
     RenewalReportServiceError,
-    RenewalReportUnavailableError,
     create_report,
     list_reports,
     resolve_history_target,
@@ -216,11 +215,6 @@ async def api_create_renewal_report(
         return JSONResponse(status_code=409, content={"error": str(exc)})
     if not check_rate_limit(f"renewal_report_endpoint:{principal}:{target.host_id}", 5, 60):
         return JSONResponse(status_code=429, content={"error": "rate limited"})
-    if body.outcome == "succeeded":
-        return JSONResponse(
-            status_code=503,
-            content={"error": "renewal verification is not available yet"},
-        )
     report = RenewalReportInput(
         outcome=body.outcome,
         message=body.message,
@@ -247,8 +241,10 @@ async def api_create_renewal_report(
         return JSONResponse(status_code=409, content={"error": str(exc)})
     except RenewalReportRateLimitError:
         return JSONResponse(status_code=429, content={"error": "rate limited"})
-    except RenewalReportUnavailableError as exc:
-        return JSONResponse(status_code=503, content={"error": str(exc)})
+    if not _replayed and body.outcome == "succeeded":
+        from cert_watch.scheduler import wake_scheduler
+
+        wake_scheduler(getattr(request.app.state, "scheduler", None))
     return JSONResponse(status_code=202, content=result.__dict__)
 
 

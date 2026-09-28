@@ -5,6 +5,7 @@ Imports the standard library only.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -12,6 +13,17 @@ if TYPE_CHECKING:
     from cert_watch.database import Alert
 
 LEAF_THRESHOLDS = (14, 7, 3, 1)
+
+# Verification of a reported renewal follows the urgency of the certificate
+# that was serving when the attempt opened. Keep this scale beside the expiry
+# thresholds so the two policies remain legible together.
+RENEWAL_VERIFY_EARLY_DAYS = 14
+RENEWAL_VERIFY_URGENT_DAYS = 3
+RENEWAL_VERIFY_EARLY_CHECK_HOURS = 24
+RENEWAL_VERIFY_MID_CHECK_HOURS = 6
+RENEWAL_VERIFY_MID_RAISE_HOURS = 12
+RENEWAL_VERIFY_URGENT_CHECK_HOURS = 1
+RENEWAL_VERIFY_EXPIRED_CHECK_MINUTES = 15
 
 CHAIN_THRESHOLDS = (30, 14, 7)
 # In digest mode, per-certificate alerts at or below this many days to expiry
@@ -39,6 +51,15 @@ FAILURE_LABELS = {
 }
 
 SendOutcome = Literal["accepted", "partial", "failed", "blocked"]
+
+
+def provider_incident_key(alert_type: str, dedupe_key: str | None) -> str:
+    """Keep legacy provider identity except for attempt-scoped renewal alerts."""
+    if alert_type not in {"renewal_not_deployed", "renewal_failed"}:
+        return ""
+    if not dedupe_key:
+        raise ValueError(f"{alert_type} requires a provider dedupe key")
+    return hashlib.sha256(dedupe_key.encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -81,6 +102,7 @@ class OutboundMessage:
     threshold_days: int | None = None
     status: str = "pending"
     trigger_cert_id: str | None = None
+    incident_key: str = ""
     recipients: tuple[str, ...] = ()
     global_recipients: tuple[str, ...] = ()
     queued_recipients: tuple[str, ...] = ()
@@ -105,6 +127,7 @@ class OutboundMessage:
             threshold_days=alert.threshold_days,
             status=alert.status,
             trigger_cert_id=alert.trigger_cert_id,
+            incident_key=provider_incident_key(alert.alert_type, alert.dedupe_key),
             recipients=recipients,
             global_recipients=global_recipients,
             queued_recipients=(

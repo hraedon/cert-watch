@@ -150,6 +150,58 @@ def _record_scan_failure(
             logger.warning("deferred scan-failure webhook submit failed", exc_info=True)
 
 
+def _record_verification_blocked(
+    db_path: str | Path,
+    hostname: str,
+    port: int,
+    *,
+    started_at: datetime,
+    settings: Settings,
+) -> None:
+    try:
+        from cert_watch.renewal_verification import mark_verification_blocked
+
+        mark_verification_blocked(
+            db_path, hostname, port, started_at=started_at, settings=settings
+        )
+    except Exception:
+        logger.exception("could not defer renewal verification for %s:%d", hostname, port)
+
+
+def _record_verification_success(
+    db_path: str | Path,
+    hostname: str,
+    port: int,
+    fingerprint: str,
+    *,
+    started_at: datetime,
+    settings: Settings,
+) -> None:
+    try:
+        from cert_watch.renewal_verification import evaluate_after_scan
+
+        evaluate_after_scan(
+            db_path,
+            hostname,
+            port,
+            fingerprint,
+            started_at=started_at,
+            settings=settings,
+        )
+    except Exception:
+        logger.exception("renewal verification failed for %s:%d", hostname, port)
+        try:
+            from cert_watch.renewal_verification import mark_verification_evaluation_error
+
+            mark_verification_evaluation_error(
+                db_path, hostname, port, started_at=started_at, settings=settings
+            )
+        except Exception:
+            logger.exception(
+                "could not back off renewal verification for %s:%d", hostname, port
+            )
+
+
 def _scoped_tags(auth: Any, tags: str) -> str:
     scope = writable_scope_tags(auth)
     return format_tags(merge_tags(tags, ",".join(scope or ())))
@@ -209,8 +261,13 @@ async def _scan_and_store(
     webhook_config: WebhookConfig | None = None,
     scope_guard: Callable[[Any], None] | None = None,
     _store_error_types: tuple[type[BaseException], ...] = (Exception,),
+    _scan_host_fn: Callable[..., Awaitable[Any]] | None = None,
+    _store_scanned_fn: Callable[..., Awaitable[str]] | None = None,
 ) -> ScanResult:
-    result = await scan_host_async(
+    started_at = datetime.now(UTC)
+    scan_fn = _scan_host_fn or scan_host_async
+    store_fn = _store_scanned_fn or store_scanned_async
+    result = await scan_fn(
         hostname,
         port,
         verify=settings.tls_verify,
@@ -233,9 +290,12 @@ async def _scan_and_store(
             source=source,
             scope_guard=scope_guard,
         )
+        _record_verification_blocked(
+            db_path, hostname, port, started_at=started_at, settings=settings
+        )
         return ScanResult("scan_error", result.error_message)
     try:
-        leaf_id = await store_scanned_async(
+        leaf_id = await store_fn(
             result,
             db_path,
             drift_alerts=settings.drift_alerts,
@@ -254,6 +314,9 @@ async def _scan_and_store(
             db_path,
             ScanHistory(hostname=hostname, port=port, status="failure", error_message=message),
         )
+        _record_verification_blocked(
+            db_path, hostname, port, started_at=started_at, settings=settings
+        )
         return ScanResult("store_error", message)
     if not leaf_id:
         message = "store failed: transaction rolled back"
@@ -261,8 +324,19 @@ async def _scan_and_store(
             db_path,
             ScanHistory(hostname=hostname, port=port, status="failure", error_message=message),
         )
+        _record_verification_blocked(
+            db_path, hostname, port, started_at=started_at, settings=settings
+        )
         return ScanResult("store_error", message)
     record_scan_history(db_path, ScanHistory(hostname=hostname, port=port, status="success"))
+    _record_verification_success(
+        db_path,
+        hostname,
+        port,
+        result.leaf.fingerprint_sha256,
+        started_at=started_at,
+        settings=settings,
+    )
     return ScanResult("success")
 
 
@@ -814,14 +888,30 @@ def delete_host(
     auth: Any,
     actor: str,
     source_ip: str | None,
+    webhook_config: WebhookConfig | None = None,
 ) -> bool:
     require_auth_context(auth)
+    closed_sent: list[Any] = []
     with get_write_lock():
         ensure_write_scope(auth, db_path, host_id=host_id)
         conn = _connect(db_path)
         try:
             begin_immediate(conn)
             ensure_write_scope_on(conn, auth, host_id=host_id)
+            cert_ids = [
+                str(row["id"])
+                for row in conn.execute(
+                    """SELECT c.id FROM certificates c JOIN hosts h
+                       ON h.hostname=c.hostname AND h.port=c.port WHERE h.id=?""",
+                    (host_id,),
+                ).fetchall()
+            ]
+            if cert_ids:
+                from cert_watch.database.alert_store import AlertStore
+
+                closed_sent = AlertStore(db_path, initialize=False).close_for_cert_ids(
+                    cert_ids, conn=conn, reason="endpoint deleted"
+                )
             deleted = SqliteHostRepository(db_path).delete(host_id, conn=conn)
             audit_event = record_audit(
                 db_path,
@@ -837,6 +927,15 @@ def delete_host(
             conn.rollback()
             raise
     export_audit(audit_event)
+    if closed_sent:
+        try:
+            from cert_watch.alerting.resolve import resolve_webhook_for_renewed_cert
+
+            resolve_webhook_for_renewed_cert(
+                db_path, "", webhook_config, pending_alerts=closed_sent
+            )
+        except Exception:
+            logger.warning("host-delete alert resolve failed", exc_info=True)
     return deleted
 
 

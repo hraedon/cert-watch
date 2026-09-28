@@ -134,6 +134,26 @@ def test_renewal_window_negative_raises(monkeypatch, tmp_path):
         _from_env(monkeypatch, tmp_path, CERT_WATCH_RENEWAL_WINDOW_DAYS="-1")
 
 
+@pytest.mark.parametrize("value", ["4", "16"])
+def test_renewal_verify_grace_rejects_out_of_range(monkeypatch, tmp_path, value):
+    with pytest.raises(ValueError, match="RENEWAL_VERIFY_GRACE_MINUTES"):
+        _from_env(
+            monkeypatch,
+            tmp_path,
+            CERT_WATCH_RENEWAL_VERIFY_GRACE_MINUTES=value,
+        )
+
+
+@pytest.mark.parametrize("value", ["5", "15"])
+def test_renewal_verify_grace_accepts_boundaries(monkeypatch, tmp_path, value):
+    settings = _from_env(
+        monkeypatch,
+        tmp_path,
+        CERT_WATCH_RENEWAL_VERIFY_GRACE_MINUTES=value,
+    )
+    assert settings.renewal_verify_grace_minutes == int(value)
+
+
 def test_scan_retries_negative_raises(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="SCAN_RETRIES=-1 is below minimum 0"):
         _from_env(monkeypatch, tmp_path, CERT_WATCH_SCAN_RETRIES="-1")

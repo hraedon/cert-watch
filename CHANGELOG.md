@@ -26,8 +26,15 @@ All notable changes to cert-watch are documented in this file.
   retention while preserving every attempt referenced by retained history,
   current attempts, and one stall-lease record per endpoint and baseline;
   reporting keys can create at most 1,000 correlations per endpoint per
-  rolling day. Renewal success reports fail closed with 503 until scan
-  verification ships (#118 S2).
+  rolling day (#118 S2).
+- Successful renewal reports now queue coalesced, cross-process-claimed scans
+  and are verified only from stored leaf evidence. Expiry-aware check bands,
+  a configurable 5–15 minute grace period, mismatch handling, and the routed
+  `renewal_not_deployed` alert cover deployments that do not reach the
+  monitored endpoint without suppressing expiry alerts. Bare reports use only
+  safe predecessor observations from the prior 24 hours, verified endpoints
+  can open later renewal cycles, and evaluation errors back off exponentially
+  to the expiry-band cadence (#118 S4).
 
 ### Changed
 
@@ -51,6 +58,8 @@ All notable changes to cert-watch are documented in this file.
   attempt to 24-hour leased attempts (or the configured lease), audits each
   conversion or preservation decision, and enables manual cancellation
   reports. See [UPGRADING.md](UPGRADING.md).
+- Migration 0048 adds renewal-verification evidence fields and short-lived
+  endpoint scan claims. See [UPGRADING.md](UPGRADING.md).
 - Migration 0045 adds explicit binding metadata to API keys. Existing keys
   remain bound to all endpoints. See [UPGRADING.md](UPGRADING.md).
 

@@ -250,7 +250,7 @@ def _run_rule_pass(tmp_path: Path, scenario: str) -> set[tuple[str, str]]:
             port=443,
         )
         if scenario != "none":
-            state = "failed" if scenario == "failed" else "open"
+            state = scenario if scenario in {"failed", "verifying", "not_deployed"} else "open"
             lease = now - timedelta(hours=1) if scenario == "lapsed" else now + timedelta(hours=1)
             _attempt(
                 db,
@@ -268,13 +268,20 @@ def _run_rule_pass(tmp_path: Path, scenario: str) -> set[tuple[str, str]]:
 def test_full_alert_pass_never_changes_expiry_sets_for_report_states(tmp_path: Path) -> None:
     results = {
         name: _run_rule_pass(tmp_path, name)
-        for name in ("none", "live", "lapsed", "failed")
+        for name in ("none", "live", "lapsed", "failed", "verifying", "not_deployed")
     }
     expiry = {
         name: {item for item in alerts if item[1] in {"expiry_warning", "expired"}}
         for name, alerts in results.items()
     }
-    assert expiry["none"] == expiry["live"] == expiry["lapsed"] == expiry["failed"]
+    assert (
+        expiry["none"]
+        == expiry["live"]
+        == expiry["lapsed"]
+        == expiry["failed"]
+        == expiry["verifying"]
+        == expiry["not_deployed"]
+    )
     assert results["live"] != results["none"]
 
 

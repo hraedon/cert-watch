@@ -26,11 +26,17 @@ retained certificate history when migration 0046 backfills older lineage.
 No match returns 404. More than one in-binding match returns 409 without naming
 the endpoints. Uploaded certificates cannot be targeted.
 
-`outcome` is required and is `started`, `failed` or `succeeded`. S2 accepts
-`started` and `failed`; until deployment verification ships, `succeeded`
-returns `503 {"error":"renewal verification is not available yet"}` and
-stores nothing. It still counts against both request-rate limits, so a 429 can
-mask that 503 after a caller exhausts either budget. Optional fields are:
+`outcome` is required and is `started`, `failed` or `succeeded`. A successful
+report moves an open, failed or newly created attempt to `verifying`, ends any
+stall-suppression lease, and queues an immediate normal scan of the monitored
+endpoint. The request never scans inline. If already-stored scan evidence
+matches `new_fingerprint`, the response can be `verified` immediately. A
+success claim never closes an existing `renewal_not_deployed` condition; a
+later stored scan must do that. An endpoint with no scanned leaf returns
+`409 {"error":"endpoint has not been scanned yet; report again after its first scan"}`
+for `succeeded` unless `new_fingerprint` is supplied. A supplied fingerprint
+equal to the attempt baseline is retained in report history with `no_change`,
+but is not applied as evidence. Optional fields are:
 
 | Field | Contract |
 |---|---|
@@ -55,6 +61,20 @@ Accepted reports return status 202:
 ```json
 {"report_id": "7f3a1b9c4d2e4870a6c5e8d1f2b3a490", "attempt_id": "…", "state": "open", "effect": "applied"}
 ```
+
+Send `new_fingerprint` whenever the automation knows the certificate it meant
+to deploy. That is the exact verification target. For any `succeeded` report,
+cert-watch can use a replaced certificate as the attempt baseline only when
+its replacement by the current leaf was observed in the preceding 24 hours,
+the endpoint has not previously replaced that current leaf (a flap), and no
+earlier attempt has verified or used the current leaf as its baseline.
+Otherwise the served leaf becomes the new attempt's baseline and a later scan
+must observe a change. An explicit `cert_fingerprint` naming a replaced
+certificate retains the seven-day endpoint lookup behavior described above;
+that wider addressing window does not change the baseline rules.
+
+A first report whose `new_fingerprint` equals the baseline is stored with
+`"effect":"no_change"` and returns `"state":null`, because no attempt exists.
 
 `report_id` is an opaque random identifier and carries no ordering information.
 History is ordered newest-first by an internal sequence that is never exposed.

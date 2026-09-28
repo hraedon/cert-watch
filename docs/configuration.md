@@ -107,6 +107,7 @@ settings that can also be saved from the web interface.
 | `CERT_WATCH_SCHED_MIN` | `0` | yes | Minute of the daily scan. Range 0–59. |
 | `CERT_WATCH_RENEWAL_WINDOW_DAYS` | `30` | yes | A certificate this close to expiry with no successor raises a *renewal stalled* alert. `0` disables it. Range 0–365. |
 | `CERT_WATCH_RENEWAL_REPORT_LEASE_HOURS` | `24` | yes | Hours a newly opened renewal report attempt remains active. Repeated reports never extend the stored lease. Range 1–168. |
+| `CERT_WATCH_RENEWAL_VERIFY_GRACE_MINUTES` | `5` | yes | Minutes after a successful renewal report before an unchanged scan can raise a renewal-not-deployed alert (5–15). Range 5–15. |
 | `CERT_WATCH_HISTORY_RETENTION_DAYS` | `365` |  | Days of per-scan certificate history to keep. `0` keeps it forever. Range 0–3650. |
 | `CERT_WATCH_ALERT_RETENTION_DAYS` | `90` | yes | Days of delivered alerts to keep; undelivered ones are kept four times as long. `0` keeps them forever. Range 0–3650. |
 | `CERT_WATCH_AUDIT_RETENTION_DAYS` | `90` |  | Days of audit log to keep. `0` keeps it forever. Range 0–3650. |

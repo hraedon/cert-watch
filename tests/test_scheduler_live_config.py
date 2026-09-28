@@ -107,7 +107,9 @@ def test_scheduled_scan_executes_deferred_operations_when_scan_batch_raises(
 
 def test_explicit_scan_honors_tls_and_drift_settings(monkeypatch, tmp_path):
     settings = _settings(tmp_path, tls_verify=True, drift_alerts=False)
-    scan = AsyncMock(return_value=object())
+    scan = AsyncMock(
+        return_value=SimpleNamespace(leaf=SimpleNamespace(fingerprint_sha256="a" * 64))
+    )
     store = AsyncMock(return_value="leaf")
     monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", scan)
     monkeypatch.setattr("cert_watch.routes.hosts.store_scanned_async", store)
@@ -271,10 +273,13 @@ def test_explicit_scan_bypasses_cadence(monkeypatch, tmp_path):
                                             scan_interval_hours=72)
     _history(settings, "manual.example.invalid")
     assert scheduler.get_hosts_due_for_scan(settings.db_path, now=_Clock.current) == []
-    scan = AsyncMock(return_value=object())
+    scan = AsyncMock(
+        return_value=SimpleNamespace(leaf=SimpleNamespace(fingerprint_sha256="a" * 64))
+    )
     monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", scan)
     monkeypatch.setattr(
-        "cert_watch.routes.hosts.store_scanned_async", AsyncMock(return_value="leaf"),
+        "cert_watch.routes.hosts.store_scanned_async",
+        AsyncMock(return_value="leaf"),
     )
     assert asyncio.run(_scan_and_store(
         "manual.example.invalid", 443, settings.db_path, settings,

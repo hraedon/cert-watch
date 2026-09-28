@@ -233,7 +233,7 @@ class AlertStore:
         from cert_watch.database.repo import SqliteAlertRepository
         return [
             SqliteAlertRepository._row_to_alert(row)
-            for row in rows if row["status"] == "sent"
+            for row in rows if row["status"] in {"sending", "sent"}
         ]
 
     def claim_rule_firing(

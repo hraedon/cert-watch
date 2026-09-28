@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -17,7 +18,11 @@ from typing import TYPE_CHECKING, Any
 from cert_watch.config import Settings, publish_settings
 from cert_watch.database import SqliteAlertRepository, SqliteHostRepository, get_write_lock
 from cert_watch.scan import DeferredPostCommit, _evaluate_posture, scan_host, store_scanned
-from cert_watch.scheduler import SystemClock, get_hosts_due_for_scan
+from cert_watch.scheduler import (
+    SystemClock,
+    claim_hosts_due_for_scan,
+    release_host_scan_claim,
+)
 
 if TYPE_CHECKING:
     from cert_watch.scheduler import Clock
@@ -47,6 +52,7 @@ class SchedulerContext:
     _scan_runner: Callable[..., dict[str, int]] | None = field(
         default=None, init=False, repr=False,
     )
+    _scan_claim_owner: str = field(default_factory=lambda: uuid.uuid4().hex, init=False)
 
     def __post_init__(self) -> None:
         self._job_config = _JobConfig(self.settings, self.alert_cfg, self.webhook_cfg)
@@ -95,8 +101,9 @@ class SchedulerContext:
         s = config.settings
         host_repo = SqliteHostRepository(s.db_path)
         all_hosts = host_repo.list_all()
-        hosts = get_hosts_due_for_scan(
+        hosts = claim_hosts_due_for_scan(
             s.db_path,
+            owner=self._scan_claim_owner,
             hour=s.sched_hour,
             minute=s.sched_min,
             now=self._clock.now(),
@@ -127,11 +134,75 @@ class SchedulerContext:
                     result, config, deferred_operations
                 ),
                 settings=s,
+                scan_succeeded=lambda host, port, result, started: self._scan_verified(
+                    config, host, port, result, started
+                ),
+                scan_failed=lambda host, port, started: self._scan_blocked(
+                    config, host, port, started
+                ),
             )
         finally:
             for deferred in deferred_operations:
                 _execute_deferred_post_commit(deferred)
         return result
+
+    def _scan_verified(
+        self, config: _JobConfig, hostname: str, port: int, result: Any,
+        started_at: datetime,
+    ) -> None:
+        try:
+            from cert_watch.renewal_verification import evaluate_after_scan
+
+            evaluate_after_scan(
+                config.settings.db_path,
+                hostname,
+                port,
+                result.leaf.fingerprint_sha256,
+                started_at=started_at,
+                settings=config.settings,
+            )
+        except Exception:
+            logger.exception("renewal verification failed for %s:%s", hostname, port)
+            try:
+                from cert_watch.renewal_verification import (
+                    mark_verification_evaluation_error,
+                )
+
+                mark_verification_evaluation_error(
+                    config.settings.db_path,
+                    hostname,
+                    port,
+                    started_at=started_at,
+                    settings=config.settings,
+                )
+            except Exception:
+                logger.exception(
+                    "could not back off renewal verification for %s:%s", hostname, port
+                )
+        finally:
+            release_host_scan_claim(
+                config.settings.db_path, hostname, port, owner=self._scan_claim_owner
+            )
+
+    def _scan_blocked(
+        self, config: _JobConfig, hostname: str, port: int, started_at: datetime
+    ) -> None:
+        try:
+            from cert_watch.renewal_verification import mark_verification_blocked
+
+            mark_verification_blocked(
+                config.settings.db_path,
+                hostname,
+                port,
+                started_at=started_at,
+                settings=config.settings,
+            )
+        except Exception:
+            logger.exception("could not defer renewal verification for %s:%s", hostname, port)
+        finally:
+            release_host_scan_claim(
+                config.settings.db_path, hostname, port, owner=self._scan_claim_owner
+            )
 
     def _store_with_lock(
         self, result: Any, config: _JobConfig, deferred_operations: list[DeferredPostCommit],
@@ -169,6 +240,7 @@ class SchedulerContext:
         from cert_watch.alerting.model import ALERT_CYCLE_BUDGET_SECONDS
         from cert_watch.alerting.rules.expiry import evaluate_all_certs
         from cert_watch.alerting.rules.renewal import evaluate_renewal_window
+        from cert_watch.alerting.rules.renewal_reports import evaluate_renewal_report_alerts
 
         config = self._snapshot()
         s = config.settings
@@ -178,6 +250,9 @@ class SchedulerContext:
             evaluate_all_certs(s.db_path, repo, urgent_only=True)
             evaluate_renewal_window(
                 s.db_path, repo, s.renewal_window_days, closed_sent=closed_sent,
+            )
+            evaluate_renewal_report_alerts(
+                s.db_path, repo, base_url=s.base_url, closed_sent=closed_sent,
             )
             self._resolve_closed_alerts(config, closed_sent)
             deadline = self._clock.monotonic() + ALERT_CYCLE_BUDGET_SECONDS
@@ -202,6 +277,9 @@ class SchedulerContext:
         evaluate_all_certs(s.db_path, repo)
         evaluate_renewal_window(
             s.db_path, repo, s.renewal_window_days, closed_sent=closed_sent,
+        )
+        evaluate_renewal_report_alerts(
+            s.db_path, repo, base_url=s.base_url, closed_sent=closed_sent,
         )
         self._resolve_closed_alerts(config, closed_sent)
         self._digest_deadline = self._clock.monotonic() + ALERT_CYCLE_BUDGET_SECONDS
