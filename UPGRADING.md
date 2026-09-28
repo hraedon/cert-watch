@@ -23,43 +23,7 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
-## Upgrading from 1.1.0
-
-API-key audit actors now use the stable `api_key:<id>` format instead of the
-key's display name. The display name is retained as `api_key_name` in the
-audit event's `detail` object. Update SIEM rules or other audit consumers that
-match API-key events by actor name; human-user actor values are unchanged.
-The Activity actor filter accepts the stored value, a bare full id, the
-displayed eight-digit short id, or the API-key display name. Key rows are
-labelled as API keys even when a human and a key share the same name.
-
-Generic webhook templates use JSON mode only when, after leading BOMs and
-whitespace are removed, they start with `{` and parse as a JSON object after
-neutral placeholder substitution. JSON string values are escaped for one JSON
-level; JSON embedded inside a string is not escaped a second time. Text
-templates remain `text/plain`, have control characters removed from values,
-and are not escaped for structured formats such as form encoding.
-
-After this version, a generic webhook template that starts with `{` after
-leading BOMs and whitespace but is not valid JSON after neutral substitution
-is refused when saved and at send time. This is the only delivery behaviour
-change for existing templates; startup logs a warning naming the generic
-channel when an environment-provided or previously saved template would be
-refused.
-
-### Migration 0044
-
-Migration **0044** adds a classifier version to each persisted endpoint
-renewal result and backfills the rows using the current classifier. On later
-upgrades, startup refreshes only rows written by an older classifier version;
-reads ignore a mismatched row, so they never serve an old classification.
-
-The migration also replaces the certificate-history insert trigger. A
-chronologically appended observation of the current fingerprint preserves the
-cached classification when it cannot add classifier evidence. New fingerprint
-periods, out-of-order observations, a later observation that supplies missing
-certificate validity, retention pruning, and every history update or delete
-still invalidate or recompute the affected endpoint.
+## Upgrading from 1.1.1 (unreleased)
 
 ### Migration 0045
 
@@ -83,6 +47,45 @@ source-and-endpoint-scoped idempotency records. It does not backfill or
 reinterpret the existing `renewal_status` column; that compatibility
 transition is intentionally deferred to the next slice. Endpoint deletion
 removes all of the new endpoint-owned data.
+
+## Upgrading from 1.1.0 to 1.1.1
+
+API-key audit actors now use the stable `api_key:<id>` format instead of the
+key's display name. The display name is retained as `api_key_name` in the
+audit event's `detail` object. Update SIEM rules or other audit consumers that
+match API-key events by actor name; human-user actor values are unchanged.
+The Activity actor filter accepts the stored value, a bare full id, the
+displayed eight-digit short id, or the API-key display name. Key rows are
+labelled as API keys even when a human and a key share the same name.
+
+Generic webhook templates use JSON mode only when, after leading BOMs and
+whitespace are removed, they start with `{` and parse as a JSON object after
+neutral placeholder substitution. JSON string values are escaped for one JSON
+level; JSON embedded inside a string is not escaped a second time. Text
+templates remain `text/plain`, have control characters removed from values,
+and are not escaped for structured formats such as form encoding.
+
+After this version, a generic webhook template that starts with `{` after
+leading BOMs and whitespace but is not valid JSON after neutral substitution
+is refused when saved and at send time, as is a JSON template with any
+unquoted placeholder other than `{{threshold_days}}`. This is the only
+delivery behaviour change for existing templates; startup logs a warning naming the generic
+channel when an environment-provided or previously saved template would be
+refused.
+
+### Migration 0044
+
+Migration **0044** adds a classifier version to each persisted endpoint
+renewal result and backfills the rows using the current classifier. On later
+upgrades, startup refreshes only rows written by an older classifier version;
+reads ignore a mismatched row, so they never serve an old classification.
+
+The migration also replaces the certificate-history insert trigger. A
+chronologically appended observation of the current fingerprint preserves the
+cached classification when it cannot add classifier evidence. New fingerprint
+periods, out-of-order observations, a later observation that supplies missing
+certificate validity, retention pruning, and every history update or delete
+still invalidate or recompute the affected endpoint.
 
 ## Upgrading from 1.0.4 to 1.1.0
 
