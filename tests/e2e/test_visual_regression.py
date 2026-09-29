@@ -253,7 +253,16 @@ def renewal_visual_server(
         "CERT_WATCH_ALLOW_UNAUTH": "1",
     }
     proc = subprocess.Popen(
-        [sys.executable, "-m", "cert_watch", "--host", "127.0.0.1", "--port", str(port)],
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "tests.e2e._detail_app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
