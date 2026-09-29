@@ -1,9 +1,9 @@
 # Access control
 
 This page explains who can sign in to cert-watch, what each person can do once
-signed in, and how to narrow a person to part of the estate. It describes 1.0
-behaviour. If you are upgrading from 0.9, read the access-control section of
-[UPGRADING.md](../UPGRADING.md) first: several defaults became stricter.
+signed in, and how to narrow a person to part of the estate. It describes
+current behaviour. If you are upgrading from 0.9, read the access-control
+section of [UPGRADING.md](../UPGRADING.md) first: several defaults became stricter.
 
 ## The three kinds of account
 
@@ -136,6 +136,8 @@ estate. A `renewal-report` key has no read, write or settings permissions. It
 can reach only `GET /api/renewal-reports` and `POST /api/renewal-reports` and
 is refused everywhere else, including health, metrics, HTML and static-file
 paths. See the [renewal-report API reference](api.md#renewal-reports).
+The operator workflow, report semantics, and hook examples are in
+[Reporting renewals from automation](renewal-reports.md).
 
 A renewal-report key must be bound explicitly either to all endpoints or to
 one or more tags. Tag bindings match the endpoint's **host tags only**;

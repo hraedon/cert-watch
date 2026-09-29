@@ -25,6 +25,8 @@ condition and the automation-facing `renewal_needed` webhook; the overdue event
 is still recorded. It never suppresses expiry warnings or expired alerts.
 Repeated starts do not extend or re-grant the lease. Renewal completion is
 established by observing a successor certificate, not by an operator report.
+For the reporting API and tested Certbot/acme.sh hooks, see
+[Reporting renewals from automation](renewal-reports.md).
 
 **A failure condition clears when any of these happens:**
 
@@ -293,7 +295,10 @@ an Ansible play) can act on it without calling cert-watch back:
 
 `event_id` is a unique 32-character hexadecimal id for one webhook emission.
 It stays the same across delivery retries, so receivers can use it as an
-idempotency key, and is independent of the Event stream's database row id.
+idempotency key for receiving the webhook, and is independent of the Event
+stream's database row id. Echo it as the renewal report's `correlation_id` to
+link the request with `started`, `succeeded`, and `failed` outcomes; use a
+separate `Idempotency-Key` header for retrying a report delivery.
 `cert_watch_url` is included when `CERT_WATCH_BASE_URL` is set. The event is
 sent at most once per endpoint per day and retried with backoff if the
 destination fails. Disabling `renewal_overdue` under **Settings → Event

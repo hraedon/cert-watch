@@ -23,93 +23,53 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
-## Upgrading from 1.1.1 (unreleased)
+## Upgrading from 1.1.1 to 1.2.0
 
-### Migration 0045
+1.2.0 adds durable renewal reports, scan-backed deployment verification,
+renewal-failed and renewal-not-deployed alerts, a single renewal state across
+the UI and APIs, and least-privilege reporting keys. Automation can report
+`started`, `succeeded`, and `failed`, but a claim never suppresses expiry alerts
+or proves that a new certificate is deployed. Read
+[Reporting renewals from automation](docs/renewal-reports.md) before connecting
+hooks.
 
-Migration **0045** adds an explicit binding and bound-tag list to API keys.
-Every existing `read`, `write` and `admin` key is assigned `binding='all'`, so
-its access does not change. New `renewal-report` keys must deliberately choose
-all endpoints or at least one host tag.
+Startup applies migrations **0045–0049** in order:
 
-Renewal-report key hashes use a format older binaries do not recognize, so an
-older cert-watch rejects those credentials. Database rollback is not
-supported: stop cert-watch and restore the pre-migration backup before
-starting an older binary. Do not point an older binary at the migrated
-database.
+- **0045** adds explicit API-key binding metadata. Existing read, write, and
+  admin keys retain all-endpoint access. New `renewal-report` keys must choose
+  either host tags or all endpoints, and use a hash format that older binaries
+  reject safely.
+- **0046** adds append-only renewal reports, attempt and correlation history,
+  and endpoint-scoped idempotency. Deleting an endpoint removes this
+  endpoint-owned history, so re-adding the address cannot inherit it.
+- **0047** converts every stored `renewal_status=in_progress` host into a
+  leased attempt beginning at upgrade time, and makes the old two-value field
+  a compatibility view over durable reports. The lease is 24 hours by default.
+- **0048** adds scan-backed verification evidence and short-lived scan claims.
+  A `succeeded` report queues a normal scan; only stored scan evidence verifies
+  deployment. The unchanged-scan grace defaults to 5 minutes and is
+  configurable from 5 through 15 minutes.
+- **0049** adds and backfills durable renewal-failure conditions and alert-rule
+  wake times. A retained failure without stored evidence of resolution may
+  alert after upgrade and remains open until a qualifying scan, endpoint
+  deletion, or an explicit operator clear.
 
-### Migration 0046
+Pay particular attention to hosts left **in progress** before the upgrade.
+Their migration lease expires after the configured interval, so hosts that
+were left in that state for weeks start receiving renewal-stalled notices 24
+hours after upgrade under the default. Re-marking the same served certificate
+can show new work but cannot grant a second stalled-muting lease; a served
+successor ends the old stalled condition.
 
-Migration **0046** adds the append-only renewal report ledger with opaque public
-identifiers and an internal non-reusing sequence, retained attempt and
-correlation history, a one-current-attempt-per-endpoint projection, and
-source-and-endpoint-scoped idempotency records. It does not backfill or
-reinterpret the existing `renewal_status` column; that compatibility
-transition is intentionally deferred to the next slice. Endpoint deletion
-removes all of the new endpoint-owned data.
+Existing alert types keep their previous PagerDuty deduplication and
+Alertmanager fingerprint keys byte-for-byte. Only the new
+`renewal_failed` and `renewal_not_deployed` types use their new hashed provider
+keys, so an upgrade does not split or orphan existing provider incidents.
 
-### Migration 0047
-
-Migration **0047** converts every host stored as `in_progress` into an open
-renewal attempt. Its lease begins at upgrade time and lasts for
-`renewal_report_lease_hours` (24 hours by default). Each conversion is written
-to the audit log. The compatibility column remains in this release, but reads
-derive `renewal_status` from the attempt and all existing writes create or
-cancel durable reports.
-
-Hosts left “in progress” for weeks will therefore start receiving
-renewal-stalled notices 24 hours after the upgrade. Re-marking the same served
-certificate shows work as in progress but does not stop those notices because
-the migration used that leaf's one stall-suppressing lease. A new certificate,
-or the lease lapsing followed by an actual renewal, stops them.
-
-### Migration 0048
-
-Migration **0048** adds verification counters and timestamps, including the
-accepted-success time that anchors grace and check bands and the fingerprint
-that actually verified an attempt, to renewal attempts and a short-lived
-endpoint scan-claim table. Existing attempts keep
-their current state. New successful reports are verified by normal stored
-scans; the request path performs no network I/O. Configure the grace before an
-unchanged scan can raise `renewal_not_deployed` with
-`renewal_verify_grace_minutes` (5 minutes by default, accepted range 5–15).
-Rollback requires restoring the pre-migration backup.
-
-### Migration 0049
-
-Migration **0049** (still unreleased, so its backfill is updated in place) adds
-the originating `failure_attempt_id`, `failure_reported_at`,
-`failure_cleared_at`, the condition's expected fingerprint, and a rule-only
-wake timestamp to renewal attempts. It
-backfills the originating attempt and first retained,
-accepted failed report for every stored failure, then walks each endpoint's
-attempt history to carry the earliest unresolved failure across later attempts.
-Only stored scan history, certificate-lineage evidence, or a later attempt's
-durable verified result satisfying the baseline/expected-fingerprint predicate
-ends a historical condition; a changed baseline on a later attempt is not
-evidence. The backfill cannot infer an observation that was never committed to
-stored scan history, so such a condition remains open for a later scan or an
-operator clear.
-Every still-unresolved stored failure is
-therefore eligible to alert once at the first rule pass after upgrade,
-regardless of its age. It also fills missing historical `not_deployed` raise
-times from the attempt's accepted report time.
-
-The durable condition remains attached to later attempts until stored scan
-evidence shows a leaf different from its baseline. A carrying attempt's own
-`new_fingerprint` takes precedence; otherwise the original failure report's
-expected fingerprint applies, and without either claim any successor clears
-the condition. These condition rules do not alter the carrying attempt's
-renewal state or verification behavior. A failure reported before any baseline
-can be
-cleared by scan evidence only when it has an explicit matching
-`new_fingerprint`. Endpoint deletion or an authorized explicit operator clear
-also ends the condition. A start report, lease, bare success claim, lease
-expiry, or echoed `renewal_status=pending` write does not clear it. Existing
-report messages,
-tools, correlations, key identities and recipient identities are not copied
-into the marker or digest. Rollback requires restoring the pre-migration
-backup.
+The migrations are forward-only. To roll back, stop cert-watch, restore the
+pre-migration backup created before **0045**, and then start 1.1.1. Do not run
+an older binary against the migrated database. Renewal-report credentials are
+also deliberately unusable by the older verifier.
 
 ## Upgrading from 1.1.0 to 1.1.1
 

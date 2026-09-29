@@ -10,6 +10,10 @@ remain valid. Browse uses the same vocabulary in its query string.
 
 ## Renewal reports
 
+For setup, outcome behavior, troubleshooting, and tested Certbot and acme.sh
+hooks, see [Reporting renewals from automation](renewal-reports.md). This
+section is the compact wire-level reference.
+
 Renewal automation uses a dedicated `renewal-report` API key. Send it as
 `Authorization: Bearer cwk_…`. These keys can call only the two routes below;
 ordinary read, write and admin API keys cannot call them. The normal per-IP

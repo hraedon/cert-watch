@@ -1,0 +1,140 @@
+#!/bin/sh
+# Send one renewal report. The API contract is documented at:
+# https://github.com/hraedon/cert-watch/blob/main/docs/renewal-reports.md
+#
+# Dependencies: curl, openssl (for --new-pem and idempotency), and python3.
+# The API key is read from CW_RENEWAL_REPORT_KEY or from the file named by
+# CW_RENEWAL_REPORT_KEY_FILE. It is never accepted as a command-line argument.
+
+set -eu
+
+usage() {
+    echo "usage: cw-report.sh OUTCOME [--host HOST --port PORT | --cert-fingerprint SHA256]" >&2
+    echo "       [--message TEXT] [--tool NAME] [--correlation ID]" >&2
+    echo "       [--new-fingerprint SHA256 | --new-pem FILE]" >&2
+    exit 2
+}
+
+[ "$#" -ge 1 ] || usage
+outcome=$1
+shift
+
+host=${CW_HOST:-}
+port=${CW_PORT:-}
+cert_fingerprint=${CW_CERT_FINGERPRINT:-}
+message=${CW_MESSAGE:-}
+tool=${CW_TOOL:-}
+correlation=${CW_CORRELATION_ID:-}
+new_fingerprint=${CW_NEW_FINGERPRINT:-}
+new_pem=
+
+while [ "$#" -gt 0 ]; do
+    case $1 in
+        --host) [ "$#" -ge 2 ] || usage; host=$2; shift 2 ;;
+        --port) [ "$#" -ge 2 ] || usage; port=$2; shift 2 ;;
+        --cert-fingerprint) [ "$#" -ge 2 ] || usage; cert_fingerprint=$2; shift 2 ;;
+        --message) [ "$#" -ge 2 ] || usage; message=$2; shift 2 ;;
+        --tool) [ "$#" -ge 2 ] || usage; tool=$2; shift 2 ;;
+        --correlation) [ "$#" -ge 2 ] || usage; correlation=$2; shift 2 ;;
+        --new-fingerprint) [ "$#" -ge 2 ] || usage; new_fingerprint=$2; shift 2 ;;
+        --new-pem) [ "$#" -ge 2 ] || usage; new_pem=$2; shift 2 ;;
+        *) usage ;;
+    esac
+done
+
+case $outcome in
+    started|succeeded|failed) ;;
+    *) usage ;;
+esac
+
+if [ -n "$host" ] || [ -n "$port" ]; then
+    [ -n "$host" ] && [ -n "$port" ] && [ -z "$cert_fingerprint" ] || usage
+else
+    [ -n "$cert_fingerprint" ] || usage
+fi
+[ -z "$new_pem" ] || [ -z "$new_fingerprint" ] || usage
+
+if [ -n "$new_pem" ]; then
+    new_fingerprint=$(
+        openssl x509 -in "$new_pem" -noout -fingerprint -sha256 |
+            sed 's/.*=//; s/://g' | tr '[:upper:]' '[:lower:]'
+    )
+    [ -n "$new_fingerprint" ] || {
+        echo "could not read a SHA-256 fingerprint from $new_pem" >&2
+        exit 1
+    }
+fi
+
+if [ -n "${CW_RENEWAL_REPORT_KEY:-}" ]; then
+    api_key=$CW_RENEWAL_REPORT_KEY
+elif [ -n "${CW_RENEWAL_REPORT_KEY_FILE:-}" ]; then
+    [ -r "$CW_RENEWAL_REPORT_KEY_FILE" ] || {
+        echo "renewal-report key file is not readable" >&2
+        exit 1
+    }
+    api_key=$(tr -d '\r\n' <"$CW_RENEWAL_REPORT_KEY_FILE")
+else
+    echo "set CW_RENEWAL_REPORT_KEY or CW_RENEWAL_REPORT_KEY_FILE" >&2
+    exit 1
+fi
+[ -n "$api_key" ] || {
+    echo "renewal-report key is empty" >&2
+    exit 1
+}
+
+base_url=${CW_BASE_URL:-http://127.0.0.1:8000}
+idempotency_key=${CW_IDEMPOTENCY_KEY:-}
+if [ -z "$idempotency_key" ]; then
+    idempotency_key=$(openssl rand -hex 16)
+fi
+
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/cw-report.XXXXXX")
+trap 'rm -rf "$work_dir"' EXIT HUP INT TERM
+chmod 700 "$work_dir"
+
+# Build JSON with a real encoder so messages, hostnames, and tool output cannot
+# break quoting. Values travel through the environment, not process argv.
+CW_JSON_OUTCOME=$outcome \
+CW_JSON_HOST=$host \
+CW_JSON_PORT=$port \
+CW_JSON_CERT_FINGERPRINT=$cert_fingerprint \
+CW_JSON_MESSAGE=$message \
+CW_JSON_TOOL=$tool \
+CW_JSON_CORRELATION=$correlation \
+CW_JSON_NEW_FINGERPRINT=$new_fingerprint \
+python3 - <<'PY' >"$work_dir/body.json"
+import json
+import os
+
+body = {"outcome": os.environ["CW_JSON_OUTCOME"]}
+optional = {
+    "hostname": "CW_JSON_HOST",
+    "cert_fingerprint": "CW_JSON_CERT_FINGERPRINT",
+    "message": "CW_JSON_MESSAGE",
+    "tool": "CW_JSON_TOOL",
+    "correlation_id": "CW_JSON_CORRELATION",
+    "new_fingerprint": "CW_JSON_NEW_FINGERPRINT",
+}
+for field, variable in optional.items():
+    if os.environ.get(variable):
+        body[field] = os.environ[variable]
+if os.environ.get("CW_JSON_PORT"):
+    body["port"] = int(os.environ["CW_JSON_PORT"])
+print(json.dumps(body, ensure_ascii=False, separators=(",", ":")))
+PY
+
+# Keep the bearer token out of curl's argv. The temporary config is private and
+# is removed by the trap; argv contains only its path.
+umask 077
+{
+    printf 'header = "Authorization: Bearer %s"\n' "$api_key"
+} >"$work_dir/curl.conf"
+unset api_key
+
+curl --config "$work_dir/curl.conf" \
+    --fail-with-body --silent --show-error \
+    --header "Content-Type: application/json" \
+    --header "Idempotency-Key: $idempotency_key" \
+    --request POST --data-binary "@$work_dir/body.json" \
+    --url "${base_url%/}/api/renewal-reports"
+printf '\n'
