@@ -167,8 +167,9 @@ def test_add_drawer_visual(
 _POPULATED_MASKS = [*_MASKS, "tbody td:nth-child(3)"]  # Condition column (dates + relative strings)
 _HOME_POPULATED_MASKS = [*_MASKS, ".cw-home-state", ".cw-home-foot"]
 _RENEWAL_HOME_MASKS = [
-    *_HOME_POPULATED_MASKS,
-    "[data-testid=home-monitoring-row] .cw-home-detail:last-child",
+    *_MASKS,
+    ".cw-home-foot",
+    "[data-testid=home-monitoring-row]",
 ]
 _RENEWAL_DETAIL_MASKS = [
     *_MASKS,
