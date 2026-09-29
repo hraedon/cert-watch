@@ -304,6 +304,8 @@ def test_renewal_ui_visuals(
     page.goto(f"{base}{path}")
     page.evaluate("document.fonts.ready")
     page.wait_for_timeout(400)
+    if surface == "detail":
+        page.get_by_test_id("renewal-panel").scroll_into_view_if_needed()
     assert page.evaluate("document.documentElement.scrollWidth === window.innerWidth")
     assert_snapshot(
         page,
