@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from cert_watch.filters import compute_urgency
-from cert_watch.presenters.status_display import condition_display
+from cert_watch.presenters.status_display import condition_display, renewal_display
 from cert_watch.scan_freshness import ScanEvidence
 from cert_watch.services.browse_page import BrowsePageData
 from cert_watch.tags import parse_tags
@@ -125,10 +125,11 @@ class PivotGroupView:
 
     @property
     def renewal_flag_label(self) -> str:
-        return {
-            "stalled": "Renewal stalled",
-            "in_progress": "Renewal in progress",
-        }.get(self.renewal, "")
+        return (
+            renewal_display(self.renewal).label
+            if self.renewal in {"not_deployed", "failed", "stalled", "verifying", "in_progress"}
+            else ""
+        )
 
     @property
     def delivery_flag_label(self) -> str:
@@ -429,10 +430,11 @@ def _present_entry(
     monitoring_label, monitoring_cause = _monitoring_display(raw, status, monitoring)
     renewal = str(raw.get("renewal") or "unknown")
     delivery = str(raw.get("delivery") or "unrouted")
-    renewal_flag_label = {
-        "stalled": "Renewal stalled",
-        "in_progress": "Renewal in progress",
-    }.get(renewal, "")
+    renewal_flag_label = (
+        renewal_display(renewal).label
+        if renewal in {"not_deployed", "failed", "stalled", "verifying", "in_progress"}
+        else ""
+    )
     delivery_flag_label = {
         "failing": "Can't be delivered",
         "unrouted": "Unrouted",

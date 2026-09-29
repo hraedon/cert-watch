@@ -97,6 +97,8 @@ def test_every_home_number_opens_exactly_the_rows_it_counts(
             "home-condition-count-le7",
             "home-condition-count-8to30",
             "home-condition-count-ok",
+            "home-renewal-count-failed",
+            "home-renewal-count-not-deployed",
             "home-monitoring-count-failing",
             "home-monitoring-count-never",
             "home-monitoring-count-current",
@@ -155,6 +157,63 @@ def test_home_rows_are_bounded_and_ranked_by_expiry(
     assert [row.name for row in expired] == [
         f"rank-{index:02d}.example.test" for index in range(6)
     ]
+
+
+def test_home_renewal_outcomes_follow_expiry_rows_and_link_exact_population(
+    reload_app, tmp_path, monkeypatch
+) -> None:
+    from cert_watch.database.connection import _connect
+
+    db, _settings = _seed(tmp_path, "cert-watch.sqlite3")
+    now = "2026-09-28T12:00:00+00:00"
+    with _connect(db) as conn:
+        hosts = conn.execute(
+            "SELECT id,hostname FROM hosts ORDER BY hostname LIMIT 2"
+        ).fetchall()
+        for index, (host, state) in enumerate(
+            zip(hosts, ("failed", "not_deployed"), strict=True)
+        ):
+            attempt_id = f"home-renewal-{index}"
+            conn.execute(
+                """INSERT INTO renewal_attempts
+                   (attempt_id,host_id,is_current,source,state,opened_seq,
+                    received_at,raised_at,failure_attempt_id,failure_reported_at)
+                   VALUES (?,?,1,'test',?,?,?, ?,?,?)""",
+                (
+                    attempt_id,
+                    host["id"],
+                    "verifying" if state == "failed" else state,
+                    index + 1,
+                    now,
+                    now if state == "not_deployed" else None,
+                    attempt_id if state == "failed" else None,
+                    now if state == "failed" else None,
+                ),
+            )
+        conn.commit()
+
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", lambda self: None)
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.stop", lambda self: None)
+    with TestClient(reload_app().app) as client:
+        response = client.get("/")
+        rows = response.context["risk_rows"]
+        renewal_rows = [row for row in rows if row.condition in {"failed", "not_deployed"}]
+        assert [row.condition for row in renewal_rows] == ["failed", "not_deployed"]
+        assert rows.index(renewal_rows[0]) >= sum(
+            row.condition in {"expired", "le7", "8to30"} for row in rows
+        )
+        assert renewal_rows[0].condition_label == (
+            "Renewal failed · 2026-09-28 12:00 UTC"
+        )
+        assert renewal_rows[1].condition_label == (
+            "Deployment not confirmed · 2026-09-28 12:00 UTC"
+        )
+        for testid in (
+            "home-renewal-count-failed",
+            "home-renewal-count-not-deployed",
+        ):
+            href, expected = _anchor(response.text, testid)
+            assert _row_count(client, href) == expected == 1
 
 
 def test_home_escapes_an_unmapped_scan_error(

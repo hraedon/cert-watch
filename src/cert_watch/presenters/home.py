@@ -180,33 +180,54 @@ def _condition_label(days: int | None) -> str:
 
 
 def _risk_rows(raw_rows: dict[str, list[dict[str, Any]]]) -> tuple[HomeRiskRow, ...]:
-    rows = [
+    expiry_rows = [
         row
         for state in ("expired", "le7", "8to30")
         for row in raw_rows.get(f"risk:{state}", [])
     ]
-    rows.sort(
+    expiry_rows.sort(
         key=lambda row: (
             row.get("effective_days") is None,
             int(row.get("effective_days") or 0),
             _endpoint_name(row),
         )
     )
-    return tuple(
-        HomeRiskRow(
+    renewal_rows = [
+        row
+        for state in ("failed", "not_deployed")
+        for row in raw_rows.get(f"risk:renewal:{state}", [])
+    ]
+
+    def present(row: dict[str, Any], *, renewal_problem: bool) -> HomeRiskRow:
+        renewal = str(row.get("renewal") or "")
+        if renewal_problem:
+            failed = renewal == "failed"
+            condition_label = "Renewal failed" if failed else "Deployment not confirmed"
+            when = row.get(
+                "renewal_failure_reported_at" if failed else "renewal_raised_at"
+            )
+            condition_label = f"{condition_label} · {_format_datetime(when)}"
+            difference = ""
+        else:
+            condition_label = _condition_label(row.get("effective_days"))
+            difference = _risk_difference(row)
+        return HomeRiskRow(
             detail_url=f"/certificates/{row['id']}",
             name=_endpoint_name(row),
-            condition=str(row.get("condition") or ""),
-            condition_label=_condition_label(row.get("effective_days")),
+            condition=renewal if renewal_problem else str(row.get("condition") or ""),
+            condition_label=condition_label,
             tone=(
                 Tone.CRITICAL
-                if row.get("condition") in {"expired", "le7"}
+                if renewal_problem or row.get("condition") in {"expired", "le7"}
                 else Tone.WARNING
             ),
             owner_name=str(row.get("owner_name") or ""),
-            difference=_risk_difference(row),
+            difference=difference,
         )
-        for row in rows
+
+    return tuple(
+        [present(row, renewal_problem=False) for row in expiry_rows]
+        + [present(row, renewal_problem=True) for row in renewal_rows]
     )
 
 

@@ -17,6 +17,14 @@ All notable changes to cert-watch are documented in this file.
 
 ### Added
 
+- Renewal outcomes now use one precedence across Home, Browse, fleet pivots,
+  detail, and JSON: deployment not confirmed, failed, stalled, verifying,
+  in progress, manual, automation configured, then unknown. Home places failed
+  and unconfirmed endpoints in Certificate risk without adding another block;
+  Browse exposes matching filter chips; and endpoint detail shows the current
+  attempt plus recent reports with host-tag write-scoped automation details
+  and failure controls (#118 S6).
+
 - Durable, append-only renewal reports (`POST`/`GET /api/renewal-reports`)
   and retained attempt history with at most one current attempt per endpoint,
   strict JSON-only 16 KiB ingestion, live host-tag targeting, recent-leaf

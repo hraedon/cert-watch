@@ -205,6 +205,20 @@ Scan now</button>
                     </div>
                 </section>
 
+
+                <section class="cw-panel" data-testid="renewal-panel">
+                    <div class="cw-panel-head">
+                        <h2>Renewal</h2>
+
+                    </div>
+                    <div class="cw-panel-body">
+
+                            <p class="cw-muted">No renewal attempt reported.</p>
+
+
+                    </div>
+                </section>
+
             <section class="cw-panel" data-testid="owner-routing-panel">
                 <div class="cw-panel-head">
                     <h2>Owner &amp; who gets alerted</h2>
@@ -312,7 +326,7 @@ Edit host</summary>
 
                                     </div>
                                     <div class="cw-field wide">
-                                        <label class="cw-label" for="endpoint-renewal-status">Renewal status reported by operator</label>
+                                        <label class="cw-label" for="endpoint-renewal-status">Manual renewal progress</label>
                                         <select id="endpoint-renewal-status"
                                                 name="renewal_status"
                                                 class="cw-select"
@@ -320,9 +334,9 @@ Edit host</summary>
                                                 >
 
                                             <option value="pending"
-                                                    selected>No completion reported</option>
+                                                    selected>No renewal in progress</option>
                                             <option value="in_progress"
-                                                    >In progress — operator reported</option>
+                                                    >Renewal in progress</option>
                                         </select>
 
                                         <p class="cw-hint" id="endpoint-renewal-help">Operator-reported progress is not proof of renewal; it never suppresses expiry or expired alerts. A later scan confirms the replacement certificate.</p>

@@ -9,6 +9,29 @@ from pathlib import Path
 from cert_watch.database.connection import SQLITE_QUERY_CHUNK, _connect, _sql_now
 
 
+def get_renewal_detail(
+    db_path: str | Path, host_id: str, *, report_limit: int = 5
+) -> tuple[dict[str, object] | None, list[dict[str, object]]]:
+    """Return the current attempt and newest reports for endpoint detail."""
+    with _connect(db_path) as conn:
+        attempt_row = conn.execute(
+            "SELECT * FROM renewal_attempts WHERE host_id=? AND is_current=1",
+            (host_id,),
+        ).fetchone()
+        report_rows = conn.execute(
+            """SELECT r.*,
+                      CASE WHEN r.source LIKE 'api_key:%' THEN COALESCE(
+                          (SELECT k.name FROM api_keys k
+                           WHERE k.id=substr(r.source,9)), r.source
+                      ) ELSE r.source END AS source_name
+               FROM renewal_reports r
+               WHERE r.host_id=? ORDER BY r.seq DESC LIMIT ?""",
+            (host_id, report_limit),
+        ).fetchall()
+    attempt = dict(attempt_row) if attempt_row is not None else None
+    return attempt, [dict(row) for row in report_rows]
+
+
 def renewal_attempt_is_live(
     state: str | None,
     lease_expires_at: str | None,

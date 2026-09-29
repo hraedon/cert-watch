@@ -86,7 +86,7 @@ def home(
         status=status,
         axes=axes,
         axis_columns=frozenset(
-            {"condition", "monitoring", "delivery", "chain", "routing"}
+            {"condition", "monitoring", "renewal", "delivery", "chain", "routing"}
         ),
         home=True,
     )

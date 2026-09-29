@@ -26,6 +26,10 @@ import pytest
 pytest.importorskip("playwright")
 from playwright.sync_api import Page, expect
 
+from cert_watch.database.api_keys import SqliteApiKeyRepository
+from cert_watch.database.connection import _connect
+from tests.e2e._seed import seed_detail_estate
+
 
 def _free_port() -> int:
     with socket.socket() as s:
@@ -202,6 +206,112 @@ def populated_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
             proc.kill()
 
 
+@pytest.fixture(scope="module")
+def renewal_visual_server(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[tuple[str, str]]:
+    """A deterministic renewal failure shown across all changed pages."""
+    data_dir: Path = tmp_path_factory.mktemp("cw-visual-renewal")
+    ids = seed_detail_estate(data_dir)
+    db = data_dir / "cert-watch.sqlite3"
+    key, _token = SqliteApiKeyRepository(db).create_key(
+        "deployment-hook", "renewal-report", binding="all"
+    )
+    now = "2026-09-28T12:00:00+00:00"
+    with _connect(db) as conn:
+        host = conn.execute(
+            "SELECT h.id FROM hosts h JOIN certificates c "
+            "ON c.hostname=h.hostname AND c.port=h.port WHERE c.id=?",
+            (ids["current"],),
+        ).fetchone()
+        assert host is not None
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                baseline_fingerprint,received_at,next_check_at,
+                failure_attempt_id,failure_reported_at)
+               VALUES ('visual-attempt',?,1,?,'verifying',1,'old-leaf',?,?,
+                       'visual-attempt',?)""",
+            (host["id"], f"api_key:{key.id}", now, now, now),
+        )
+        conn.execute(
+            """INSERT INTO renewal_reports
+               (report_id,host_id,hostname_snapshot,port_snapshot,outcome,
+                message,tool,correlation_id,received_at,source,effect,attempt_id)
+               SELECT 'visual-report',h.id,h.hostname,h.port,'failed',
+                      'Deployment command returned a non-zero status.',
+                      'deployment-hook','run-2048',?,?,'applied','visual-attempt'
+               FROM hosts h WHERE h.id=?""",
+            (now, f"api_key:{key.id}", host["id"]),
+        )
+        conn.commit()
+    port = _free_port()
+    env = {
+        **os.environ,
+        "CERT_WATCH_DATA_DIR": str(data_dir),
+        "CERT_WATCH_PORT": str(port),
+        "CERT_WATCH_ALLOW_UNAUTH": "1",
+    }
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "cert_watch", "--host", "127.0.0.1", "--port", str(port)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    base = f"http://127.0.0.1:{port}"
+    for _ in range(80):
+        try:
+            with urllib.request.urlopen(f"{base}/healthz", timeout=0.5) as response:
+                if response.status == 200:
+                    break
+        except Exception:  # noqa: BLE001 - startup polling is transient
+            time.sleep(0.1)
+    else:
+        proc.kill()
+        raise RuntimeError("renewal visual server did not become ready")
+    try:
+        yield base, ids["current"]
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+@pytest.mark.visual
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("width,height", [(1440, 900), (390, 844)])
+@pytest.mark.parametrize("surface", ["home", "browse", "detail", "api-keys"])
+def test_renewal_ui_visuals(
+    page: Page,
+    renewal_visual_server: tuple[str, str],
+    assert_snapshot,
+    theme: str,
+    width: int,
+    height: int,
+    surface: str,
+) -> None:
+    base, cert_id = renewal_visual_server
+    path = {
+        "home": "/",
+        "browse": "/browse",
+        "detail": f"/certificates/{cert_id}",
+        "api-keys": "/settings/api-keys",
+    }[surface]
+    page.set_viewport_size({"width": width, "height": height})
+    page.add_init_script(f"localStorage.setItem('cw-theme', '{theme}')")
+    page.goto(f"{base}{path}")
+    page.evaluate("document.fonts.ready")
+    page.wait_for_timeout(400)
+    assert page.evaluate("document.documentElement.scrollWidth === window.innerWidth")
+    assert_snapshot(
+        page,
+        name=f"renewal-{surface}-{theme}-{width}.png",
+        mask_elements=_HOME_POPULATED_MASKS if surface == "home" else _MASKS,
+    )
+
+
 @pytest.mark.visual
 def test_dashboard_populated_visual(
     page: Page, populated_server: str, assert_snapshot
@@ -253,6 +363,8 @@ def test_home_a_blocks_layout_and_every_filtered_link(
         "home-condition-count-le7",
         "home-condition-count-8to30",
         "home-condition-count-ok",
+        "home-renewal-count-failed",
+        "home-renewal-count-not-deployed",
         "home-monitoring-count-failing",
         "home-monitoring-count-never",
         "home-monitoring-count-current",
@@ -279,7 +391,7 @@ def test_home_a_blocks_layout_and_every_filtered_link(
     all_home_hrefs = set(page.locator("main a").evaluate_all(
         "els => els.map(el => el.getAttribute('href')).filter(Boolean)"
     ))
-    assert len(links) == 25
+    assert len(links) == 27
     for href, expected in links:
         page.goto(f"{populated_server}{href}")
         expect(page.get_by_test_id("cert-row")).to_have_count(expected)

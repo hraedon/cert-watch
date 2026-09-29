@@ -168,7 +168,7 @@ def load_browse_page(
         scope_tags=scope_tags,
         status=status,
         axes=axes,
-        axis_columns=frozenset({"condition", "overall"}),
+        axis_columns=frozenset({"condition", "renewal", "overall"}),
     )
     pivot_stats = dict(axis_stats["overall"])
 

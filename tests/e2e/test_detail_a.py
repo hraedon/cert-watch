@@ -87,7 +87,7 @@ def test_detail_a_edit_host_round_trips_every_control(
     page.get_by_label("Runbook URL", exact=True).fill("https://runbooks.example.test/edge-tls")
     page.get_by_label("Scan interval (hours)", exact=True).fill("12")
     page.get_by_label("Alert threshold (days)", exact=True).fill("30")
-    page.get_by_label("Renewal status reported by operator", exact=True).select_option(
+    page.get_by_label("Manual renewal progress", exact=True).select_option(
         "in_progress"
     )
     page.get_by_label("Tags", exact=True).fill("detail-team, edge")
@@ -105,7 +105,7 @@ def test_detail_a_edit_host_round_trips_every_control(
     )
     expect(page.get_by_label("Scan interval (hours)", exact=True)).to_have_value("12")
     expect(page.get_by_label("Alert threshold (days)", exact=True)).to_have_value("30")
-    expect(page.get_by_label("Renewal status reported by operator", exact=True)).to_have_value(
+    expect(page.get_by_label("Manual renewal progress", exact=True)).to_have_value(
         "in_progress"
     )
     expect(page.get_by_label("Tags", exact=True)).to_have_value("detail-team,edge")
@@ -119,7 +119,7 @@ def test_detail_a_edit_host_round_trips_every_control(
     page.get_by_label("Runbook URL", exact=True).fill("")
     page.get_by_label("Scan interval (hours)", exact=True).fill("")
     page.get_by_label("Alert threshold (days)", exact=True).fill("")
-    page.get_by_label("Renewal status reported by operator", exact=True).select_option("pending")
+    page.get_by_label("Manual renewal progress", exact=True).select_option("pending")
     page.get_by_label("Tags", exact=True).fill("detail-team")
     page.get_by_label("Notes", exact=True).fill("")
     page.get_by_test_id("save-host").click()

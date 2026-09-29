@@ -140,6 +140,16 @@ def dashboard_axis_stats(
                        ) AS n
                 FROM inventory
                 WHERE condition IN ('expired', 'le7', '8to30')
+                  AND renewal NOT IN ('failed', 'not_deployed')
+            ),
+            renewal_risk_ranked AS (
+                SELECT etype, ekey, hostname, port, renewal,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY renewal
+                           ORDER BY sort_name ASC
+                       ) AS n
+                FROM inventory
+                WHERE renewal IN ('failed', 'not_deployed')
             ),
             monitoring_ranked AS (
                 SELECT etype, ekey, hostname, port, monitoring,
@@ -204,6 +214,10 @@ def dashboard_axis_stats(
             UNION ALL
             SELECT 'entry', NULL, 'risk:' || condition, etype, ekey, hostname, port
             FROM risk_ranked WHERE n <= 6
+            UNION ALL
+            SELECT 'entry', NULL, 'risk:renewal:' || renewal,
+                   etype, ekey, hostname, port
+            FROM renewal_risk_ranked WHERE n <= 6
             UNION ALL
             SELECT 'entry', NULL, 'monitoring:' || monitoring,
                    etype, ekey, hostname, port

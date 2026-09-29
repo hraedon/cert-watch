@@ -57,7 +57,7 @@ def test_endpoint_settings_save_reopen_and_restore_defaults(
     page.get_by_test_id("edit-host").click()
     interval = page.get_by_label("Scan interval (hours)", exact=True)
     threshold = page.get_by_label("Alert threshold (days)", exact=True)
-    status = page.get_by_label("Renewal status reported by operator", exact=True)
+    status = page.get_by_label("Manual renewal progress", exact=True)
     expect(interval).to_have_value("48")
     expect(threshold).to_have_value("14")
     expect(page.locator("#endpoint-renewal-help")).to_contain_text(

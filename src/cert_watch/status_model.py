@@ -24,7 +24,16 @@ if TYPE_CHECKING:
 
 CONDITIONS = ("expired", "le7", "8to30", "ok")
 MONITORING_STATES = ("current", "failing", "never_scanned", "not_monitored")
-RENEWAL_STATES = ("stalled", "in_progress", "manual", "automation_configured", "unknown")
+RENEWAL_STATES = (
+    "not_deployed",
+    "failed",
+    "stalled",
+    "verifying",
+    "in_progress",
+    "manual",
+    "automation_configured",
+    "unknown",
+)
 DELIVERY_STATES = ("ok", "failing", "unrouted")
 
 STATUS_FILTER_VALUES = {
@@ -190,15 +199,22 @@ def renewal_state(
     attempt_state: str | None = None,
     lease_expires_at: str | None = None,
     suppresses_stalled: bool = False,
+    failure_active: bool = False,
     *,
     now: datetime | None = None,
 ) -> tuple[str, str]:
     """Return state and evidence source using the documented precedence."""
     from cert_watch.database.renewal_attempts import renewal_attempt_is_live
 
+    if attempt_state == "not_deployed":
+        return "not_deployed", "renewal_attempt"
+    if failure_active:
+        return "failed", "renewal_attempt"
     live = renewal_attempt_is_live(attempt_state, lease_expires_at, now=now)
     if stalled and not (live and suppresses_stalled):
         return "stalled", "renewal_window"
+    if attempt_state == "verifying":
+        return "verifying", "renewal_attempt"
     if live:
         return "in_progress", "renewal_attempt"
     method = (renewal_method or "").casefold()
@@ -245,6 +261,7 @@ def renewal_state_for_row(
     attempt_state: str | None = None,
     lease_expires_at: str | None = None,
     suppresses_stalled: bool = False,
+    failure_active: bool = False,
 ) -> tuple[str, str]:
     """Classify one selected row from its stored and bounded history evidence."""
     stalled = False
@@ -267,6 +284,7 @@ def renewal_state_for_row(
         attempt_state,
         lease_expires_at,
         suppresses_stalled,
+        failure_active,
         now=context.now,
     )
 
@@ -344,6 +362,7 @@ def register_status_model_functions(conn: sqlite3.Connection, context: StatusMod
         attempt_state: object,
         lease_expires_at: object,
         suppresses_stalled: object,
+        failure_active: object,
     ) -> str:
         state, _source = renewal_state_for_row(
             hostname=str(hostname or ""),
@@ -356,10 +375,11 @@ def register_status_model_functions(conn: sqlite3.Connection, context: StatusMod
             attempt_state=str(attempt_state) if attempt_state else None,
             lease_expires_at=str(lease_expires_at) if lease_expires_at else None,
             suppresses_stalled=bool(suppresses_stalled),
+            failure_active=bool(failure_active),
         )
         return state
 
-    conn.create_function("cw_renewal_state", 9, sql_renewal)
+    conn.create_function("cw_renewal_state", 10, sql_renewal)
     from cert_watch.alerting.model import normalize_channel
 
     conn.create_function("cw_normalize_channel", 1, lambda value: normalize_channel(str(value)))
@@ -726,13 +746,7 @@ def attach_status_models(
             monitoring = "failing"
         elif any(child["monitoring"] == "never_scanned" for child in children):
             monitoring = "never_scanned"
-        renewal_order = {
-            "stalled": 0,
-            "in_progress": 1,
-            "manual": 2,
-            "automation_configured": 3,
-            "unknown": 4,
-        }
+        renewal_order = {state: index for index, state in enumerate(RENEWAL_STATES)}
         delivery_order = {"failing": 0, "unrouted": 1, "ok": 2}
         row["condition"] = (
             min(conditions, key=lambda value: condition_order[value]) if conditions else None

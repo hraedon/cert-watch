@@ -682,10 +682,11 @@ def test_renewal_classifier_fuzz_agrees_with_browse_filters_and_counts(tmp_path)
     histories: dict[str, list[tuple[datetime, float, float, bool]]] = {}
 
     hosts = SqliteHostRepository(db)
+    host_ids: dict[str, str] = {}
     for index in range(400):
         hostname = f"h{index}.fuzz.example.test"
         endpoints.append((hostname, 443))
-        hosts.add(hostname, 443)
+        host_ids[hostname] = hosts.add(hostname, 443)
         replace_scanned(
             db, hostname, 443, _live_cert(hostname, f"live-{index}"), [], True
         )
@@ -745,16 +746,51 @@ def test_renewal_classifier_fuzz_agrees_with_browse_filters_and_counts(tmp_path)
                         ),
                     )
             refresh_endpoint_analytics(conn, hostname, 443)
+        for index, (state, failure_active) in enumerate(
+            (
+                ("not_deployed", True),
+                ("verifying", True),
+                ("verifying", False),
+                ("open", False),
+            )
+        ):
+            hostname = f"h{index}.fuzz.example.test"
+            attempt_id = f"fuzz-attempt-{index}"
+            conn.execute(
+                """INSERT INTO renewal_attempts
+                   (attempt_id,host_id,is_current,source,state,opened_seq,
+                    baseline_fingerprint,lease_expires_at,suppresses_stalled,
+                    received_at,failure_attempt_id,failure_reported_at)
+                   VALUES (?,?,1,'test',?,?,'baseline',?,1,?,?,?)""",
+                (
+                    attempt_id,
+                    host_ids[hostname],
+                    state,
+                    index + 1,
+                    (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+                    NOW.isoformat(),
+                    attempt_id if failure_active else None,
+                    NOW.isoformat() if failure_active else None,
+                ),
+            )
         conn.commit()
 
     expected = {
         item.hostname: _STATE[item.automation_classification]
         for item in compute_endpoint_analytics(db, tuple(endpoints))
     }
+    expected.update(
+        {
+            "h0.fuzz.example.test": "not_deployed",
+            "h1.fuzz.example.test": "failed",
+            "h2.fuzz.example.test": "verifying",
+            "h3.fuzz.example.test": "in_progress",
+        }
+    )
     rows, _total = list_dashboard_page(db, per_page=0, now=NOW)
     displayed = {str(row["hostname"]): str(row["renewal"]) for row in rows}
     filtered: dict[str, str] = {}
-    for state in _STATE.values():
+    for state in set(expected.values()):
         state_rows, state_total = list_dashboard_page(
             db, renewal=state, per_page=0, now=NOW
         )
@@ -765,10 +801,13 @@ def test_renewal_classifier_fuzz_agrees_with_browse_filters_and_counts(tmp_path)
     assert filtered == expected
     stats = dashboard_axis_stats(db)["renewal"]
     assert stats == {
+        "not_deployed": 1,
+        "failed": 1,
+        "verifying": 1,
+        "in_progress": 1,
         "automation_configured": Counter(expected.values())["automation_configured"],
         "manual": Counter(expected.values())["manual"],
         "stalled": 0,
-        "in_progress": 0,
         "unknown": Counter(expected.values())["unknown"],
     }
 

@@ -17,7 +17,7 @@ from cert_watch.chain_guidance import ChainGuidance, describe_chain
 from cert_watch.database import LatestScanRecord
 from cert_watch.filters import compute_urgency, friendly_issuer, issuer_cn, subject_cn
 from cert_watch.posture import GRADE_WORST_ORDER
-from cert_watch.presenters.status_display import condition_display
+from cert_watch.presenters.status_display import condition_display, renewal_display
 from cert_watch.scan_error_guidance import ScanErrorGuidance, describe_scan_error
 from cert_watch.scan_freshness import ScanEvidence
 from cert_watch.services.certificate_detail import (
@@ -138,6 +138,26 @@ class RenewalHistoryView:
 
 
 @dataclass(frozen=True)
+class RenewalAttemptView:
+    state: str
+    label: str
+    detail: str
+    tone: str
+    failure_open: bool
+
+
+@dataclass(frozen=True)
+class RenewalReportView:
+    outcome: str
+    outcome_label: str
+    reported_at: str
+    message: str | None
+    tool: str | None
+    correlation_id: str | None
+    source_name: str | None
+
+
+@dataclass(frozen=True)
 class TagView:
     label: str
     inherited: bool
@@ -248,6 +268,9 @@ class CertificateDetailView:
     actions: tuple[DetailActionView, ...] = ()
     delivery_routes: tuple[DeliveryRouteView, ...] = ()
     reveal_delivery_identities: bool = False
+    renewal_attempt: RenewalAttemptView | None = None
+    renewal_reports: tuple[RenewalReportView, ...] = ()
+    reveal_renewal_report_details: bool = False
 
     def template_context(self) -> dict[str, Any]:
         """Expose one stable boundary to Jinja or a future JSON serializer."""
@@ -549,6 +572,73 @@ def _when(value: object) -> str:
     return _scan_time_label(str(value)) if value else "an unknown time"
 
 
+def _renewal_activity(
+    data: CertificateDetailData, *, reveal: bool
+) -> tuple[RenewalAttemptView | None, tuple[RenewalReportView, ...]]:
+    raw = data.renewal_attempt
+    attempt: RenewalAttemptView | None = None
+    if raw is not None:
+        state = str(raw.get("state") or "unknown")
+        failure_open = bool(
+            raw.get("failure_attempt_id") and not raw.get("failure_cleared_at")
+        )
+        label, tone = {
+            "open": ("In progress", "t-neutral"),
+            "verifying": ("Verifying renewal", "t-neutral"),
+            "not_deployed": ("Deployment not confirmed", "t-crit"),
+            "verified": ("Verified", "t-ok"),
+            "failed": ("Renewal failed", "t-crit"),
+            "abandoned": ("No longer in progress", "t-warn"),
+            "cancelled": ("Cancelled", "t-muted"),
+        }.get(state, (state.replace("_", " ").capitalize(), "t-muted"))
+        if state == "open":
+            detail = f"Lease ends {_when(raw.get('lease_expires_at'))}."
+        elif state == "verifying":
+            detail = f"Next check {_when(raw.get('next_check_at'))}."
+        elif state == "not_deployed":
+            detail = f"Raised {_when(raw.get('raised_at'))}."
+        elif state == "verified":
+            leaf = str(raw.get("verified_fingerprint") or "unknown")
+            detail = (
+                f"Verified leaf {leaf} · "
+                f"{_when(raw.get('last_check_at') or raw.get('received_at'))}."
+            )
+        elif state == "failed":
+            detail = f"Reported {_when(raw.get('failure_reported_at'))}."
+        else:
+            detail = f"Last changed {_when(raw.get('received_at'))}."
+        attempt = RenewalAttemptView(state, label, detail, tone, failure_open)
+
+    reports = tuple(
+        RenewalReportView(
+            outcome=str(item.get("outcome") or "unknown"),
+            outcome_label={
+                "started": "Started",
+                "succeeded": "Succeeded",
+                "failed": "Failed",
+            }.get(
+                str(item.get("outcome") or ""),
+                str(item.get("outcome") or "unknown").replace("_", " ").capitalize(),
+            ),
+            reported_at=_when(item.get("occurred_at") or item.get("received_at")),
+            message=str(item.get("message")) if reveal and item.get("message") else None,
+            tool=str(item.get("tool")) if reveal and item.get("tool") else None,
+            correlation_id=(
+                str(item.get("correlation_id"))
+                if reveal and item.get("correlation_id")
+                else None
+            ),
+            source_name=(
+                str(item.get("source_name"))
+                if reveal and item.get("source_name")
+                else None
+            ),
+        )
+        for item in data.renewal_reports
+    )
+    return attempt, reports
+
+
 def _condition_words(days: int, condition: str | None) -> str:
     if condition == "expired" or days < 0:
         amount = abs(days)
@@ -564,6 +654,7 @@ def _detail_axes(
     evidence: ScanEvidence | None,
     days: int,
     now: datetime,
+    attempt: dict[str, object] | None = None,
 ) -> tuple[DetailAxisView, ...]:
     status = model or {}
     condition = str((status.get("condition") or {}).get("state") or "") or None
@@ -635,17 +726,27 @@ def _detail_axes(
             "No successful certificate observation is recorded.",
         )
 
-    renewal_value, renewal_tone = {
-        "automation_configured": ("Automation configured", "t-ok"),
-        "manual": ("Manual", "t-muted"),
-        "stalled": ("Stalled", "t-crit"),
-        "in_progress": ("In progress", "t-warn"),
-        "unknown": ("Unknown", "t-muted"),
-    }.get(renewal, (renewal.replace("_", " ").title(), "t-muted"))
+    renewal_status = renewal_display(renewal)
+    renewal_value, renewal_tone = renewal_status.label, renewal_status.tone
     method = getattr(host, "renewal_method", "") if host else ""
     renewal_detail = {
         "stalled": "The renewal window is open and no replacement certificate has appeared.",
-        "in_progress": "An operator reported that renewal work is under way.",
+        "in_progress": (
+            "Renewal work is under way · lease ends "
+            f"{_when((attempt or {}).get('lease_expires_at'))}."
+        ),
+        "verifying": (
+            "Waiting for scan evidence · next check "
+            f"{_when((attempt or {}).get('next_check_at'))}."
+        ),
+        "not_deployed": (
+            "The reported replacement is not being served · raised "
+            f"{_when((attempt or {}).get('raised_at'))}."
+        ),
+        "failed": (
+            "An uncleared renewal failure was reported "
+            f"{_when((attempt or {}).get('failure_reported_at'))}."
+        ),
         "manual": "This endpoint is recorded as requiring manual renewal.",
         "automation_configured": (
             f"{_renewal_display(method)[0] or 'Automated renewal'} is configured."
@@ -961,6 +1062,9 @@ def present_certificate_detail(
         condition, monitoring, renewal, delivery, overall_label, overall_tone = _axis_display(
             data.status, endpoint=True
         )
+        renewal_attempt, renewal_reports = _renewal_activity(
+            data, reveal=reveal_delivery_identities
+        )
         axes = _detail_axes(
             model=data.status,
             cert=None,
@@ -968,6 +1072,7 @@ def present_certificate_detail(
             evidence=data.scan_evidence,
             days=0,
             now=current,
+            attempt=data.renewal_attempt,
         )
         return CertificateDetailView(
             cert=None,
@@ -1046,6 +1151,9 @@ def present_certificate_detail(
             ),
             delivery_routes=_delivery_routes(data.status, reveal=reveal_delivery_identities),
             reveal_delivery_identities=reveal_delivery_identities,
+            renewal_attempt=renewal_attempt,
+            renewal_reports=renewal_reports,
+            reveal_renewal_report_details=reveal_delivery_identities,
         )
 
     technical = present_certificate_technical_details(
@@ -1074,6 +1182,9 @@ def present_certificate_detail(
     condition, monitoring, renewal, delivery, overall_label, overall_tone = _axis_display(
         data.status, endpoint=data.host is not None
     )
+    renewal_attempt, renewal_reports = _renewal_activity(
+        data, reveal=reveal_delivery_identities
+    )
     axes = _detail_axes(
         model=data.status,
         cert=data.cert,
@@ -1081,6 +1192,7 @@ def present_certificate_detail(
         evidence=data.scan_evidence,
         days=technical.days_remaining,
         now=current,
+        attempt=data.renewal_attempt,
     )
     return CertificateDetailView(
         cert=CertificateView(
@@ -1186,4 +1298,7 @@ def present_certificate_detail(
         ),
         delivery_routes=_delivery_routes(data.status, reveal=reveal_delivery_identities),
         reveal_delivery_identities=reveal_delivery_identities,
+        renewal_attempt=renewal_attempt,
+        renewal_reports=renewal_reports,
+        reveal_renewal_report_details=reveal_delivery_identities,
     )

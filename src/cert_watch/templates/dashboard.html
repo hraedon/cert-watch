@@ -53,7 +53,7 @@
   <div class="cw-fact-flags">
     {% if e.monitoring_label %}<span class="cw-chip t-warn"{% if e.monitoring_cause %} title="{{ e.monitoring_cause }}"{% endif %}>{{ icons.svg_icon('alert', 11, 1.7) }}{{ e.monitoring_label }}</span>{% endif %}
     {% if e.chain_problem_label %}<span class="cw-chip t-warn">{{ icons.svg_icon('link', 11, 1.7) }}{{ e.chain_problem_label }}</span>{% endif %}
-    {% if e.renewal_flag_label %}<span class="cw-chip {{ 't-warn' if e.renewal == 'stalled' else 't-ink' }}">{{ icons.svg_icon('refresh', 11, 1.7) }}{{ e.renewal_flag_label }}</span>{% endif %}
+    {% if e.renewal_flag_label %}<span class="cw-chip {{ 't-crit' if e.renewal in ('failed', 'not_deployed') else ('t-warn' if e.renewal == 'stalled' else 't-neutral') }}">{{ icons.svg_icon('refresh', 11, 1.7) }}{{ e.renewal_flag_label }}</span>{% endif %}
     {% if e.delivery_flag_label %}<span class="cw-chip {{ 't-crit' if e.delivery == 'failing' else 't-muted' }}">{{ icons.svg_icon('bell', 11, 1.7) }}{{ e.delivery_flag_label }}</span>{% endif %}
     {% if not e.monitoring_label and not e.chain_problem_label and not e.renewal_flag_label and not e.delivery_flag_label %}<span class="cw-sr">No exceptions</span>{% endif %}
   </div>
@@ -117,6 +117,14 @@
     </div>
     <button type="submit" class="cw-btn">Search</button>
     </form>
+    {% endif %}
+    {% if not pivot_view %}
+    <nav class="cw-chiprow" aria-label="Renewal filters" data-testid="renewal-filter-chips">
+      <span class="cw-hint">Renewal:</span>
+      <a class="cw-chip{% if filter_renewal == 'failed' %} t-ink{% endif %}" href="{{ browse_url(condition=None, monitoring=None, renewal='failed', delivery=None, chain_problem=None, routing_gap=None, issuer=None, expiry_week=None, grouped=0) }}">Renewal failed · {{ axis_stats.renewal.failed }}</a>
+      <a class="cw-chip{% if filter_renewal == 'not_deployed' %} t-ink{% endif %}" href="{{ browse_url(condition=None, monitoring=None, renewal='not_deployed', delivery=None, chain_problem=None, routing_gap=None, issuer=None, expiry_week=None, grouped=0) }}">Deployment not confirmed · {{ axis_stats.renewal.not_deployed }}</a>
+      <a class="cw-chip{% if filter_renewal == 'verifying' %} t-ink{% endif %}" href="{{ browse_url(condition=None, monitoring=None, renewal='verifying', delivery=None, chain_problem=None, routing_gap=None, issuer=None, expiry_week=None, grouped=0) }}">Verifying renewal · {{ axis_stats.renewal.verifying }}</a>
+    </nav>
     {% endif %}
     <nav class="cw-seg" tabindex="0" aria-label="Inventory views">
       <a href="{{ browse_url() }}" class="{% if not pivot_view %}on{% endif %}" {% if not pivot_view %}aria-current="page"{% endif %}>Inventory</a>

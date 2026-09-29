@@ -214,14 +214,18 @@ def inventory_candidates_sql(
         " EXISTS(SELECT 1 FROM certificates succ"
         " WHERE succ.replaces_cert_id = c.id AND succ.id != c.id),"
         " COALESCE(ra.classification, 'unknown'),rat.state,rat.lease_expires_at,"
-        " COALESCE(rat.suppresses_stalled,0)) AS renewal"
+        " COALESCE(rat.suppresses_stalled,0),"
+        " (rat.failure_attempt_id IS NOT NULL AND rat.failure_cleared_at IS NULL))"
+        " AS renewal"
         if need_renewal
         else "NULL AS renewal"
     )
     pending_renewal_col = (
         "cw_renewal_state(h.hostname, h.port, h.renewal_method,NULL,0,"
         " COALESCE(ra.classification, 'unknown'),rat.state,rat.lease_expires_at,"
-        " COALESCE(rat.suppresses_stalled,0)) AS renewal"
+        " COALESCE(rat.suppresses_stalled,0),"
+        " (rat.failure_attempt_id IS NOT NULL AND rat.failure_cleared_at IS NULL))"
+        " AS renewal"
         if need_renewal
         else "NULL AS renewal"
     )
@@ -231,10 +235,14 @@ def inventory_candidates_sql(
     renewal_attempt_cols = (
         "rat.state AS renewal_attempt_state,"
         " rat.lease_expires_at AS renewal_lease_expires_at,"
-        " COALESCE(rat.suppresses_stalled,0) AS renewal_suppresses_stalled"
+        " COALESCE(rat.suppresses_stalled,0) AS renewal_suppresses_stalled,"
+        " (rat.failure_attempt_id IS NOT NULL AND rat.failure_cleared_at IS NULL)"
+        " AS renewal_failure_active,rat.raised_at AS renewal_raised_at,"
+        " rat.failure_reported_at AS renewal_failure_reported_at"
         if need_renewal
         else "NULL AS renewal_attempt_state,NULL AS renewal_lease_expires_at,"
-        " 0 AS renewal_suppresses_stalled"
+        " 0 AS renewal_suppresses_stalled,0 AS renewal_failure_active,"
+        " NULL AS renewal_raised_at,NULL AS renewal_failure_reported_at"
     )
     delivery_col = (
         delivery_state_sql("c", "h", delivery_settings)
@@ -398,6 +406,9 @@ def inventory_candidates_sql(
                    NULL AS renewal_attempt_state,
                    NULL AS renewal_lease_expires_at,
                    0 AS renewal_suppresses_stalled,
+                   0 AS renewal_failure_active,
+                   NULL AS renewal_raised_at,
+                   NULL AS renewal_failure_reported_at,
                    0 AS has_successor,
                    {uploaded_delivery_col} AS delivery,
                    {uploaded_routing_gap_col} AS routing_gap,
@@ -573,6 +584,9 @@ def build_inventory_entries(
             "renewal_attempt_state",
             "renewal_lease_expires_at",
             "renewal_suppresses_stalled",
+            "renewal_failure_active",
+            "renewal_raised_at",
+            "renewal_failure_reported_at",
         ):
             if key in keys:
                 entry["effective_days" if key == "eff_days" else key] = candidate[key]
@@ -608,6 +622,7 @@ def build_inventory_entries(
                     else None
                 ),
                 suppresses_stalled=bool(entry.get("renewal_suppresses_stalled")),
+                failure_active=bool(entry.get("renewal_failure_active")),
             )
             entry["renewal"] = renewal
             entry["renewal_source"] = source

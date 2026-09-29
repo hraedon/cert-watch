@@ -218,6 +218,20 @@ form.cw-inline { display: inline; }
 .cw-panel-head h2, .cw-panel-head h3 { margin: 0; font-size: var(--cw-fs-md); font-weight: 600; }
 .cw-panel-body { padding: var(--cw-pad-panel); }
 .cw-panel-body + .cw-panel-body { border-top: 1px solid var(--border); }
+.cw-renewal-current { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.cw-renewal-history-heading { margin: var(--space-4) 0 var(--space-2); font-size: var(--cw-fs-sm); }
+.cw-renewal-reports { margin: 0; padding: 0; list-style: none; }
+.cw-renewal-reports > li { padding: 10px 0; border-top: 1px solid var(--border); }
+.cw-renewal-report-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; }
+.cw-automation-report {
+  margin-top: 8px; padding: 9px 11px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--inset); overflow-wrap: anywhere;
+}
+.cw-automation-report > div { margin-top: 5px; white-space: pre-wrap; }
+.cw-renewal-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 8px 0 0; }
+.cw-renewal-meta > div { min-width: 0; }
+.cw-renewal-meta dt { font-size: var(--cw-fs-xs); color: var(--text-2); }
+.cw-renewal-meta dd { margin: 3px 0 0; font-size: var(--cw-fs-xs); }
 /* A tinted note panel (chain status, PQ note, callouts). */
 .cw-note {
   display: flex; align-items: flex-start; gap: 9px;
@@ -1045,6 +1059,7 @@ details.cw-editor[open] .when-open { display: inline; }
   }
   .cw-detail-axis:last-child { border-bottom: 0; }
   .cw-detail-owner { grid-template-columns: 1fr; }
+  .cw-renewal-meta { grid-template-columns: 1fr; }
   .cw-detail-route, .cw-detail-route tbody, .cw-detail-route tr, .cw-detail-route td {
     display: block; width: 100%;
   }
