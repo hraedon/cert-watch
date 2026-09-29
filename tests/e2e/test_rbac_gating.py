@@ -188,7 +188,7 @@ def test_admin_and_writer_see_renewal_report_details_and_controls(
 
     panel = page.get_by_test_id("renewal-panel")
     expect(panel).to_contain_text("Renewal failed")
-    expect(panel).to_contain_text("A new attempt is in progress")
+    expect(panel).to_contain_text("waiting for scan evidence")
     expect(panel).to_contain_text("Failed")
     expect(panel).to_contain_text("Reported by automation")
     expect(panel).to_contain_text("second line")
