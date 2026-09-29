@@ -162,7 +162,7 @@ def _risk_difference(row: dict[str, Any]) -> str:
             failed = renewal == "failed"
             label = "Renewal failed" if failed else "Deployment not confirmed"
             when = row.get("renewal_failure_reported_at" if failed else "renewal_raised_at")
-            return f"{label} · {_format_datetime(when)}"
+            details.append(f"{label} · {_format_datetime(when)}")
         elif renewal == "manual":
             details.append("Manual renewal")
         elif renewal == "in_progress":

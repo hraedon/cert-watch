@@ -80,10 +80,11 @@ def _dashboard_axis_stats(
     aggregate_parts: list[str] = []
     for alias, (axis, state) in columns.items():
         if axis == "renewal":
+            # Count inventory rows, the population Browse's renewal filter
+            # lists, so each count equals the rows its link opens (an alias
+            # merge can leave one endpoint with two scanned leaves).
             aggregate_parts.append(
-                "COUNT(DISTINCT CASE WHEN renewal = "
-                f"'{state}' THEN COALESCE(host_id, etype || ':' || ekey) END) "
-                f"AS {alias}"
+                f"SUM(CASE WHEN renewal = '{state}' THEN 1 ELSE 0 END) AS {alias}"
             )
             continue
         predicate = "etype = 'leaf' AND " if axis == "overall" else ""
@@ -119,8 +120,7 @@ def _dashboard_axis_stats(
                 stats_json_args.extend(
                     [
                         f"'{alias}'",
-                        "COUNT(DISTINCT CASE WHEN renewal = "
-                        f"'{state}' THEN COALESCE(host_id, etype || ':' || ekey) END)",
+                        f"SUM(CASE WHEN renewal = '{state}' THEN 1 ELSE 0 END)",
                     ]
                 )
                 continue
@@ -391,6 +391,10 @@ def dashboard_axis_stats(
         axis_columns=axis_columns,
         home=home,
     )
+    # With ``renewal_summary`` the returned ``renewal`` mapping holds only the
+    # failed / not_deployed / verifying counts Browse's chips need; every
+    # other renewal state reads 0. Callers wanting the full axis must not
+    # pass it.
     if not renewal_summary:
         return result
     if source == "uploaded":

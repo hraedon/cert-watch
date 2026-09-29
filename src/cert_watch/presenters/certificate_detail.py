@@ -15,6 +15,7 @@ from cert_watch.cert_chain import ACTIONABLE_CHAIN_STATUSES, display_urgency
 from cert_watch.certificate_model import Certificate
 from cert_watch.chain_guidance import ChainGuidance, describe_chain
 from cert_watch.database import LatestScanRecord
+from cert_watch.database.renewal_attempts import renewal_attempt_is_live
 from cert_watch.filters import compute_urgency, friendly_issuer, issuer_cn, subject_cn
 from cert_watch.posture import GRADE_WORST_ORDER
 from cert_watch.presenters.status_display import condition_display, renewal_display
@@ -582,8 +583,19 @@ def _renewal_activity(
         failure_open = bool(raw.get("failure_reported_at") and not raw.get("failure_cleared_at"))
         display = renewal_display(renewal)
         label, tone = display.label, display.tone
-        if renewal == "failed" and state in {"open", "verifying"}:
+        if failure_open and renewal_attempt_is_live(
+            state, str(raw.get("lease_expires_at") or "") or None
+        ):
             detail = "A new attempt is in progress."
+        elif failure_open and state == "open":
+            detail = f"A new attempt's lease ended {_when(raw.get('lease_expires_at'))}."
+        elif failure_open and state == "verifying":
+            detail = (
+                "A success was reported; waiting for scan evidence. "
+                f"Next check {_when(raw.get('next_check_at'))}."
+            )
+        elif failure_open and state == "verified":
+            detail = f"Reported failure still open since {_when(raw.get('failure_reported_at'))}."
         elif state == "open":
             detail = f"Lease ends {_when(raw.get('lease_expires_at'))}."
         elif state == "verifying":

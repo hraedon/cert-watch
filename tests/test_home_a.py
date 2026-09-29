@@ -246,7 +246,8 @@ def test_home_keeps_expiry_headline_when_renewal_also_failed(
     assert matching[0].condition == "expired"
     assert matching[0].condition_label.startswith("Expired ")
     assert matching[0].condition_label.endswith(" days ago")
-    assert matching[0].difference == "Renewal failed · 2026-09-28 12:00 UTC"
+    # The renewal line leads; the row keeps its other details (review R2-1).
+    assert matching[0].difference.startswith("Renewal failed · 2026-09-28 12:00 UTC")
 
 
 def test_home_escapes_an_unmapped_scan_error(reload_app, tmp_path, monkeypatch) -> None:
@@ -314,3 +315,107 @@ def test_home_webhook_failure_uses_scoped_delivery_evidence(tmp_path) -> None:
     assert result["_home"]["webhook_outcome"] == "failed"
     assert result["_home"]["webhook_failed_at"]
     assert "redacted" not in str(result["_home"])
+
+
+def test_renewal_count_matches_browse_total_with_duplicate_scanned_leaves(tmp_path) -> None:
+    """An alias merge can leave one endpoint with two scanned leaves. The Home
+    renewal count must equal the population its Browse link lists (review of
+    #150, round 2)."""
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import SqliteHostRepository, init_schema
+    from cert_watch.database.chain_status_cache import prepare_status
+    from cert_watch.database.connection import _connect
+    from cert_watch.database.dashboard_axes import dashboard_axis_stats
+    from cert_watch.database.dashboard_page import list_dashboard_page
+    from cert_watch.status_model import AxisSettings, prepare_status_model_context
+    from tests._helpers import seed_scanned
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    now = datetime.now(UTC)
+    stamp = now.isoformat()
+    host_id = SqliteHostRepository(db).add("merge.example.test", 443, tags="t")
+    seed_scanned(
+        db,
+        "merge.example.test",
+        443,
+        Certificate(
+            subject="CN=merge.example.test",
+            issuer="CN=Test CA",
+            not_before=now - timedelta(days=5),
+            not_after=now + timedelta(days=200),
+            fingerprint_sha256="a1".ljust(64, "0"),
+        ),
+    )
+    with _connect(db) as conn:
+        conn.execute(
+            """INSERT INTO certificates
+               (id,subject,issuer,not_before,not_after,san_dns_names,fingerprint_sha256,
+                raw_der,source,hostname,port,is_leaf,parent_cert_id,tags,created_at,updated_at)
+               VALUES ('dup-leaf','CN=merge-alt.example.test','CN=Test CA',?,?,'[]',?,x'00',
+                       'scanned','merge.example.test',443,1,NULL,'t',?,?)""",
+            (
+                (now - timedelta(days=4)).isoformat(),
+                (now + timedelta(days=200)).isoformat(),
+                "b2".ljust(64, "0"),
+                stamp,
+                stamp,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO renewal_attempts(attempt_id,host_id,is_current,source,state,"
+            "opened_seq,received_at,failure_attempt_id,failure_reported_at)"
+            " VALUES('dup-a',?,1,'test','verifying',1,?,?,?)",
+            (host_id, stamp, "dup-a", stamp),
+        )
+        conn.commit()
+
+    status = prepare_status(db, now)
+    axes = prepare_status_model_context(db, certificate_status=status, settings=AxisSettings())
+    for columns in (frozenset({"condition", "renewal"}), frozenset({"renewal_risks"})):
+        counts = dashboard_axis_stats(
+            db, status=status, axes=axes, axis_columns=columns, home=True
+        )["renewal"]
+        _rows, total = list_dashboard_page(
+            db, renewal="failed", per_page=0, status=status, axes=axes
+        )
+        assert counts["failed"] == total
+
+
+def test_home_risk_block_survives_a_caller_without_the_renewal_axis(tmp_path) -> None:
+    """Pin the NULL-renewal guard: Home without the renewal axis must still list
+    expiry risk rows (review of #150, B3)."""
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import SqliteHostRepository, init_schema
+    from cert_watch.database.chain_status_cache import prepare_status
+    from cert_watch.database.dashboard_axes import dashboard_axis_stats
+    from cert_watch.status_model import AxisSettings, prepare_status_model_context
+    from tests._helpers import seed_scanned
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    now = datetime.now(UTC)
+    SqliteHostRepository(db).add("soon.example.test", 443)
+    seed_scanned(
+        db,
+        "soon.example.test",
+        443,
+        Certificate(
+            subject="CN=soon.example.test",
+            issuer="CN=Test CA",
+            not_before=now - timedelta(days=80),
+            not_after=now - timedelta(days=1),
+            fingerprint_sha256="c3".ljust(64, "0"),
+        ),
+    )
+    status = prepare_status(db, now)
+    axes = prepare_status_model_context(db, certificate_status=status, settings=AxisSettings())
+    columns = frozenset({"condition", "monitoring", "delivery", "chain", "routing"})
+    stats = dashboard_axis_stats(db, status=status, axes=axes, axis_columns=columns, home=True)
+    home = stats.pop("_home")
+    assert stats["condition"]["expired"] == 1
+    assert "risk:expired" in home["rows"]
