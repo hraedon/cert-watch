@@ -11,30 +11,32 @@ All notable changes to cert-watch are documented in this file.
   `GET`/`POST /api/renewal-reports`, and its separate hash format makes older
   binaries reject it safely. Live binding checks, indistinguishable unknown
   and out-of-scope responses, bounded tags and key names, strict bearer parsing,
-  and write-scoped report detail keep automation least-privileged (#118 S1).
+  and write-scoped report detail keep automation least-privileged (#118).
 
 ### Added
 
 - Durable, append-only renewal reports (`POST`/`GET /api/renewal-reports`)
   with strict JSON ingestion, live host-tag or fingerprint targeting,
-  endpoint-bound idempotency, correlation history, bounded retention, and
-  delete/re-add isolation (#118 S2).
+  key-scoped idempotency, correlation history, bounded retention, and
+  delete/re-add isolation (#118).
 - Scan-backed `succeeded` verification with coalesced checks, expiry-aware
   bands, configurable grace, exact replacement fingerprints, and the routed
   `renewal_not_deployed` alert. A report remains a claim and never suppresses
-  expiry alerts (#118 S4).
+  expiry alerts (#118).
 - Durable endpoint-cycle failure conditions and the routed `renewal_failed`
   alert. They survive later attempts and clear only from qualifying stored scan
   evidence, endpoint deletion, or an audited operator action. Renewal digests
   now include failed and reported-but-not-deployed transitions without report
-  text or identities (#118 S5).
+  text or identities (#118).
 - One renewal-state precedence across Home, Browse, pivots, detail, and JSON:
   deployment not confirmed, failed, stalled, verifying, in progress, manual,
   automation configured, then unknown. Home surfaces failed/unconfirmed rows,
   Browse adds filters, and detail shows the current attempt, scoped history,
-  and failure controls (#118 S6).
-- An operator guide and shell-checked, integration-tested plain curl, Certbot,
-  and acme.sh hook examples for renewal reports (#118 S7).
+  and failure controls (#118).
+- An operator guide and shell-checked plain curl examples plus hooks tested
+  with simulated Certbot and acme.sh environments. The guide covers echoing a
+  `renewal_needed` webhook's stable `event_id` as a report `correlation_id`
+  while keeping retry idempotency in a separate header (#118).
 
 ### Changed
 
@@ -47,15 +49,13 @@ All notable changes to cert-watch are documented in this file.
   live lease. Expiry warnings and expired alerts remain independent.
   The renewal axis now consistently ranks `stalled` ahead of `in_progress`
   when a same-certificate restart is visible but cannot suppress again
-  (#118 S3).
-- The `renewal_needed` webhook's stable `event_id` can be echoed as a report
-  `correlation_id`; retry idempotency remains a separate header.
+  (#118).
 
 ### Fixed
 
 - A failed report carrying an already verified attempt's correlation is now
   retained as `ignored_late`, even after the served leaf changes, instead of
-  reopening completed work (#118 S5).
+  reopening completed work (#118).
 - Closing an alert by dedupe key also resolves a matching provider incident
   whose delivery is currently in progress.
 

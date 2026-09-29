@@ -33,6 +33,11 @@ or proves that a new certificate is deployed. Read
 [Reporting renewals from automation](docs/renewal-reports.md) before connecting
 hooks.
 
+Authorization parsing is stricter for cert-watch API keys. A malformed
+`Authorization` header that presents a `cwk_` credential now returns `401` on
+every route instead of being trimmed or passed through. Authorization headers
+that do not present a `cwk_` credential are unaffected.
+
 Startup applies migrations **0045–0049** in order:
 
 - **0045** adds explicit API-key binding metadata. Existing read, write, and
@@ -44,15 +49,21 @@ Startup applies migrations **0045–0049** in order:
   endpoint-owned history, so re-adding the address cannot inherit it.
 - **0047** converts every stored `renewal_status=in_progress` host into a
   leased attempt beginning at upgrade time, and makes the old two-value field
-  a compatibility view over durable reports. The lease is 24 hours by default.
+  a compatibility view over durable reports. Each conversion or retained
+  existing attempt is recorded in the audit log. The lease is controlled by
+  `CERT_WATCH_RENEWAL_REPORT_LEASE_HOURS`, defaults to 24 hours, and accepts
+  values from 1 through 168.
 - **0048** adds scan-backed verification evidence and short-lived scan claims.
   A `succeeded` report queues a normal scan; only stored scan evidence verifies
-  deployment. The unchanged-scan grace defaults to 5 minutes and is
-  configurable from 5 through 15 minutes.
+  deployment. `CERT_WATCH_RENEWAL_VERIFY_GRACE_MINUTES` controls the
+  unchanged-scan grace, defaults to 5 minutes, and accepts values from 5
+  through 15.
 - **0049** adds and backfills durable renewal-failure conditions and alert-rule
-  wake times. A retained failure without stored evidence of resolution may
-  alert after upgrade and remains open until a qualifying scan, endpoint
-  deletion, or an explicit operator clear.
+  wake times. It also fills missing `raised_at` times on historical
+  `not_deployed` attempts from their accepted success or receive time. A
+  retained failure without stored evidence of resolution may alert after
+  upgrade and remains open until a qualifying scan, endpoint deletion, or an
+  explicit operator clear.
 
 Pay particular attention to hosts left **in progress** before the upgrade.
 Their migration lease expires after the configured interval, so hosts that

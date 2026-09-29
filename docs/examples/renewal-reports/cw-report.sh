@@ -65,22 +65,27 @@ if [ -n "$new_pem" ]; then
     }
 fi
 
-if [ -n "${CW_RENEWAL_REPORT_KEY:-}" ]; then
-    api_key=$CW_RENEWAL_REPORT_KEY
-elif [ -n "${CW_RENEWAL_REPORT_KEY_FILE:-}" ]; then
+if [ -n "${CW_RENEWAL_REPORT_KEY_FILE:-}" ]; then
     [ -r "$CW_RENEWAL_REPORT_KEY_FILE" ] || {
         echo "renewal-report key file is not readable" >&2
         exit 1
     }
     api_key=$(tr -d '\r\n' <"$CW_RENEWAL_REPORT_KEY_FILE")
+elif [ -n "${CW_RENEWAL_REPORT_KEY:-}" ]; then
+    api_key=$CW_RENEWAL_REPORT_KEY
 else
     echo "set CW_RENEWAL_REPORT_KEY or CW_RENEWAL_REPORT_KEY_FILE" >&2
     exit 1
 fi
+unset CW_RENEWAL_REPORT_KEY
 [ -n "$api_key" ] || {
     echo "renewal-report key is empty" >&2
     exit 1
 }
+if printf '%s' "$api_key" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+    echo "renewal-report key contains a control character" >&2
+    exit 1
+fi
 
 base_url=${CW_BASE_URL:-http://127.0.0.1:8000}
 idempotency_key=${CW_IDEMPOTENCY_KEY:-}
@@ -124,17 +129,37 @@ print(json.dumps(body, ensure_ascii=False, separators=(",", ":")))
 PY
 
 # Keep the bearer token out of curl's argv. The temporary config is private and
-# is removed by the trap; argv contains only its path.
+# is removed by the trap; argv contains only its path. Backslashes and quotes
+# have special meaning in a double-quoted curl config value, so escape both.
 umask 077
+escaped_api_key=$(printf '%s' "$api_key" | sed 's/\\/\\\\/g; s/"/\\"/g')
 {
-    printf 'header = "Authorization: Bearer %s"\n' "$api_key"
+    printf 'header = "Authorization: Bearer %s"\n' "$escaped_api_key"
 } >"$work_dir/curl.conf"
-unset api_key
+unset api_key escaped_api_key
 
-curl --config "$work_dir/curl.conf" \
-    --fail-with-body --silent --show-error \
+timeout_seconds=${CW_REPORT_TIMEOUT_SECONDS:-10}
+response_file=$work_dir/response.json
+if http_status=$(curl --config "$work_dir/curl.conf" \
+    --silent --show-error --max-time "$timeout_seconds" \
     --header "Content-Type: application/json" \
     --header "Idempotency-Key: $idempotency_key" \
     --request POST --data-binary "@$work_dir/body.json" \
-    --url "${base_url%/}/api/renewal-reports"
-printf '\n'
+    --output "$response_file" --write-out '%{http_code}' \
+    --url "${base_url%/}/api/renewal-reports"); then
+    cat "$response_file"
+    printf '\n'
+else
+    status=$?
+    [ ! -s "$response_file" ] || cat "$response_file"
+    echo "cert-watch reporting request failed" >&2
+    exit "$status"
+fi
+
+case $http_status in
+    2??) ;;
+    *)
+        echo "cert-watch returned HTTP $http_status" >&2
+        exit 1
+        ;;
+esac

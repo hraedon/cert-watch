@@ -41,8 +41,10 @@ export CW_RENEWAL_REPORT_KEY_FILE=/etc/cert-watch/renewal-report.key
 export CW_BASE_URL=https://cert-watch.example.com
 ```
 
-`cw-report.sh` also accepts the token through `CW_RENEWAL_REPORT_KEY`. It never
-accepts a token argument, and it keeps the token out of curl's process
+`cw-report.sh` also accepts the token through `CW_RENEWAL_REPORT_KEY`, but the
+0600 file is preferred: an environment value is inherited by every child hook
+and reload command. The helper unsets that variable as soon as it reads it. It
+never accepts a token argument, and it keeps the token out of curl's process
 arguments.
 
 ## Send a report
@@ -56,9 +58,10 @@ Target exactly one endpoint in one of these ways:
 - `hostname` plus `port` is recommended and remains unambiguous when several
   endpoints serve the same wildcard or SAN certificate.
 - `cert_fingerprint` is a 64-character SHA-256 hexadecimal fingerprint. It
-  matches an in-binding scanned leaf that is current or was replaced on that
-  endpoint in the last seven days. No match is `404`; more than one in-binding
-  match is `409`. Uploaded certificates cannot be targeted.
+  matches an in-binding scanned leaf that is current, or the current leaf's
+  immediate predecessor when that replacement was observed in the last seven
+  days. No match is `404`; more than one in-binding match is `409`. Uploaded
+  certificates cannot be targeted.
 
 The fields are:
 
@@ -74,10 +77,10 @@ The fields are:
 | `occurred_at` | no | ISO 8601 timestamp with a UTC offset; retained for history, not ordering |
 
 Send an `Idempotency-Key` header containing 1–128 printable ASCII characters
-when a delivery might be retried. It is scoped to the reporting key and the
-resolved endpoint. Repeating the same key and canonical request body returns
-the saved response; changing the body returns `409`. `correlation_id` groups
-the reports in a renewal run, but is not an idempotency key.
+when a delivery might be retried. It is scoped to the reporting key. Repeating
+the same key and canonical request body returns the saved response; reusing it
+with another body or endpoint returns `409`. `correlation_id` groups the
+reports in a renewal run, but is not an idempotency key.
 
 For example:
 
@@ -94,7 +97,10 @@ docs/examples/renewal-reports/cw-report.sh succeeded \
 
 The helper calculates a PEM leaf's SHA-256 fingerprint with OpenSSL, generates
 an idempotency key, safely JSON-encodes text, and exits non-zero for a non-2xx
-response. Set `CW_IDEMPOTENCY_KEY` yourself when retrying one logical delivery.
+response. It checks the HTTP status manually, so it also works with curl
+versions older than 7.76. Set `CW_REPORT_TIMEOUT_SECONDS` to change its
+10-second request timeout, and set `CW_IDEMPOTENCY_KEY` yourself when retrying
+one logical delivery.
 
 ### Responses
 
@@ -111,11 +117,12 @@ responses an integration should handle are:
 | Status | Meaning |
 |---:|---|
 | `400` | More than one `Idempotency-Key` header was sent. |
+| `403` | The key kind is missing or is not `renewal-report`. |
 | `404` | The endpoint is unknown, outside the key's live host-tag binding, or not addressable by the supplied fingerprint. These cases deliberately look identical. |
 | `409` | A fingerprint matches several in-binding endpoints; an `Idempotency-Key` was reused with another body or endpoint; or a bare `succeeded` report targets an endpoint that has never completed a scan. |
 | `413` | The request body exceeds 16 KiB. |
-| `415` | The media type is not `application/json`. A charset parameter is allowed. |
-| `422` | JSON, field, target, timestamp, fingerprint, tool, or correlation validation failed. |
+| `415` | The media type is not `application/json`. Media-type parameters are ignored. |
+| `422` | JSON, field, target, timestamp, fingerprint, tool, correlation, or `Idempotency-Key` validation failed. |
 | `429` | A request or correlation limit was reached. Honor backoff and retry with the same idempotency key and body. |
 
 ## What each outcome does
@@ -136,7 +143,7 @@ verify the attempt and clear **Renewal not deployed** or a carried
 **Renewal failed** condition.
 
 An unchanged successful scan counts toward **Renewal not deployed** only after
-the configured grace period (5 minutes by default, 5–15). Checks and alert
+the configured grace period (5 minutes by default, 5–15 minutes). Checks and alert
 deadlines depend on how long the previous certificate has left:
 
 | Previous certificate has left | Check cadence | Deployment alert |
@@ -186,11 +193,11 @@ are separate.
 `GET /api/renewal-reports?hostname=www.example.com&port=443` returns
 newest-first history. `page` defaults to 1 (maximum 10,000) and `limit` to 50
 (maximum 100). A report key sees only reports made by that key and only while
-the endpoint remains in its binding. A signed-in reader sees outcome, time,
-effect, and attempt state for visible endpoints. Message, tool, source, and
-correlation are shown only to administrators and users with host-tag write
-access. Report text never enters logs, events, digests, alerts, or outbound
-notifications.
+the endpoint remains in its binding. A signed-in reader sees `report_id`,
+`attempt_id`, outcome, `new_fingerprint`, `occurred_at`, `received_at`, effect,
+and attempt state for visible endpoints. Message, tool, source, and correlation
+are shown only to administrators and users with host-tag write access. Report
+text never enters logs, events, digests, alerts, or outbound notifications.
 
 ## Connect the renewal webhook
 
@@ -199,6 +206,29 @@ hexadecimal id across delivery retries. Echo it as `correlation_id` on
 `started`, `succeeded`, and `failed` reports from that run. It links the
 request and outcome for operators without making repeated HTTP deliveries
 idempotent; continue to use a separate `Idempotency-Key` header for those.
+
+## Install the hook examples
+
+Copy all files in `docs/examples/renewal-reports/` together and create a state
+directory owned by the account that runs renewals:
+
+```sh
+install -d -m 700 /var/lib/cert-watch-renewal-hooks
+export CW_RENEWAL_STATE_DIR=/var/lib/cert-watch-renewal-hooks
+```
+
+The pre-hook creates a random correlation id in a per-tool, per-endpoint state
+file with mode 0600. The success hook or a failure-aware wrapper reads it and
+removes it after the terminal report. A terminal hook with no state file
+generates a fresh random id; it never uses a fixed fallback. An explicitly
+supplied `CW_CORRELATION_ID`, such as a `renewal_needed` event id, takes
+precedence.
+
+Reporting is strictly best effort. Every hook logs a reporting error to
+standard error and exits zero when cert-watch is unavailable, times out, or
+rejects a request. The wrappers preserve the renewal command's own exit status;
+whether cert-watch accepted a report never changes a renewal from succeeded to
+failed or from failed to succeeded.
 
 ## Certbot
 
@@ -222,6 +252,25 @@ sent when the certificate is not due because Certbot does not run the hooks.
 The deploy hook uses `$RENEWED_LINEAGE/cert.pem` for the exact leaf fingerprint
 and defaults the host to the first `RENEWED_DOMAINS` entry when `CW_HOST` is not
 set. Set `CW_HOST` explicitly for a load balancer or another endpoint name.
+
+Certbot saves hooks passed to `renew` in that certificate's renewal
+configuration. After the first wrapper run, the normal Certbot timer will also
+run those saved hooks, without the wrapper's shell environment. Choose one
+deployment explicitly:
+
+- Schedule `certbot-renew.sh` once per certificate and disable the stock
+  Certbot timer. This is the failure-aware option; put the `CW_*` settings in
+  the scheduled service or its 0600 environment file.
+- Keep the stock timer and rely on the saved hooks for `started` and
+  `succeeded`. Put `CW_REPORT_SCRIPT`, `CW_BASE_URL`,
+  `CW_RENEWAL_REPORT_KEY_FILE`, `CW_RENEWAL_STATE_DIR`, `CW_HOST`, and `CW_PORT`
+  in the timer service's environment. This path cannot report Certbot's own
+  failing exit; use separate timer instances when certificates map to different
+  monitored endpoints.
+
+Do not leave both schedules enabled. The per-run state makes saved hooks safe
+when they run without the wrapper, but two schedulers would still perform two
+renewal checks.
 
 Behavior was checked against the official
 [Certbot renewal hook documentation](https://eff-certbot.readthedocs.io/en/stable/using.html#renewing-certificates).
@@ -257,8 +306,27 @@ The pre-hook uses acme.sh's exported `Le_Domain`. The success hook uses its
 exported `CERT_PATH` to calculate the intended leaf fingerprint. acme.sh's
 post-hook runs after both successful and failed issuance and does not expose a
 portable success flag, so it is not used to infer an outcome. The wrapper
-reports other non-zero exits as failures and treats acme.sh status 2 as
-“not due,” not a failure.
+reports other non-zero exits as failures and treats acme.sh status 2 as “not
+due,” not a failure. Because status 2 can also mean the requested domain is not
+an issued certificate, the wrapper prints a warning to verify the exact
+`ACME_DOMAIN` spelling. For wildcard certificates, set `CW_HOST` to the actual
+monitored endpoint; a wildcard `Le_Domain` is not a valid report target.
+
+Choose how acme.sh is scheduled:
+
+- Keep acme.sh's installed cron entry and rely on the saved hooks. Add the
+  non-secret helper path, URL, key-file path, and private state directory to
+  that cron environment. The hooks default to `Le_Domain` on port 443; use a
+  per-certificate launcher or the wrapper for wildcard certificates and custom
+  endpoints. Each cron-driven pre-hook creates a new correlation even though
+  no wrapper supplied one. This reports starts and successful deploys, but
+  acme.sh's own failure exit is unavailable to the hooks.
+- Replace the installed acme.sh cron entry with one scheduled
+  `acme-renew.sh` invocation per certificate. The wrapper inherits the saved
+  hooks, supplies one random correlation to them, and reports acme.sh failures.
+
+Do not keep the installed cron entry when scheduling the wrapper, or the same
+certificate will be checked by both jobs.
 
 Behavior and flags were checked against the official
 [acme.sh hook wiki](https://github.com/acmesh-official/acme.sh/wiki/Using-pre-hook-post-hook-renew-hook-reloadcmd),
