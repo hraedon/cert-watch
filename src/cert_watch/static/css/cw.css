@@ -915,6 +915,7 @@ details.cw-editor[open] .when-open { display: inline; }
 }
 .cw-home-dot.hollow { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-3); }
 .cw-home-when { color: var(--text-2); font-weight: 400; }
+.cw-home-time { color: inherit; font: inherit; }
 .cw-home-id { width: fit-content; text-decoration: none; overflow-wrap: anywhere; }
 .cw-home-id:hover {
   text-decoration: underline; text-decoration-color: var(--border-2);
