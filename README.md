@@ -67,6 +67,7 @@ production.
 | [Configuration](docs/configuration.md) | Every setting, with its default and effect |
 | [Access control](docs/access-control.md) | Accounts, roles, directory mapping, scoping, API keys |
 | [Alerting](docs/alerting.md) | How alerts are raised, routed, delivered and retried |
+| [Reporting renewals from automation](docs/renewal-reports.md) | Renewal-report keys, API outcomes, verification, and tested Certbot/acme.sh hooks |
 | [Operations](docs/operations.md) | Monitoring, backups, retention, secrets, troubleshooting |
 | [Upgrading](UPGRADING.md) | What changed between versions, and what to do about it |
 | [Security](SECURITY.md) and [threat model](docs/threat-model.md) | Reporting a vulnerability; what cert-watch defends against |

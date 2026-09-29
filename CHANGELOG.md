@@ -7,68 +7,36 @@ All notable changes to cert-watch are documented in this file.
 ### Security
 
 - Added a least-privilege `renewal-report` API-key scope with an explicit
-  all-endpoints or host-tag binding. These keys have no certificate or
-  settings permissions and are uniformly refused outside the
-  `GET`/`POST /api/renewal-reports` routes. A separate hash prefix makes older
-  binaries reject them rather than reinterpret them after a downgrade. Their
-  tag bindings are limited to 20 visible labels of at most 64 characters each,
-  key names are limited to 100 visible, control-free characters, and malformed
-  or duplicate Authorization headers are rejected consistently across every
-  route (#118 S1).
+  all-endpoints or host-tag binding. It can reach only
+  `GET`/`POST /api/renewal-reports`, and its separate hash format makes older
+  binaries reject it safely. Live binding checks, indistinguishable unknown
+  and out-of-scope responses, bounded tags and key names, strict bearer parsing,
+  and write-scoped report detail keep automation least-privileged (#118).
 
 ### Added
 
-- Renewal outcomes now use one precedence across Home, Browse, fleet pivots,
-  detail, and JSON: deployment not confirmed, failed, stalled, verifying,
-  in progress, manual, automation configured, then unknown. Home places failed
-  and unconfirmed endpoints in Certificate risk without adding another block;
-  Browse exposes matching filter chips; and endpoint detail shows the current
-  attempt plus recent reports with host-tag write-scoped automation details
-  and failure controls. Detail headlines use the same renewal-axis value as
-  Browse, report times use server receipt order, and failure clears are
-  confirmed immediately (#118 S6).
-
 - Durable, append-only renewal reports (`POST`/`GET /api/renewal-reports`)
-  and retained attempt history with at most one current attempt per endpoint,
-  strict JSON-only 16 KiB ingestion, live host-tag targeting, recent-leaf
-  fingerprint lookup, endpoint-bound source idempotency, opaque report
-  identifiers, non-extending leases, redacted bounded history, retention and
-  delete/re-add isolation. Attempts and correlation ownership follow history
-  retention while preserving every attempt referenced by retained history,
-  current attempts, and one stall-lease record per endpoint and baseline;
-  reporting keys can create at most 1,000 correlations per endpoint per
-  rolling day (#118 S2).
-- Successful renewal reports now queue coalesced, cross-process-claimed scans
-  and are verified only from stored leaf evidence. Expiry-aware check bands,
-  a configurable 5–15 minute grace period, mismatch handling, and the routed
-  `renewal_not_deployed` alert cover deployments that do not reach the
-  monitored endpoint without suppressing expiry alerts. Bare reports use only
-  safe predecessor observations from the prior 24 hours, verified endpoints
-  can open later renewal cycles, and evaluation errors back off exponentially
-  to the expiry-band cadence (#118 S4).
-- Failed renewal reports now wake the alert rule pass and raise an
-  endpoint-cycle `renewal_failed` alert with fixed, non-report-derived text.
-  The attempt that first reports the failure supplies the stable provider key;
-  later started, manual in-progress, and succeeded attempts carry the same
-  condition and incident. It closes when a scan after the failure moves its
-  carrying attempt into the verified state, when a non-baseline stored leaf
-  matches the latest fingerprint carried by a failure or success report in the
-  condition, when the endpoint is deleted, or an authorized operator uses the
-  new HTML/JSON explicit clear action. With no condition fingerprint, any
-  successor clears it unless the attempt has an unserved certificate claim of
-  its own. A later failure after a manual clear restarts a new condition on the
-  same non-terminal attempt without changing its renewal state or claim. A
-  genuinely new failure after verification opens a new attempt from the served
-  leaf, while a late retry owned by the verified run remains ignored.
-  Pre-scan failures defer their alert until a leaf exists and
-  keep that incident stable across later leaf changes. Failed reports use a
-  dedicated rule wake and never schedule a TLS scan. Failures reported after
-  `not_deployed` raise both conditions. Renewal
-  digests now include every failure condition open at any point in the period,
-  including superseded or since-cleared conditions, plus current **Reported but
-  not deployed** transitions, without depending on Event stream retention
-  (#118 S5). Closing an alert by dedupe key now also resolves provider
-  incidents whose delivery is currently in progress.
+  with strict JSON ingestion, live host-tag or fingerprint targeting,
+  key-scoped idempotency, correlation history, bounded retention, and
+  delete/re-add isolation (#118).
+- Scan-backed `succeeded` verification with coalesced checks, expiry-aware
+  bands, configurable grace, exact replacement fingerprints, and the routed
+  `renewal_not_deployed` alert. A report remains a claim and never suppresses
+  expiry alerts (#118).
+- Durable endpoint-cycle failure conditions and the routed `renewal_failed`
+  alert. They survive later attempts and clear only from qualifying stored scan
+  evidence, endpoint deletion, or an audited operator action. Renewal digests
+  now include failed and reported-but-not-deployed transitions without report
+  text or identities (#118).
+- One renewal-state precedence across Home, Browse, pivots, detail, and JSON:
+  deployment not confirmed, failed, stalled, verifying, in progress, manual,
+  automation configured, then unknown. Home surfaces failed/unconfirmed rows,
+  Browse adds filters, and detail shows the current attempt, scoped history,
+  and failure controls (#118).
+- An operator guide and shell-checked plain curl examples plus hooks tested
+  with simulated Certbot and acme.sh environments. The guide covers echoing a
+  `renewal_needed` webhook's stable `event_id` as a report `correlation_id`
+  while keeping retry idempotency in a separate header (#118).
 
 ### Changed
 
@@ -81,40 +49,23 @@ All notable changes to cert-watch are documented in this file.
   live lease. Expiry warnings and expired alerts remain independent.
   The renewal axis now consistently ranks `stalled` ahead of `in_progress`
   when a same-certificate restart is visible but cannot suppress again
-  (#118 S3).
+  (#118).
 
 ### Fixed
 
-- **Verified-correlation late-failure exception:** a failed renewal report
-  carrying an already verified attempt's correlation is now treated as
-  `ignored_late` even when the served leaf has since changed. This fixes the
-  attempt state machine to enforce its documented correlation ownership rule;
-  it is the one deliberate departure from the reducer at this work's merge
-  base. A differential test runs reports, direct stored-leaf evidence, manual
-  clears, compatibility status writes, and generated restart sequences against
-  merge-base copies of both the report and verification reducers. It compares
-  returned state and effect, stored report effect, and every attempt column
-  except the five failure-overlay columns migration 0049 adds, runs the
-  store-time failure hook on the new side, and stops a sequence when it
-  records that one allowed difference, which must occur on exactly the
-  recorded sequences (#118 S5).
+- A failed report carrying an already verified attempt's correlation is now
+  retained as `ignored_late`, even after the served leaf changes, instead of
+  reopening completed work (#118).
+- Closing an alert by dedupe key also resolves a matching provider incident
+  whose delivery is currently in progress.
 
 ### Upgrade notes
 
-- Migration 0046 adds renewal report, attempt/correlation history and
-  idempotency tables. It does not change alerting or existing renewal status
-  behavior. See [UPGRADING.md](UPGRADING.md).
-- Migration 0047 converts stored `in_progress` hosts without a current S2
-  attempt to 24-hour leased attempts (or the configured lease), audits each
-  conversion or preservation decision, and enables manual cancellation
-  reports. See [UPGRADING.md](UPGRADING.md).
-- Migration 0048 adds renewal-verification evidence fields and short-lived
-  endpoint scan claims. See [UPGRADING.md](UPGRADING.md).
-- Migration 0049 adds and backfills the failure condition identity, expected
-  fingerprint, first accepted failure timestamp, clearing time, and rule-pass
-  wake used by alerts and digests. See [UPGRADING.md](UPGRADING.md).
-- Migration 0045 adds explicit binding metadata to API keys. Existing keys
-  remain bound to all endpoints. See [UPGRADING.md](UPGRADING.md).
+- Migrations 0045–0049 add reporting-key bindings, renewal reports and
+  attempts, leased compatibility status, verification evidence, and durable
+  failure conditions. Existing keys retain their access; hosts left
+  `in_progress` begin a lease at upgrade and can start receiving stalled
+  notices when it lapses. See [UPGRADING.md](UPGRADING.md).
 
 ## [1.1.1] - 2026-09-27
 

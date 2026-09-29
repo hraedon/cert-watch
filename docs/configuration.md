@@ -65,6 +65,17 @@ template when the receiver needs structure.
 Generic webhooks do not apply Slack, Discord, or Teams markup escaping. Use the
 dedicated channel kind when sending to one of those chat systems.
 
+## Renewal reporting settings
+
+`CERT_WATCH_RENEWAL_REPORT_LEASE_HOURS` controls how long the first `started`
+report for an endpoint and served certificate can mute renewal-stalled notices.
+Repeats never extend or re-grant that lease. It never affects expiry alerts.
+`CERT_WATCH_RENEWAL_VERIFY_GRACE_MINUTES` controls how long after a `succeeded`
+report an unchanged successful scan must wait before it can count toward a
+deployment warning; an immediate scan can still verify a new certificate.
+See [Reporting renewals from automation](renewal-reports.md) for the complete
+outcome and verification behavior.
+
 ## Reference
 
 This section is generated from the code by `scripts/gen_config_reference.py`,

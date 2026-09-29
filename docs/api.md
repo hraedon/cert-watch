@@ -10,6 +10,10 @@ remain valid. Browse uses the same vocabulary in its query string.
 
 ## Renewal reports
 
+For setup, outcome behavior, troubleshooting, and tested Certbot and acme.sh
+hooks, see [Reporting renewals from automation](renewal-reports.md). This
+section is the compact wire-level reference.
+
 Renewal automation uses a dedicated `renewal-report` API key. Send it as
 `Authorization: Bearer cwk_…`. These keys can call only the two routes below;
 ordinary read, write and admin API keys cannot call them. The normal per-IP
@@ -19,7 +23,7 @@ per minute per key and endpoint.
 ### `POST /api/renewal-reports`
 
 The body is a strict JSON object, limited to 16 KiB, and the request must send
-`Content-Type: application/json` (a `charset` parameter is allowed). Other
+`Content-Type: application/json`; media-type parameters are ignored. Other
 media types return 415. Unknown fields, duplicate JSON keys, non-finite
 numbers and type coercion are rejected. Select exactly one target:
 
