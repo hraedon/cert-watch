@@ -28,6 +28,7 @@ from cert_watch.database import (
     get_stored_certificate_detail_records,
     list_cert_history,
 )
+from cert_watch.database.renewal_attempts import get_renewal_detail
 from cert_watch.scan_freshness import ScanEvidence, load_scan_evidence
 from cert_watch.status_model import AxisSettings
 from cert_watch.tags import parse_tags
@@ -57,6 +58,8 @@ class StoredCertificateDetailData:
     # certificate in place, so the page must say the evidence is old (#113).
     latest_scan: LatestScanRecord | None = None
     status: dict[str, Any] | None = None
+    renewal_attempt: dict[str, object] | None = None
+    renewal_reports: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -67,6 +70,8 @@ class PendingHostDetailData:
     scan_evidence: ScanEvidence | None
     all_tags: list[str]
     status: dict[str, Any] | None = None
+    renewal_attempt: dict[str, object] | None = None
+    renewal_reports: tuple[dict[str, object], ...] = ()
 
 
 CertificateDetailData = StoredCertificateDetailData | PendingHostDetailData
@@ -126,6 +131,7 @@ def load_certificate_detail(
             ),
         )
         status_model = row.get("status") if row else None
+        renewal_attempt, renewal_reports = get_renewal_detail(db_path, pending.host.id)
         return PendingHostDetailData(
             cert_id=cert_id,
             host=pending.host,
@@ -133,6 +139,8 @@ def load_certificate_detail(
             scan_evidence=evidence,
             all_tags=all_tags,
             status=status_model,
+            renewal_attempt=renewal_attempt,
+            renewal_reports=tuple(renewal_reports),
         )
 
     chain_certs = [cert for _, cert in stored.chain]
@@ -171,6 +179,12 @@ def load_certificate_detail(
         ),
     )
     status_model = row.get("status") if row else None
+    stored_renewal_attempt: dict[str, object] | None = None
+    stored_renewal_reports: list[dict[str, object]] = []
+    if stored.host is not None:
+        stored_renewal_attempt, stored_renewal_reports = get_renewal_detail(
+            db_path, stored.host.id
+        )
     return StoredCertificateDetailData(
         cert_id=cert_id,
         cert=stored.cert,
@@ -200,4 +214,6 @@ def load_certificate_detail(
         ),
         latest_scan=latest_scan,
         status=status_model,
+        renewal_attempt=stored_renewal_attempt,
+        renewal_reports=tuple(stored_renewal_reports),
     )

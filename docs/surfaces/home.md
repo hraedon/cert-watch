@@ -13,7 +13,10 @@ desktop and stack on phones: Certificate risk, Monitoring gaps, and Delivery &
 routing. A clickable twelve-week expiry strip follows them.
 
 Every count and week opens the exact flat Browse population it counts. Expiry
-rows are ranked by days; chain-trust problems are collapsed to one row per
+rows are ranked by days. Failed and unconfirmed renewal deployments appear in
+Certificate risk after expiry rows, even when the certificate is not near
+expiry; their counts link to the matching renewal-filtered Browse population.
+Chain-trust problems are collapsed to one row per
 issuer instead of competing with expiry. Monitoring rows distinguish failed,
 overdue, and never-scanned endpoints, explain failures in plain language, and
 state when the problem began. Delivery shows problem channels and scoped

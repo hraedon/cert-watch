@@ -55,6 +55,77 @@ def _history_where(
     return where, [value for endpoint in endpoints for value in endpoint]
 
 
+def _renewal_projection_sql(
+    projection: str | None,
+    *,
+    not_after: str,
+    has_successor: str,
+) -> str:
+    """Return the full or attempt-only renewal projection for one endpoint."""
+    failure_open = "rat.failure_reported_at IS NOT NULL AND rat.failure_cleared_at IS NULL"
+    if projection == "renewal_risks":
+        return (
+            "CASE WHEN rat.state='not_deployed' THEN 'not_deployed' "
+            f"WHEN {failure_open} THEN 'failed' ELSE NULL END"
+        )
+    analytics = "COALESCE(ra.classification, 'unknown')" if projection == "renewal" else "'unknown'"
+    classified = (
+        "cw_renewal_state(h.hostname, h.port, h.renewal_method,"
+        f"{not_after},{has_successor},{analytics},rat.state,"
+        "rat.lease_expires_at,COALESCE(rat.suppresses_stalled,0),"
+        f"({failure_open}))"
+    )
+    if projection == "renewal_summary":
+        return (
+            "CASE WHEN rat.state='not_deployed' THEN 'not_deployed' "
+            f"WHEN {failure_open} THEN 'failed' "
+            f"WHEN rat.host_id IS NOT NULL THEN {classified} ELSE NULL END"
+        )
+    return classified
+
+
+def _renewal_columns(projection: str | None) -> tuple[str, str, str, str, str]:
+    """Build joins and selected renewal columns for an inventory projection."""
+    if projection is None:
+        empty_attempt = (
+            "NULL AS renewal_attempt_state,NULL AS renewal_lease_expires_at,"
+            " 0 AS renewal_suppresses_stalled,0 AS renewal_failure_active,"
+            " NULL AS renewal_raised_at,NULL AS renewal_failure_reported_at"
+        )
+        return "", "NULL AS renewal", "NULL AS renewal", "'unknown'", empty_attempt
+
+    renewal_join = ""
+    if projection == "renewal":
+        from cert_watch.renewal_analytics import CLASSIFIER_VERSION
+
+        renewal_join = (
+            " LEFT JOIN endpoint_renewal_analytics ra ON ra.hostname = h.hostname"
+            " AND ra.port = h.port"
+            f" AND ra.classifier_version = {CLASSIFIER_VERSION}"
+        )
+    attempt_join = " JOIN " if projection == "renewal_summary" else " LEFT JOIN "
+    renewal_join += (
+        f"{attempt_join}renewal_attempts rat ON rat.host_id=h.id AND rat.is_current=1"
+    )
+    successor = (
+        " EXISTS(SELECT 1 FROM certificates succ"
+        " WHERE succ.replaces_cert_id = c.id AND succ.id != c.id)"
+    )
+    renewal = _renewal_projection_sql(projection, not_after="c.not_after", has_successor=successor)
+    pending = _renewal_projection_sql(projection, not_after="NULL", has_successor="0")
+    analytics = "COALESCE(ra.classification, 'unknown')" if projection == "renewal" else "'unknown'"
+    failure_open = "rat.failure_reported_at IS NOT NULL AND rat.failure_cleared_at IS NULL"
+    attempt = (
+        "rat.state AS renewal_attempt_state,"
+        " rat.lease_expires_at AS renewal_lease_expires_at,"
+        " COALESCE(rat.suppresses_stalled,0) AS renewal_suppresses_stalled,"
+        f" ({failure_open})"
+        " AS renewal_failure_active,rat.raised_at AS renewal_raised_at,"
+        " rat.failure_reported_at AS renewal_failure_reported_at"
+    )
+    return renewal_join, f"{renewal} AS renewal", f"{pending} AS renewal", analytics, attempt
+
+
 def inventory_candidates_sql(
     *,
     source: str | None = None,
@@ -108,7 +179,11 @@ def inventory_candidates_sql(
     # cached trust fact without also evaluating an overall urgency state.
     need_chain_status = bool(requested & {"urgency", "chain"})
     need_monitoring = "monitoring" in requested and axes is not None
-    need_renewal = "renewal" in requested and axes is not None
+    renewal_projection = next(
+        (mode for mode in ("renewal", "renewal_summary", "renewal_risks") if mode in requested),
+        None,
+    )
+    need_renewal = renewal_projection is not None and axes is not None
     need_delivery = "delivery" in requested and axes is not None
     need_routing = "routing" in requested
     delivery_settings = axes.settings if axes is not None else AxisSettings()
@@ -179,17 +254,13 @@ def inventory_candidates_sql(
         if need_monitoring
         else ""
     )
-    if need_renewal:
-        from cert_watch.renewal_analytics import CLASSIFIER_VERSION
-
-    renewal_join = (
-        " LEFT JOIN endpoint_renewal_analytics ra ON ra.hostname = h.hostname"
-        " AND ra.port = h.port"
-        f" AND ra.classifier_version = {CLASSIFIER_VERSION}"
-        " LEFT JOIN renewal_attempts rat ON rat.host_id=h.id AND rat.is_current=1"
-        if need_renewal
-        else ""
-    )
+    (
+        renewal_join,
+        renewal_col,
+        pending_renewal_col,
+        renewal_analytics_col,
+        renewal_attempt_cols,
+    ) = _renewal_columns(renewal_projection if need_renewal else None)
     latest_attempt = (
         "hs.latest_attempt"
         if need_monitoring
@@ -209,54 +280,17 @@ def inventory_candidates_sql(
         " NULL AS monitoring_last_attempt, NULL AS monitoring_attempt_status,"
         " NULL AS monitoring_error, NULL AS monitoring_first_failed"
     )
-    renewal_col = (
-        "cw_renewal_state(h.hostname, h.port, h.renewal_method, c.not_after,"
-        " EXISTS(SELECT 1 FROM certificates succ"
-        " WHERE succ.replaces_cert_id = c.id AND succ.id != c.id),"
-        " COALESCE(ra.classification, 'unknown'),rat.state,rat.lease_expires_at,"
-        " COALESCE(rat.suppresses_stalled,0)) AS renewal"
-        if need_renewal
-        else "NULL AS renewal"
-    )
-    pending_renewal_col = (
-        "cw_renewal_state(h.hostname, h.port, h.renewal_method,NULL,0,"
-        " COALESCE(ra.classification, 'unknown'),rat.state,rat.lease_expires_at,"
-        " COALESCE(rat.suppresses_stalled,0)) AS renewal"
-        if need_renewal
-        else "NULL AS renewal"
-    )
-    renewal_analytics_col = (
-        "COALESCE(ra.classification, 'unknown')" if need_renewal else "'unknown'"
-    )
-    renewal_attempt_cols = (
-        "rat.state AS renewal_attempt_state,"
-        " rat.lease_expires_at AS renewal_lease_expires_at,"
-        " COALESCE(rat.suppresses_stalled,0) AS renewal_suppresses_stalled"
-        if need_renewal
-        else "NULL AS renewal_attempt_state,NULL AS renewal_lease_expires_at,"
-        " 0 AS renewal_suppresses_stalled"
-    )
     delivery_col = (
-        delivery_state_sql("c", "h", delivery_settings)
-        if need_delivery
-        else "'unrouted'"
+        delivery_state_sql("c", "h", delivery_settings) if need_delivery else "'unrouted'"
     )
     pending_delivery_col = (
-        delivery_state_sql(None, "h", delivery_settings)
-        if need_delivery
-        else "'unrouted'"
+        delivery_state_sql(None, "h", delivery_settings) if need_delivery else "'unrouted'"
     )
     uploaded_delivery_col = (
-        delivery_state_sql("c", None, delivery_settings)
-        if need_delivery
-        else "'unrouted'"
+        delivery_state_sql("c", None, delivery_settings) if need_delivery else "'unrouted'"
     )
-    scanned_routing_gap_col = (
-        routing_gap_sql("c", "h", delivery_settings) if need_routing else "0"
-    )
-    pending_routing_gap_col = (
-        routing_gap_sql(None, "h", delivery_settings) if need_routing else "0"
-    )
+    scanned_routing_gap_col = routing_gap_sql("c", "h", delivery_settings) if need_routing else "0"
+    pending_routing_gap_col = routing_gap_sql(None, "h", delivery_settings) if need_routing else "0"
     uploaded_routing_gap_col = (
         routing_gap_sql("c", None, delivery_settings) if need_routing else "0"
     )
@@ -398,6 +432,9 @@ def inventory_candidates_sql(
                    NULL AS renewal_attempt_state,
                    NULL AS renewal_lease_expires_at,
                    0 AS renewal_suppresses_stalled,
+                   0 AS renewal_failure_active,
+                   NULL AS renewal_raised_at,
+                   NULL AS renewal_failure_reported_at,
                    0 AS has_successor,
                    {uploaded_delivery_col} AS delivery,
                    {uploaded_routing_gap_col} AS routing_gap,
@@ -468,10 +505,7 @@ def inventory_candidates_sql(
 
 
 def _chunks(values: list[Any]) -> list[list[Any]]:
-    return [
-        values[i : i + SQLITE_QUERY_CHUNK]
-        for i in range(0, len(values), SQLITE_QUERY_CHUNK)
-    ]
+    return [values[i : i + SQLITE_QUERY_CHUNK] for i in range(0, len(values), SQLITE_QUERY_CHUNK)]
 
 
 def build_inventory_entries(
@@ -498,7 +532,7 @@ def build_inventory_entries(
     for chunk in _chunks(leaf_ids):
         ph = ",".join("?" * len(chunk))
         host_rows += conn.execute(
-            f"""SELECT DISTINCT {host_projection_sql('h', '?')} FROM hosts h JOIN certificates c
+            f"""SELECT DISTINCT {host_projection_sql("h", "?")} FROM hosts h JOIN certificates c
                 ON c.hostname = h.hostname AND c.port = h.port
                 WHERE c.id IN ({ph})""",
             [_sql_now(status.now), *chunk],
@@ -573,6 +607,9 @@ def build_inventory_entries(
             "renewal_attempt_state",
             "renewal_lease_expires_at",
             "renewal_suppresses_stalled",
+            "renewal_failure_active",
+            "renewal_raised_at",
+            "renewal_failure_reported_at",
         ):
             if key in keys:
                 entry["effective_days" if key == "eff_days" else key] = candidate[key]
@@ -608,6 +645,7 @@ def build_inventory_entries(
                     else None
                 ),
                 suppresses_stalled=bool(entry.get("renewal_suppresses_stalled")),
+                failure_active=bool(entry.get("renewal_failure_active")),
             )
             entry["renewal"] = renewal
             entry["renewal_source"] = source
@@ -688,6 +726,10 @@ def list_dashboard_page(
         )
         if value
     )
+    if renewal in {"failed", "not_deployed"}:
+        filter_axes = (filter_axes - {"renewal"}) | {"renewal_risks"}
+    elif renewal == "verifying":
+        filter_axes = (filter_axes - {"renewal"}) | {"renewal_summary"}
     if chain_problem:
         filter_axes = filter_axes | {"chain"}
     # COUNT and key selection use only the axes required by active filters.

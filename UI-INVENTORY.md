@@ -48,6 +48,7 @@ endpoint-specific monitoring state.
 | Host tags | `hosts.tags` (schema.py:70) | The one **Edit host** form on pending-host detail; certificate detail edits certificate-own tags instead. Creation-time seeds remain. | Combined edit uses `services.host_edit.edit_host`; legacy tag-only adapters and creation/import remain callable | Detail A's combined editor (V6) |
 | Scan target (hostname, port, TLS mode, common-ports) | `hostname`, `port` + scan params | Add drawer, scan tab — `dashboard.html:339-372` | `POST /hosts` + `POST /api/hosts`, through `services.host_management.create_hosts` | Create-only by design — OK |
 | Cadence, alert threshold, renewal progress | `scan_interval_hours`, `threshold_days`, `renewal_status` | Creation/import seeds where supported; one **Edit host** form for post-creation edits | Combined edit uses `services.host_edit.edit_host`; legacy settings adapters remain callable | Detail A's combined editor (V6) |
+| Renewal attempt and failure | `renewal_attempts`, `renewal_reports` | Read-only attempt/report block on endpoint detail; writers get the existing manual-progress selector and **Clear failure** only while a condition is open | `POST /hosts/{id}/edit` + `PUT /api/hosts/{id}` for manual progress; `POST /hosts/{id}/renewal-failure/clear` + `POST /api/hosts/{id}/renewal-failure/clear` for explicit clear | Endpoint detail owns manual renewal controls; report ingestion remains automation-only |
 | Lifecycle (delete, scan) | row | `certificate_detail.html:78` (delete), :64 (scan) | `POST /hosts/{id}/delete` + `DELETE /api/hosts/{id}`; `POST /hosts/{id}/scan` + `POST /api/hosts/{id}/scan`, through `services.host_management` | HTML and JSON are equal adapters |
 
 ## Tags (cross-cutting registry)
@@ -128,6 +129,11 @@ endpoint-specific monitoring state.
   location, labelled **Edit certificate** because no host exists. The
   field-specific endpoints remain compatible API surfaces, but no longer own
   separate controls on detail.
+- **V7 — RESOLVED 2026-09-28 (#118 S6).** Endpoint detail has one compact
+  Renewal block for the current attempt and recent automation reports. Every
+  reader sees outcome and time; report text and identifiers follow the
+  host-tag write-access reveal rule. Only writers see manual progress and the
+  explicit failure-clear control.
 
 ## Endpoint settings and scan evidence (2026-09-12)
 

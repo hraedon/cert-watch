@@ -6,7 +6,39 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from cert_watch.database.api_keys import display_api_key_name
 from cert_watch.database.connection import SQLITE_QUERY_CHUNK, _connect, _sql_now
+
+
+def get_renewal_detail(
+    db_path: str | Path, host_id: str, *, report_limit: int = 5
+) -> tuple[dict[str, object] | None, list[dict[str, object]]]:
+    """Return the current attempt and newest reports for endpoint detail."""
+    with _connect(db_path) as conn:
+        attempt_row = conn.execute(
+            """SELECT attempt_id,state,lease_expires_at,next_check_at,raised_at,
+                      verified_fingerprint,last_check_at,received_at,
+                      failure_reported_at,failure_cleared_at
+               FROM renewal_attempts WHERE host_id=? AND is_current=1""",
+            (host_id,),
+        ).fetchone()
+        report_rows = conn.execute(
+            """SELECT r.seq,r.outcome,r.received_at,r.message,r.tool,
+                      r.correlation_id,
+                      CASE WHEN r.source LIKE 'api_key:%' THEN COALESCE(
+                          (SELECT k.name FROM api_keys k
+                           WHERE k.id=substr(r.source,9)), r.source
+                      ) ELSE r.source END AS source_name
+               FROM renewal_reports r
+               WHERE r.host_id=? ORDER BY r.seq DESC LIMIT ?""",
+            (host_id, report_limit),
+        ).fetchall()
+    attempt = dict(attempt_row) if attempt_row is not None else None
+    reports = [dict(row) for row in report_rows]
+    for report in reports:
+        if report.get("source_name"):
+            report["source_name"] = display_api_key_name(str(report["source_name"]))
+    return attempt, reports
 
 
 def renewal_attempt_is_live(
@@ -43,11 +75,7 @@ def _whole_milliseconds(value: datetime) -> int:
     utc = value.astimezone(UTC)
     epoch = datetime(1970, 1, 1, tzinfo=UTC)
     delta = utc - epoch
-    return (
-        delta.days * 86_400_000
-        + delta.seconds * 1_000
-        + delta.microseconds // 1_000
-    )
+    return delta.days * 86_400_000 + delta.seconds * 1_000 + delta.microseconds // 1_000
 
 
 def live_attempt_exists_sql(host_alias: str = "h", now_sql: str = "?") -> str:
@@ -59,9 +87,7 @@ def live_attempt_exists_sql(host_alias: str = "h", now_sql: str = "?") -> str:
     )
 
 
-def endpoint_stall_suppression_exists_sql(
-    endpoint_alias: str = "c", now_sql: str = "?"
-) -> str:
+def endpoint_stall_suppression_exists_sql(endpoint_alias: str = "c", now_sql: str = "?") -> str:
     """The suppression fact for a certificate-shaped hostname/port row."""
     return (
         "EXISTS(SELECT 1 FROM renewal_attempts ras "
@@ -115,9 +141,7 @@ def endpoint_stall_suppressions(
     with _connect(db_path) as conn:
         for offset in range(0, len(unique), SQLITE_QUERY_CHUNK):
             chunk = unique[offset : offset + SQLITE_QUERY_CHUNK]
-            endpoint_sql = " UNION ALL ".join(
-                "SELECT ? AS hostname,? AS port" for _ in chunk
-            )
+            endpoint_sql = " UNION ALL ".join("SELECT ? AS hostname,? AS port" for _ in chunk)
             params: list[object] = [value for endpoint in chunk for value in endpoint]
             params.append(instant)
             rows = conn.execute(
@@ -125,9 +149,7 @@ def endpoint_stall_suppressions(
                 + endpoint_stall_suppression_exists_sql("ep", "?"),
                 params,
             ).fetchall()
-            suppressions.update(
-                (str(row["hostname"]), int(row["port"])) for row in rows
-            )
+            suppressions.update((str(row["hostname"]), int(row["port"])) for row in rows)
     return suppressions
 
 
@@ -139,6 +161,4 @@ def endpoint_stall_suppression_active(
     now: datetime | None = None,
 ) -> bool:
     """Read the webhook/rule suppression fact against one bound instant."""
-    return (hostname, port) in endpoint_stall_suppressions(
-        db_path, ((hostname, port),), now=now
-    )
+    return (hostname, port) in endpoint_stall_suppressions(db_path, ((hostname, port),), now=now)

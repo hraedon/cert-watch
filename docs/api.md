@@ -1,5 +1,13 @@
 # API reference
 
+## Inventory renewal filter
+
+Inventory endpoints that accept the public `renewal` filter use one shared
+precedence: `not_deployed`, `failed`, `stalled`, `verifying`, `in_progress`,
+`manual`, `automation_configured`, then `unknown`. The `not_deployed`,
+`failed`, and `verifying` values are additive in 1.2; existing filter values
+remain valid. Browse uses the same vocabulary in its query string.
+
 ## Renewal reports
 
 Renewal automation uses a dedicated `renewal-report` API key. Send it as

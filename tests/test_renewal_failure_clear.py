@@ -41,9 +41,7 @@ def test_clear_route_marks_failure_and_audits(reload_app, tmp_path, adapter):
             assert response.status_code == 303
             assert response.headers["location"].endswith("renewal_failure_cleared=1")
         else:
-            response = client.post(
-                f"/api/hosts/{host_id}/renewal-failure/clear", json={}
-            )
+            response = client.post(f"/api/hosts/{host_id}/renewal-failure/clear", json={})
             assert response.status_code == 200
             assert response.json() == {"id": host_id, "cleared": True}
 
@@ -85,9 +83,7 @@ def test_noop_clear_writes_no_audit_row(reload_app, tmp_path):
     host_id = SqliteHostRepository(db).add("noop-clear.example.test", 443)
 
     with TestClient(app) as client:
-        response = client.post(
-            f"/api/hosts/{host_id}/renewal-failure/clear", json={}
-        )
+        response = client.post(f"/api/hosts/{host_id}/renewal-failure/clear", json={})
 
     assert response.json() == {"id": host_id, "cleared": False}
     with _connect(db) as conn:
@@ -122,7 +118,9 @@ def test_html_clear_redirects_to_current_certificate(reload_app, tmp_path):
             f"/hosts/{host_id}/renewal-failure/clear",
             follow_redirects=False,
         )
+        page = client.get(response.headers["location"])
 
-    assert response.headers["location"] == (
-        f"/certificates/{cert_id}?renewal_failure_cleared=1"
-    )
+    assert response.headers["location"] == (f"/certificates/{cert_id}?renewal_failure_cleared=1")
+    assert 'data-testid="renewal-failure-cleared"' in page.text
+    assert "Failure cleared" in page.text
+    assert "Renewal failed" not in page.text

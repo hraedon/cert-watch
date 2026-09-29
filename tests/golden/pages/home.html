@@ -99,6 +99,8 @@ Browse inventory</a>
           <a href="/browse?condition=expired&amp;grouped=0" data-testid="home-condition-count-expired"><b class="t-crit">1</b> expired</a>
           <a href="/browse?condition=le7&amp;grouped=0" data-testid="home-condition-count-le7"><b class="t-crit">1</b> ≤7 days</a>
           <a href="/browse?condition=8to30&amp;grouped=0" data-testid="home-condition-count-8to30"><b class="t-warn">1</b> 8–30 days</a>
+          <a href="/browse?renewal=failed&amp;grouped=0" data-testid="home-renewal-count-failed"><b class="">0</b> renewal failed</a>
+          <a href="/browse?renewal=not_deployed&amp;grouped=0" data-testid="home-renewal-count-not-deployed"><b class="">0</b> Deployment not confirmed</a>
           <a href="/browse?condition=ok&amp;grouped=0" data-testid="home-condition-count-ok"><b>2</b> OK</a>
         </div>
       </div>
@@ -179,7 +181,7 @@ Browse inventory</a>
 
         <li class="cw-home-row cw-home-row--stack" data-testid="home-monitoring-row" data-monitoring="failing">
           <div class="cw-home-row-main">
-            <span class="cw-home-state t-warn"><span class="cw-home-dot"></span>Failing <span class="cw-home-when">since 2026-09-22 12:00 UTC</span></span>
+            <span class="cw-home-state t-warn"><span class="cw-home-dot"></span>Failing <span class="cw-home-when">since <span class="cw-home-time">2026-09-22 12:00 UTC</span></span></span>
             <a class="cw-id cw-home-id" href="/certificates/{{HOST_2_ID}}">pending.demo.test:8443</a>
             <span class="cw-home-detail">The server rejected the TLS handshake.</span>
 

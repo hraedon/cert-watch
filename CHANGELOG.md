@@ -12,10 +12,21 @@ All notable changes to cert-watch are documented in this file.
   `GET`/`POST /api/renewal-reports` routes. A separate hash prefix makes older
   binaries reject them rather than reinterpret them after a downgrade. Their
   tag bindings are limited to 20 visible labels of at most 64 characters each,
-  and malformed or duplicate Authorization headers are rejected consistently
-  across every route (#118 S1).
+  key names are limited to 100 visible, control-free characters, and malformed
+  or duplicate Authorization headers are rejected consistently across every
+  route (#118 S1).
 
 ### Added
+
+- Renewal outcomes now use one precedence across Home, Browse, fleet pivots,
+  detail, and JSON: deployment not confirmed, failed, stalled, verifying,
+  in progress, manual, automation configured, then unknown. Home places failed
+  and unconfirmed endpoints in Certificate risk without adding another block;
+  Browse exposes matching filter chips; and endpoint detail shows the current
+  attempt plus recent reports with host-tag write-scoped automation details
+  and failure controls. Detail headlines use the same renewal-axis value as
+  Browse, report times use server receipt order, and failure clears are
+  confirmed immediately (#118 S6).
 
 - Durable, append-only renewal reports (`POST`/`GET /api/renewal-reports`)
   and retained attempt history with at most one current attempt per endpoint,

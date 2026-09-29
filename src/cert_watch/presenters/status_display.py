@@ -50,3 +50,18 @@ def condition_display(
     )
     label = f"{days} day{'s' if days != 1 else ''} left"
     return StatusDisplay(f"Last seen · {label}" if stale else label, tone)
+
+
+def renewal_display(state: str) -> StatusDisplay:
+    """Present the canonical renewal axis with the shared status tones."""
+    label, tone = {
+        "not_deployed": ("Deployment not confirmed", "t-crit"),
+        "failed": ("Renewal failed", "t-crit"),
+        "stalled": ("Renewal stalled", "t-warn"),
+        "verifying": ("Verifying renewal", "t-neutral"),
+        "in_progress": ("Renewal in progress", "t-neutral"),
+        "manual": ("Manual", "t-muted"),
+        "automation_configured": ("Automation configured", "t-ok"),
+        "unknown": ("Unknown", "t-muted"),
+    }.get(state, ("Unknown", "t-muted"))
+    return StatusDisplay(label, tone)

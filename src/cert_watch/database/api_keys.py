@@ -44,6 +44,18 @@ VALID_BINDINGS = ("all", "tags")
 RENEWAL_REPORT_SCOPE = "renewal-report"
 MAX_RENEWAL_REPORT_TAG_LENGTH = 64
 MAX_RENEWAL_REPORT_TAGS = 20
+MAX_API_KEY_NAME_LENGTH = 100
+
+_BIDI_CONTROLS = frozenset(
+    chr(value)
+    for value in (
+        0x061C,
+        0x200E,
+        0x200F,
+        *range(0x202A, 0x202F),
+        *range(0x2066, 0x206A),
+    )
+)
 
 # Raw tokens are prefixed so they are recognisable in logs/configs and so a
 # bearer token can be told apart from other Authorization schemes at a glance.
@@ -110,9 +122,7 @@ def _get_pepper() -> bytes:
     return _pepper_from_env_source(source, os.environ[source])
 
 
-def hash_token(
-    raw_token: str, *, pepper: bytes | None = None, prefix: str = _HMAC_PREFIX
-) -> str:
+def hash_token(raw_token: str, *, pepper: bytes | None = None, prefix: str = _HMAC_PREFIX) -> str:
     """Return the peppered HMAC-SHA256 of a raw token (what we store and look up by).
 
     Uses HMAC-SHA256 with a server-side pepper so a DB-only leak cannot
@@ -135,11 +145,37 @@ def generate_token() -> str:
     return _TOKEN_PREFIX + secrets.token_urlsafe(32)
 
 
+def _invalid_key_name_character(char: str) -> bool:
+    value = ord(char)
+    return value < 0x20 or 0x7F <= value <= 0x9F or char in _BIDI_CONTROLS
+
+
+def validate_api_key_name(name: str) -> str:
+    """Return a normalized key name or reject ambiguous control text."""
+    normalized = name.strip()
+    if not normalized:
+        raise ValueError("name is required")
+    if len(normalized) > MAX_API_KEY_NAME_LENGTH:
+        raise ValueError(f"name may contain at most {MAX_API_KEY_NAME_LENGTH} characters")
+    if any(_invalid_key_name_character(char) for char in normalized):
+        raise ValueError("name cannot contain control or bidirectional characters")
+    return normalized
+
+
+def display_api_key_name(name: str) -> str:
+    """Render legacy unsafe names as visible escapes within the current cap."""
+    escaped = "".join(
+        (f"\\x{ord(char):02x}" if ord(char) <= 0xFF else f"\\u{ord(char):04x}")
+        if _invalid_key_name_character(char)
+        else char
+        for char in name.strip()
+    )
+    return escaped[:MAX_API_KEY_NAME_LENGTH]
+
+
 def _validate_renewal_report_tags(tags: list[str] | tuple[str, ...]) -> None:
     if len(tags) > MAX_RENEWAL_REPORT_TAGS:
-        raise ValueError(
-            f"renewal-report keys may bind at most {MAX_RENEWAL_REPORT_TAGS} tags"
-        )
+        raise ValueError(f"renewal-report keys may bind at most {MAX_RENEWAL_REPORT_TAGS} tags")
     for tag in tags:
         normalized = unicodedata.normalize("NFKC", tag).strip()
         visible = any(
@@ -192,9 +228,7 @@ class SqliteApiKeyRepository:
         peppers = (self._pepper, _get_pepper(), _LEGACY_DEFAULT_PEPPER)
         candidates: list[str] = []
         for pepper in peppers:
-            candidate = hash_token(
-                raw_token, pepper=pepper, prefix=_RENEWAL_REPORT_HMAC_PREFIX
-            )
+            candidate = hash_token(raw_token, pepper=pepper, prefix=_RENEWAL_REPORT_HMAC_PREFIX)
             if candidate not in candidates:
                 candidates.append(candidate)
         return candidates
@@ -210,8 +244,7 @@ class SqliteApiKeyRepository:
         """Create a key. Returns (stored entry, raw token shown once)."""
         if scope not in VALID_SCOPES:
             raise ValueError(f"scope must be one of {VALID_SCOPES}")
-        if not name or not name.strip():
-            raise ValueError("name is required")
+        normalized_name = validate_api_key_name(name)
         tags = parse_tags(bound_tags)
         if scope == RENEWAL_REPORT_SCOPE:
             if binding not in VALID_BINDINGS:
@@ -246,7 +279,7 @@ class SqliteApiKeyRepository:
                             else _HMAC_PREFIX
                         ),
                     ),
-                    name.strip(),
+                    normalized_name,
                     scope,
                     binding,
                     normalized_tags,
@@ -256,7 +289,7 @@ class SqliteApiKeyRepository:
             conn.commit()
         entry = ApiKeyEntry(
             id=key_id,
-            name=name.strip(),
+            name=normalized_name,
             scope=scope,
             binding=binding,
             bound_tags=tuple(tags),
@@ -308,8 +341,11 @@ class SqliteApiKeyRepository:
                 return None
             tags = tuple(parse_tags(row["bound_tags"]))
             auth = ApiKeyAuth(
-                id=row["id"], name=row["name"], scope=row["scope"],
-                binding=row["binding"], bound_tags=tags,
+                id=row["id"],
+                name=display_api_key_name(row["name"]),
+                scope=row["scope"],
+                binding=row["binding"],
+                bound_tags=tags,
             )
             # A corrupt scope is still returned so the authentication boundary
             # can log and reject the specific key, but it must not look used or
@@ -340,11 +376,7 @@ class SqliteApiKeyRepository:
             now_iso = datetime.now(UTC).isoformat()
             updates = ["last_used_at = ?"]
             params: list[str] = [now_iso]
-            desired_hash = (
-                new_report_hash
-                if row["scope"] == RENEWAL_REPORT_SCOPE
-                else new_hash
-            )
+            desired_hash = new_report_hash if row["scope"] == RENEWAL_REPORT_SCOPE else new_hash
             if row["key_hash"] != desired_hash:
                 # Verified under a non-current hash: either an earlier pepper or
                 # the pre-pepper unkeyed SHA-256. Surface it so an operator can
@@ -353,9 +385,7 @@ class SqliteApiKeyRepository:
                 # here is worth rotating.
                 legacy_kind = (
                     "an earlier pepper"
-                    if row["key_hash"].startswith(
-                        (_HMAC_PREFIX, _RENEWAL_REPORT_HMAC_PREFIX)
-                    )
+                    if row["key_hash"].startswith((_HMAC_PREFIX, _RENEWAL_REPORT_HMAC_PREFIX))
                     else "an unkeyed SHA-256 hash"
                 )
                 logger.warning(
@@ -400,7 +430,7 @@ class SqliteApiKeyRepository:
         return [
             ApiKeyEntry(
                 id=r["id"],
-                name=r["name"],
+                name=display_api_key_name(r["name"]),
                 scope=r["scope"],
                 binding=r["binding"],
                 bound_tags=tuple(parse_tags(r["bound_tags"])),

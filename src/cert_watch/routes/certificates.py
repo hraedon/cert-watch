@@ -17,7 +17,11 @@ from cert_watch.auth.guards import (
     get_auth_context,
     write_form_guard,
 )
-from cert_watch.auth.scope import ScopeDeniedError, may_reveal_routing_identities
+from cert_watch.auth.scope import (
+    ScopeDeniedError,
+    may_reveal_renewal_report_details,
+    may_reveal_routing_identities,
+)
 from cert_watch.database import resolve_current_certificate
 from cert_watch.presenters.certificate_detail import present_certificate_detail
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth, get_templates
@@ -68,6 +72,7 @@ from cert_watch.services.resource_metadata import (
     update_certificate_tags as persist_certificate_tags,
 )
 from cert_watch.status_model import AxisSettings
+from cert_watch.tags import parse_tags
 
 logger = logging.getLogger("cert_watch.routes.certificates")
 
@@ -165,12 +170,14 @@ def _render_certificate_detail(
             or scope_write_denied(request, db, cert_id=cert_id) is None
         )
     )
+    auth_template = get_auth_context(request)
+    host_tags = parse_tags(data.host.tags) if data.host is not None else []
     effective_tags = (
         data.effective_tags
         if not isinstance(data, PendingHostDetailData)
-        else tuple(tag.strip() for tag in data.host.tags.split(",") if tag.strip())
+        else tuple(parse_tags(data.host.tags))
     )
-    auth_template = get_auth_context(request)
+    auth_context = getattr(request.state, "auth_context", None)
     view = present_certificate_detail(
         data,
         settings_writable=resource_writable,
@@ -181,9 +188,8 @@ def _render_certificate_detail(
         superseded=bool(request.query_params.get("superseded")),
         scanned=bool(request.query_params.get("scanned")),
         added=bool(request.query_params.get("added")),
-        reveal_delivery_identities=may_reveal_routing_identities(
-            getattr(request.state, "auth_context", None), effective_tags
-        ),
+        reveal_delivery_identities=may_reveal_routing_identities(auth_context, effective_tags),
+        reveal_renewal_report_details=may_reveal_renewal_report_details(auth_context, host_tags),
     )
     return templates.TemplateResponse(
         request=request,
@@ -205,6 +211,7 @@ def _render_certificate_detail(
             "error": request.query_params.get("error", ""),
             "warning": request.query_params.get("warning", ""),
             "host_saved": bool(request.query_params.get("host_saved")),
+            "renewal_failure_cleared": bool(request.query_params.get("renewal_failure_cleared")),
             "edit_open": bool(edit_values is not None or request.query_params.get("edit")),
             "edit_values": edit_values or {},
             "edit_errors": edit_errors or {},

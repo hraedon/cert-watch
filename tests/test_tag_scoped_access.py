@@ -35,11 +35,24 @@ def _insert_cert(conn, cert_id, hostname, port=443, tags="", source="scanned"):
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            cert_id, hostname, f"issuer-{hostname}",
-            now.isoformat(), (now + timedelta(days=30)).isoformat(),
-            "[]", f"fp-{cert_id}", b"der", source, hostname,
-            port, 1, None, 1, None, tags,
-            now.isoformat(), now.isoformat(),
+            cert_id,
+            hostname,
+            f"issuer-{hostname}",
+            now.isoformat(),
+            (now + timedelta(days=30)).isoformat(),
+            "[]",
+            f"fp-{cert_id}",
+            b"der",
+            source,
+            hostname,
+            port,
+            1,
+            None,
+            1,
+            None,
+            tags,
+            now.isoformat(),
+            now.isoformat(),
         ),
     )
 
@@ -115,10 +128,7 @@ class TestDashboardScopeFiltering:
         assert rows[0]["id"] == "c1"
 
     def test_grouped_dashboard_non_ascii_casefold_parity(self, db: Path):
-        """WI-066: the grouped dashboard's Python-side filter
-        (_entry_matches_scope_tag) uses casefold() not lower(), so uploaded
-        entries with non-ASCII tags match scope tags the same way scanned
-        entries do via SQL cw_casefold."""
+        """Grouped uploaded entries use the same Unicode tag comparison."""
         from cert_watch.database.dashboard import list_dashboard_grouped_page
         from cert_watch.tags import tags_match
 
@@ -127,10 +137,71 @@ class TestDashboardScopeFiltering:
             _insert_cert(conn, "c1", "de.example.com", source="uploaded")
 
         assert tags_match(["STRASSE"], ["Straße"]) is True
-        _rows, total = list_dashboard_grouped_page(
-            db, scope_tags=("Straße",), per_page=0
-        )
+        _rows, total = list_dashboard_grouped_page(db, scope_tags=("Straße",), per_page=0)
         assert total == 1
+
+
+def test_renewal_report_details_follow_host_tags_not_certificate_tags(
+    db: Path, tmp_path: Path
+) -> None:
+    now = "2026-09-28T12:00:00+00:00"
+    with _connect(db) as conn:
+        for hostname, host_tag, cert_tag, secret in (
+            ("cert-only.example.test", "host-team", "team-a", "CERT-ONLY-SECRET"),
+            ("host-write.example.test", "team-a", "cert-team", "HOST-WRITE-SECRET"),
+        ):
+            _insert_host(conn, hostname, tags=host_tag)
+            cert_id = "a" * 32 if hostname.startswith("cert-only") else "b" * 32
+            _insert_cert(conn, cert_id, hostname, tags=cert_tag)
+            attempt_id = f"attempt-{hostname}"
+            conn.execute(
+                """INSERT INTO renewal_attempts
+                   (attempt_id,host_id,is_current,source,state,opened_seq,
+                    received_at,failure_reported_at)
+                   VALUES (?, ?, 1, 'user:admin', 'verifying', 1, ?, ?)""",
+                (attempt_id, f"h-{hostname}", now, now),
+            )
+            conn.execute(
+                """INSERT INTO renewal_reports
+                   (report_id,host_id,hostname_snapshot,port_snapshot,outcome,
+                    message,tool,correlation_id,received_at,source,effect,attempt_id)
+                   VALUES (?, ?, ?, 443, 'failed', ?, 'tool-secret',
+                           'correlation-secret', ?, 'user:admin', 'applied', ?)""",
+                (
+                    f"report-{hostname}",
+                    f"h-{hostname}",
+                    hostname,
+                    secret,
+                    now,
+                    attempt_id,
+                ),
+            )
+        conn.commit()
+
+    app, groups = _make_mixed_tier_app(db, tmp_path)
+    with _scoped_client(app, groups) as client:
+        cert_only = client.get(f"/certificates/{'a' * 32}")
+        cert_only_history = client.get(
+            "/api/renewal-reports",
+            params={"hostname": "cert-only.example.test", "port": 443},
+        )
+        host_write = client.get(f"/certificates/{'b' * 32}")
+        host_write_history = client.get(
+            "/api/renewal-reports",
+            params={"hostname": "host-write.example.test", "port": 443},
+        )
+        inventory = client.get("/api/certificates")
+
+    assert cert_only.status_code == cert_only_history.status_code == 200
+    for secret in ("CERT-ONLY-SECRET", "tool-secret", "correlation-secret"):
+        assert secret not in cert_only.text
+        assert secret not in cert_only_history.text
+    assert "HOST-WRITE-SECRET" in host_write.text
+    assert "tool-secret" in host_write.text
+    assert "correlation-secret" in host_write.text
+    assert host_write_history.json()["items"][0]["message"] == "HOST-WRITE-SECRET"
+    assert "CERT-ONLY-SECRET" not in inventory.text
+    assert "HOST-WRITE-SECRET" not in inventory.text
 
 
 class TestHostAutoTagging:
@@ -293,13 +364,16 @@ class TestScopedRepoMethods:
         assert SqliteAlertRepository(db).list_pending_scoped(no_writable_scope) == []
         assert SqliteAlertRepository(db).mark_all_read(no_writable_scope) == 0
         now = datetime.now(UTC)
-        assert AlertStore(db).claim(
-            lease_owner="none",
-            lease_expires_at=now + timedelta(minutes=5),
-            now=now,
-            scope_tags=no_writable_scope,
-            ignore_backoff=True,
-        ) == []
+        assert (
+            AlertStore(db).claim(
+                lease_owner="none",
+                lease_expires_at=now + timedelta(minutes=5),
+                now=now,
+                scope_tags=no_writable_scope,
+                ignore_backoff=True,
+            )
+            == []
+        )
 
         with _connect(db) as conn:
             reads = dict(conn.execute("SELECT id, read FROM alerts").fetchall())
@@ -328,17 +402,24 @@ class TestScopedRepoMethods:
 
         _seed_two_teams(db)
         repo = SqliteAlertRepository(db)
-        assert [a.id for a in repo.list_pending_filtered(
-            scope_tags=("team-a",),
-        )] == ["alert-a"]
+        assert [
+            a.id
+            for a in repo.list_pending_filtered(
+                scope_tags=("team-a",),
+            )
+        ] == ["alert-a"]
         assert {a.id for a in repo.list_pending_filtered(scope_tags=())} == {
             "alert-a",
             "alert-b",
         }
         # Scope and type filters compose.
-        assert repo.list_pending_filtered(
-            alert_type="policy_violation", scope_tags=("team-a",),
-        ) == []
+        assert (
+            repo.list_pending_filtered(
+                alert_type="policy_violation",
+                scope_tags=("team-a",),
+            )
+            == []
+        )
 
     def test_alert_mark_all_read_scoped(self, db: Path):
         from cert_watch.database import SqliteAlertRepository
@@ -403,8 +484,7 @@ class TestScopedRepoMethods:
         repo.mark_all_read(("team-a",))
         with _connect(db) as conn:
             cleared = {
-                r["id"]
-                for r in conn.execute("SELECT id FROM alerts WHERE read = 1").fetchall()
+                r["id"] for r in conn.execute("SELECT id FROM alerts WHERE read = 1").fetchall()
             }
         assert cleared == flushable == {"alert-a"}
 
@@ -447,14 +527,9 @@ class TestScopedRepoMethods:
             tag_tiers={"team-a": "operator", "team-b": "viewer"},
         )
 
-        count = mark_all_alerts_read(
-            db, auth=auth, actor="mixed", source_ip=None
-        )
+        count = mark_all_alerts_read(db, auth=auth, actor="mixed", source_ip=None)
         with _connect(db) as conn:
-            read_ids = {
-                row["id"]
-                for row in conn.execute("SELECT id FROM alerts WHERE read = 1")
-            }
+            read_ids = {row["id"] for row in conn.execute("SELECT id FROM alerts WHERE read = 1")}
             conn.execute("UPDATE alerts SET read = 0")
             conn.commit()
 
@@ -469,7 +544,6 @@ class TestScopedRepoMethods:
             ignore_backoff=True,
         )
         assert {alert.id for alert in claimed} == {"alert-a", "alert-upload-a"}
-
 
     def test_effective_tags_union_matches_host_or_cert_tag(self, db: Path):
         """The scope filter matches on cert ∪ host tags: an alert is in scope
@@ -488,16 +562,10 @@ class TestScopedRepoMethods:
         host_repo = SqliteHostRepository(db)
         alert_repo = SqliteAlertRepository(db)
         # The host tag pulls it into team-a's scope...
-        assert [h.hostname for h in host_repo.list_scoped(("team-a",))] == [
-            "split.example.com"
-        ]
-        assert [a.id for a in alert_repo.list_pending_scoped(("team-a",))] == [
-            "alert-split"
-        ]
+        assert [h.hostname for h in host_repo.list_scoped(("team-a",))] == ["split.example.com"]
+        assert [a.id for a in alert_repo.list_pending_scoped(("team-a",))] == ["alert-split"]
         # ...and the cert tag independently pulls the alert into team-b's scope.
-        assert [a.id for a in alert_repo.list_pending_scoped(("team-b",))] == [
-            "alert-split"
-        ]
+        assert [a.id for a in alert_repo.list_pending_scoped(("team-b",))] == ["alert-split"]
 
 
 class TestScopeTagsFromAuthContract:
@@ -527,15 +595,19 @@ class TestScopedReadRoutes:
             _insert_cert(conn, cert_a, "host-a.example.com", tags="team-a")
             _insert_cert(conn, cert_b, "host-b.example.com", tags="team-b")
             _insert_alert(
-                conn, "hidden-detail-alert", cert_b,
+                conn,
+                "hidden-detail-alert",
+                cert_b,
                 message="team-b confidential alert text",
             )
             conn.commit()
-        return {"cert_a": cert_a, "cert_b": cert_b, "pending_a": pending_a,
-                "pending_b": pending_b}
+        return {"cert_a": cert_a, "cert_b": cert_b, "pending_a": pending_a, "pending_b": pending_b}
 
     def test_certificate_and_pending_host_detail_enforce_scope(
-        self, db: Path, tmp_path: Path, two_team_details,
+        self,
+        db: Path,
+        tmp_path: Path,
+        two_team_details,
     ):
         app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-a")
         with _scoped_client(app, groups) as client:
@@ -570,7 +642,11 @@ class TestScopedReadRoutes:
         ids=["list", "grouped", "calendar", "pivot"],
     )
     def test_browse_views_never_render_another_team(
-        self, db: Path, tmp_path: Path, path: str, visible_text: str,
+        self,
+        db: Path,
+        tmp_path: Path,
+        path: str,
+        visible_text: str,
     ):
         _seed_two_teams(db)
         app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-a")
@@ -603,9 +679,7 @@ def _make_scoped_app(db: Path, tmp_path: Path, *, scope_tag: str):
     groups = ["op-grp"]
     if scope_tag:
         # Scoped role → contributes the tag scope (but not the tier).
-        role_repo.add(
-            Role(name="team-role", permission_tier="viewer", scope_tag=scope_tag)
-        )
+        role_repo.add(Role(name="team-role", permission_tier="viewer", scope_tag=scope_tag))
         role_map["team-role"] = {"groups": ["team-grp"]}
         groups.append("team-grp")
     s = Settings(db_path=db, data_dir=tmp_path, role_map=role_map)
@@ -737,9 +811,7 @@ class TestScanAllHostsRoute:
         return scanned
 
     @pytest.mark.parametrize("path", ["/hosts/all/scan", "/api/hosts/scan"])
-    def test_scoped_operator_scans_only_team_hosts(
-        self, db, tmp_path, monkeypatch, path
-    ):
+    def test_scoped_operator_scans_only_team_hosts(self, db, tmp_path, monkeypatch, path):
         scanned = self._run(db, tmp_path, monkeypatch, scope_tag="team-a", path=path)
         assert scanned == ["host-a.example.com"]
 
@@ -803,27 +875,19 @@ class TestMarkAllAlertsReadRoute:
 class TestRetryAlertScopePrivacy:
     """Missing and out-of-scope alerts are indistinguishable to team users."""
 
-    def test_html_and_api_hide_existence_and_audit_scope_denials(
-        self, db, tmp_path
-    ):
+    def test_html_and_api_hide_existence_and_audit_scope_denials(self, db, tmp_path):
         _seed_two_teams(db)
         hidden_id = "00000000-0000-4000-8000-000000000002"
         missing_id = "00000000-0000-4000-8000-000000000003"
         with _connect(db) as conn:
             conn.execute("UPDATE alerts SET status = 'failed'")
-            _insert_alert(
-                conn, hidden_id, "cert-b", status="failed", message="hidden"
-            )
+            _insert_alert(conn, hidden_id, "cert-b", status="failed", message="hidden")
             conn.commit()
         app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-a")
 
         with _scoped_client(app, groups) as client:
-            html_missing = client.post(
-                f"/alerts/{missing_id}/retry", follow_redirects=False
-            )
-            html_hidden = client.post(
-                f"/alerts/{hidden_id}/retry", follow_redirects=False
-            )
+            html_missing = client.post(f"/alerts/{missing_id}/retry", follow_redirects=False)
+            html_hidden = client.post(f"/alerts/{hidden_id}/retry", follow_redirects=False)
             api_missing = client.post(f"/api/alerts/{missing_id}/retry")
             api_hidden = client.post(f"/api/alerts/{hidden_id}/retry")
 
@@ -874,9 +938,7 @@ class TestFlushAlertQueueRoute:
         seen = self._run(db, tmp_path, monkeypatch, scope_tag="")
         assert set(seen) == {"alert-a", "alert-b"}
 
-    def test_mixed_tier_caller_passes_only_writable_tags_to_claim(
-        self, db, tmp_path, monkeypatch
-    ):
+    def test_mixed_tier_caller_passes_only_writable_tags_to_claim(self, db, tmp_path, monkeypatch):
         _seed_two_teams(db)
         seen_scope: list[tuple[str, ...]] = []
 
@@ -918,9 +980,7 @@ def test_case_variant_roles_leave_out_of_scope_bulk_routes_empty(
 
         flushed.extend(
             alert.id
-            for alert in SqliteAlertRepository(db).list_pending_scoped(
-                dispatcher.scope_tags
-            )
+            for alert in SqliteAlertRepository(db).list_pending_scoped(dispatcher.scope_tags)
         )
         return {"sent": len(flushed), "failed": 0}
 
@@ -930,12 +990,8 @@ def test_case_variant_roles_leave_out_of_scope_bulk_routes_empty(
         scanned.append(hostname)
         return ScanResult("success", "")
 
-    monkeypatch.setattr(
-        "cert_watch.alerting.dispatch.Dispatcher.process_pending", _fake_process
-    )
-    monkeypatch.setattr(
-        "cert_watch.services.host_management._scan_and_store", _fake_scan
-    )
+    monkeypatch.setattr("cert_watch.alerting.dispatch.Dispatcher.process_pending", _fake_process)
+    monkeypatch.setattr("cert_watch.services.host_management._scan_and_store", _fake_scan)
     app, groups = _make_case_variant_tier_app(db, tmp_path)
     with _scoped_client(app, groups) as client:
         visible = client.get("/api/alerts")
@@ -953,19 +1009,16 @@ def test_case_variant_roles_leave_out_of_scope_bulk_routes_empty(
     assert scan_response.json() == {"scanned": 0, "failures": 0, "refused": 0}
     assert scanned == []
     with _connect(db) as conn:
-        row = conn.execute(
-            "SELECT read, status FROM alerts WHERE id = 'hidden-alert'"
-        ).fetchone()
+        row = conn.execute("SELECT read, status FROM alerts WHERE id = 'hidden-alert'").fetchone()
     assert tuple(row) == (0, "pending")
 
 
 class TestScopedFlushFullContract:
     """WI-078: drive the real Dispatcher with its SQL claim scope."""
 
-    def test_real_process_pending_sends_and_marks_only_in_scope(
-        self, db: Path, monkeypatch
-    ):
+    def test_real_process_pending_sends_and_marks_only_in_scope(self, db: Path, monkeypatch):
         from cert_watch.alerting import dispatch as alerts_mod
+
         _seed_two_teams(db)
 
         sent_cert_ids: list[str] = []
@@ -980,8 +1033,11 @@ class TestScopedFlushFullContract:
         monkeypatch.setattr(alerts_mod.SmtpTransport, "send", _fake_send)
 
         config = alerts_mod.AlertConfig(
-            smtp_host="relay.example.invalid", smtp_user="", smtp_password="",
-            from_addr="watch@example.invalid", recipients=["team@example.invalid"],
+            smtp_host="relay.example.invalid",
+            smtp_user="",
+            smtp_password="",
+            from_addr="watch@example.invalid",
+            recipients=["team@example.invalid"],
         )
         result = alerts_mod.Dispatcher(
             db, config=config, webhook_config=None, scope_tags=("team-a",)

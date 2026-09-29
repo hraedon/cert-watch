@@ -214,6 +214,14 @@ OK</span>
     <button type="submit" class="cw-btn">Search</button>
     </form>
 
+
+    <nav class="cw-chiprow" aria-label="Renewal filters" data-testid="renewal-filter-chips">
+      <span class="cw-hint">Renewal:</span>
+      <a class="cw-chip" href="/browse?renewal=failed&amp;sort_by=days&amp;sort_order=asc&amp;grouped=0">Renewal failed · 0</a>
+      <a class="cw-chip" href="/browse?renewal=not_deployed&amp;sort_by=days&amp;sort_order=asc&amp;grouped=0">Deployment not confirmed · 0</a>
+      <a class="cw-chip" href="/browse?renewal=verifying&amp;sort_by=days&amp;sort_order=asc&amp;grouped=0">Verifying renewal · 0</a>
+    </nav>
+
     <nav class="cw-seg" tabindex="0" aria-label="Inventory views">
       <a href="/browse?sort_by=days&amp;sort_order=asc&amp;grouped=1" class="on" aria-current="page">Inventory</a>
       <a href="/browse?view=issuer" class="" >By issuer · all</a>

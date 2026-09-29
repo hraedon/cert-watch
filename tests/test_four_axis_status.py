@@ -17,6 +17,7 @@ from cert_watch.database.dashboard_page import list_dashboard_page
 from cert_watch.scheduler import ScanHistory, record_scan_history
 from cert_watch.services.renewal_reports import write_through_renewal_status_on
 from cert_watch.status_model import (
+    RENEWAL_STATES,
     AxisSettings,
     StatusModelContext,
     attach_status_models,
@@ -254,7 +255,7 @@ def test_sql_filters_agree_with_every_built_row_and_respect_scope(tmp_path):
     all_states = {
         "condition": ("expired", "le7", "8to30", "ok"),
         "monitoring": ("current", "failing", "never_scanned"),
-        "renewal": ("automation_configured", "manual", "stalled", "in_progress", "unknown"),
+        "renewal": RENEWAL_STATES,
         "delivery": ("ok", "failing", "unrouted"),
     }
     for axis, states in all_states.items():
@@ -341,6 +342,18 @@ def test_renewal_precedence_window_edges_and_successor():
         "stalled",
         "renewal_window",
     )
+    assert renewal_state(
+        "acme", True, "manual", "not_deployed", lease, True, True, now=NOW
+    ) == ("not_deployed", "renewal_attempt")
+    assert renewal_state(
+        "acme", True, "manual", "verifying", lease, True, True, now=NOW
+    ) == ("failed", "renewal_attempt")
+    assert renewal_state(
+        "acme", True, "manual", "verifying", lease, False, False, now=NOW
+    ) == ("stalled", "renewal_window")
+    assert renewal_state(
+        "acme", False, "manual", "verifying", lease, False, False, now=NOW
+    ) == ("verifying", "renewal_attempt")
     assert renewal_state("manual", False, "likely-automated", now=NOW) == (
         "manual",
         "renewal_method",

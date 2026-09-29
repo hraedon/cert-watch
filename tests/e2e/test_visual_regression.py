@@ -26,6 +26,10 @@ import pytest
 pytest.importorskip("playwright")
 from playwright.sync_api import Page, expect
 
+from cert_watch.database.api_keys import SqliteApiKeyRepository
+from cert_watch.database.connection import _connect
+from tests.e2e._seed import seed_detail_estate
+
 
 def _free_port() -> int:
     with socket.socket() as s:
@@ -47,7 +51,9 @@ def visual_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     }
     proc = subprocess.Popen(
         [sys.executable, "-m", "cert_watch", "--host", "127.0.0.1", "--port", str(port)],
-        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
     base = f"http://127.0.0.1:{port}"
     for _ in range(80):
@@ -68,6 +74,7 @@ def visual_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+
 
 # Regions that legitimately vary between runs/builds.
 _MASKS = [
@@ -96,9 +103,7 @@ _VISUAL_PAGES = {
 
 @pytest.mark.visual
 @pytest.mark.parametrize("name,spec", list(_VISUAL_PAGES.items()))
-def test_page_visual(
-    page: Page, visual_server: str, assert_snapshot, name, spec
-) -> None:
+def test_page_visual(page: Page, visual_server: str, assert_snapshot, name, spec) -> None:
     path, heading = spec
     page.goto(f"{visual_server}{path}")
     if heading:
@@ -111,7 +116,9 @@ def test_page_visual(
 
 @pytest.mark.visual
 def test_add_drawer_visual(
-    page: Page, visual_server: str, assert_snapshot,
+    page: Page,
+    visual_server: str,
+    assert_snapshot,
 ) -> None:
     page.goto(f"{visual_server}/browse")
     page.get_by_test_id("add-host-btn").click()
@@ -142,9 +149,7 @@ def test_add_drawer_visual(
             );
         }"""
     )
-    assert not page.get_by_test_id("tab-bulk-btn").evaluate(
-        "element => element.matches(':hover')"
-    )
+    assert not page.get_by_test_id("tab-bulk-btn").evaluate("element => element.matches(':hover')")
     assert_snapshot(page, name="add-drawer.png", mask_elements=_MASKS)
 
 
@@ -162,6 +167,15 @@ def test_add_drawer_visual(
 
 _POPULATED_MASKS = [*_MASKS, "tbody td:nth-child(3)"]  # Condition column (dates + relative strings)
 _HOME_POPULATED_MASKS = [*_MASKS, ".cw-home-state", ".cw-home-foot"]
+_RENEWAL_HOME_MASKS = [
+    *_MASKS,
+    ".cw-home-foot",
+    "[data-testid=home-monitoring-row] .cw-home-time",
+]
+_RENEWAL_DETAIL_MASKS = [
+    *_MASKS,
+    "[data-testid=detail-state-axes] .cw-detail-axis:nth-child(-n+2) .cw-detail-axis-detail",
+]
 
 
 @pytest.fixture(scope="module")
@@ -178,7 +192,9 @@ def populated_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     }
     proc = subprocess.Popen(
         [sys.executable, "-m", "cert_watch", "--host", "127.0.0.1", "--port", str(port)],
-        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
     base = f"http://127.0.0.1:{port}"
     for _ in range(80):
@@ -202,25 +218,142 @@ def populated_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
             proc.kill()
 
 
+@pytest.fixture(scope="module")
+def renewal_visual_server(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[tuple[str, str]]:
+    """A deterministic renewal failure shown across all changed pages."""
+    data_dir: Path = tmp_path_factory.mktemp("cw-visual-renewal")
+    ids = seed_detail_estate(data_dir)
+    db = data_dir / "cert-watch.sqlite3"
+    key, _token = SqliteApiKeyRepository(db).create_key(
+        "deployment-hook", "renewal-report", binding="all"
+    )
+    now = "2026-09-28T12:00:00+00:00"
+    with _connect(db) as conn:
+        host = conn.execute(
+            "SELECT h.id FROM hosts h JOIN certificates c "
+            "ON c.hostname=h.hostname AND c.port=h.port WHERE c.id=?",
+            (ids["current"],),
+        ).fetchone()
+        assert host is not None
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,
+                baseline_fingerprint,received_at,next_check_at,
+                failure_attempt_id,failure_reported_at)
+               VALUES ('visual-attempt',?,1,?,'verifying',1,'old-leaf',?,?,
+                       'visual-attempt',?)""",
+            (host["id"], f"api_key:{key.id}", now, now, now),
+        )
+        conn.execute(
+            """INSERT INTO renewal_reports
+               (report_id,host_id,hostname_snapshot,port_snapshot,outcome,
+                message,tool,correlation_id,received_at,source,effect,attempt_id)
+               SELECT 'visual-report',h.id,h.hostname,h.port,'failed',
+                      'Deployment command returned a non-zero status.',
+                      'deployment-hook','run-2048',?,?,'applied','visual-attempt'
+               FROM hosts h WHERE h.id=?""",
+            (now, f"api_key:{key.id}", host["id"]),
+        )
+        conn.commit()
+    port = _free_port()
+    env = {
+        **os.environ,
+        "CERT_WATCH_DATA_DIR": str(data_dir),
+        "CERT_WATCH_PORT": str(port),
+        "CERT_WATCH_ALLOW_UNAUTH": "1",
+    }
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "tests.e2e._detail_app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    base = f"http://127.0.0.1:{port}"
+    for _ in range(80):
+        try:
+            with urllib.request.urlopen(f"{base}/healthz", timeout=0.5) as response:
+                if response.status == 200:
+                    break
+        except Exception:  # noqa: BLE001 - startup polling is transient
+            time.sleep(0.1)
+    else:
+        proc.kill()
+        raise RuntimeError("renewal visual server did not become ready")
+    try:
+        yield base, ids["current"]
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
 @pytest.mark.visual
-def test_dashboard_populated_visual(
-    page: Page, populated_server: str, assert_snapshot
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("width,height", [(1440, 900), (390, 844)])
+@pytest.mark.parametrize("surface", ["home", "browse", "detail", "api-keys"])
+def test_renewal_ui_visuals(
+    page: Page,
+    renewal_visual_server: tuple[str, str],
+    assert_snapshot,
+    theme: str,
+    width: int,
+    height: int,
+    surface: str,
 ) -> None:
+    base, cert_id = renewal_visual_server
+    path = {
+        "home": "/",
+        "browse": "/browse",
+        "detail": f"/certificates/{cert_id}",
+        "api-keys": "/settings/api-keys",
+    }[surface]
+    page.set_viewport_size({"width": width, "height": height})
+    page.add_init_script(f"localStorage.setItem('cw-theme', '{theme}')")
+    page.goto(f"{base}{path}")
+    page.evaluate("document.fonts.ready")
+    page.wait_for_timeout(400)
+    if surface == "detail":
+        page.get_by_test_id("renewal-panel").scroll_into_view_if_needed()
+    assert page.evaluate("document.documentElement.scrollWidth === window.innerWidth")
+    masks = {
+        "home": _RENEWAL_HOME_MASKS,
+        "browse": _POPULATED_MASKS,
+        "detail": _RENEWAL_DETAIL_MASKS,
+        "api-keys": _MASKS,
+    }[surface]
+    assert_snapshot(
+        page,
+        name=f"renewal-{surface}-{theme}-{width}.png",
+        mask_elements=masks,
+    )
+
+
+@pytest.mark.visual
+def test_dashboard_populated_visual(page: Page, populated_server: str, assert_snapshot) -> None:
     page.goto(f"{populated_server}/browse")
     expect(page.get_by_test_id("dashboard-heading")).to_be_visible()
     # All five seeded rows rendered before the shot.
     expect(page.locator("tbody tr")).to_have_count(5)
     page.evaluate("document.fonts.ready")
     page.wait_for_timeout(400)
-    assert_snapshot(
-        page, name="dashboard-populated.png", mask_elements=_POPULATED_MASKS
-    )
+    assert_snapshot(page, name="dashboard-populated.png", mask_elements=_POPULATED_MASKS)
 
 
 @pytest.mark.visual
-def test_home_populated_visual(
-    page: Page, populated_server: str, assert_snapshot
-) -> None:
+def test_home_populated_visual(page: Page, populated_server: str, assert_snapshot) -> None:
     page.goto(populated_server)
     expect(page.get_by_test_id("home-heading")).to_be_visible()
     # The seed has three expiring/expired leaves and two issuing-CA groups.
@@ -228,14 +361,10 @@ def test_home_populated_visual(
     expect(page.get_by_test_id("home-chain-row")).to_have_count(2)
     page.evaluate("document.fonts.ready")
     page.wait_for_timeout(400)
-    assert_snapshot(
-        page, name="home-populated.png", mask_elements=_HOME_POPULATED_MASKS
-    )
+    assert_snapshot(page, name="home-populated.png", mask_elements=_HOME_POPULATED_MASKS)
 
 
-def test_home_a_blocks_layout_and_every_filtered_link(
-    page: Page, populated_server: str
-) -> None:
+def test_home_a_blocks_layout_and_every_filtered_link(page: Page, populated_server: str) -> None:
     page.set_viewport_size({"width": 1440, "height": 1000})
     page.goto(populated_server)
     blocks = [
@@ -253,6 +382,8 @@ def test_home_a_blocks_layout_and_every_filtered_link(
         "home-condition-count-le7",
         "home-condition-count-8to30",
         "home-condition-count-ok",
+        "home-renewal-count-failed",
+        "home-renewal-count-not-deployed",
         "home-monitoring-count-failing",
         "home-monitoring-count-never",
         "home-monitoring-count-current",
@@ -276,10 +407,12 @@ def test_home_a_blocks_layout_and_every_filtered_link(
         assert href is not None
         links.append((href, int(link.get_attribute("data-count") or "0")))
 
-    all_home_hrefs = set(page.locator("main a").evaluate_all(
-        "els => els.map(el => el.getAttribute('href')).filter(Boolean)"
-    ))
-    assert len(links) == 25
+    all_home_hrefs = set(
+        page.locator("main a").evaluate_all(
+            "els => els.map(el => el.getAttribute('href')).filter(Boolean)"
+        )
+    )
+    assert len(links) == 27
     for href, expected in links:
         page.goto(f"{populated_server}{href}")
         expect(page.get_by_test_id("cert-row")).to_have_count(expected)
@@ -289,9 +422,14 @@ def test_home_a_blocks_layout_and_every_filtered_link(
 
     page.set_viewport_size({"width": 390, "height": 844})
     page.goto(populated_server)
-    boxes = [page.get_by_test_id(testid).bounding_box() for testid in (
-        "certificate-risk-block", "monitoring-gaps-block", "delivery-routing-block",
-    )]
+    boxes = [
+        page.get_by_test_id(testid).bounding_box()
+        for testid in (
+            "certificate-risk-block",
+            "monitoring-gaps-block",
+            "delivery-routing-block",
+        )
+    ]
     assert all(box is not None for box in boxes)
     assert [box["y"] for box in boxes if box] == sorted(box["y"] for box in boxes if box)
     assert page.evaluate("document.documentElement.scrollWidth === innerWidth")
@@ -310,9 +448,7 @@ def _assert_home_mobile_never_scrolls(page: Page, base: str) -> None:
     assert strip.evaluate("el => el.scrollWidth === el.clientWidth")
 
 
-def test_empty_home_mobile_never_scrolls_the_document(
-    page: Page, visual_server: str
-) -> None:
+def test_empty_home_mobile_never_scrolls_the_document(page: Page, visual_server: str) -> None:
     _assert_home_mobile_never_scrolls(page, visual_server)
 
 

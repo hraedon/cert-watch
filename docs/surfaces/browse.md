@@ -13,7 +13,7 @@ scopes, grouping, sorting, pagination, and fleet pivots lead directly to the
 objects they control.
 
 It must show identity, endpoint/source, expiry and urgency, issuer, renewal
-method, ownership, tags, posture grade, chain state, and scan freshness where
+method and current renewal outcome, ownership, tags, posture grade, chain state, and scan freshness where
 available. Issuer, owner, renewal-method, and calendar views must preserve the
 same inventory scope and operational counts.
 

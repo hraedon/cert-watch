@@ -75,6 +75,11 @@
                role="status"
                data-testid="endpoint-settings-saved">{{ icons.svg_icon('check-circle', 14) }}Host details saved.</p>
         {% endif %}
+        {% if renewal_failure_cleared %}
+            <p class="cw-note t-ok"
+               role="status"
+               data-testid="renewal-failure-cleared">{{ icons.svg_icon('check-circle', 14) }}Failure cleared</p>
+        {% endif %}
         <section class="cw-detail-axes"
                  aria-label="Certificate status"
                  data-testid="detail-state-axes">
@@ -114,6 +119,61 @@
                                 </li>
                             {% endfor %}
                         </ol>
+                    </div>
+                </section>
+            {% endif %}
+            {% if host_id %}
+                <section class="cw-panel" data-testid="renewal-panel">
+                    <div class="cw-panel-head">
+                        <h2>Renewal</h2>
+                        {% if renewal_attempt and renewal_attempt.failure_open and may_write %}
+                            <form method="post"
+                                  action="/hosts/{{ host_id }}/renewal-failure/clear"
+                                  class="cw-inline">
+                                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                                <button type="submit"
+                                        class="cw-btn danger sm"
+                                        data-testid="clear-renewal-failure">Clear failure</button>
+                            </form>
+                        {% endif %}
+                    </div>
+                    <div class="cw-panel-body">
+                        {% if renewal_attempt %}
+                            <div class="cw-renewal-current" data-testid="renewal-current-attempt">
+                                <span class="cw-status {{ renewal_attempt.tone }}"><span class="dot" aria-hidden="true"></span>{{ renewal_attempt.label }}</span>
+                                <span class="cw-sub">{{ renewal_attempt.detail }}</span>
+                            </div>
+                        {% else %}
+                            <p class="cw-muted">No renewal attempt reported.</p>
+                        {% endif %}
+                        {% if renewal_reports %}
+                            <h3 class="cw-renewal-history-heading">Recent reports</h3>
+                            <ol class="cw-renewal-reports" data-testid="renewal-reports">
+                                {% for report in renewal_reports %}
+                                    <li data-testid="renewal-report">
+                                        <div class="cw-renewal-report-head">
+                                            <b>{{ report.outcome_label }}</b>
+                                            <span class="cw-sub">{{ report.reported_at }}</span>
+                                        </div>
+                                        {% if reveal_renewal_report_details %}
+                                            {% if report.message %}
+                                                <div class="cw-automation-report" data-testid="renewal-report-message">
+                                                    <span class="cw-label">Reported by automation</span>
+                                                    <div>{{ report.message }}</div>
+                                                </div>
+                                            {% endif %}
+                                            {% if report.tool or report.correlation_id or report.source_name %}
+                                                <dl class="cw-renewal-meta">
+                                                    {% if report.tool %}<div><dt>Tool</dt><dd class="mono cw-break">{{ report.tool }}</dd></div>{% endif %}
+                                                    {% if report.correlation_id %}<div><dt>Correlation</dt><dd class="mono cw-break">{{ report.correlation_id }}</dd></div>{% endif %}
+                                                    {% if report.source_name %}<div><dt>Source key</dt><dd class="mono cw-break">{{ report.source_name }}</dd></div>{% endif %}
+                                                </dl>
+                                            {% endif %}
+                                        {% endif %}
+                                    </li>
+                                {% endfor %}
+                            </ol>
+                        {% endif %}
                     </div>
                 </section>
             {% endif %}
@@ -227,7 +287,7 @@
                                         {% if edit_errors.threshold_days %}<p id="endpoint-threshold-error" class="cw-hint t-crit">{{ edit_errors.threshold_days }}</p>{% endif %}
                                     </div>
                                     <div class="cw-field wide">
-                                        <label class="cw-label" for="endpoint-renewal-status">Renewal status reported by operator</label>
+                                        <label class="cw-label" for="endpoint-renewal-status">Manual renewal progress</label>
                                         <select id="endpoint-renewal-status"
                                                 name="renewal_status"
                                                 class="cw-select"
@@ -235,9 +295,9 @@
                                                 {% if edit_errors.renewal_status %}aria-invalid="true"{% endif %}>
                                             {% set submitted_status = edit_values.get('renewal_status', host_info.renewal_status) %}
                                             <option value="pending"
-                                                    {% if submitted_status == 'pending' %}selected{% endif %}>No completion reported</option>
+                                                    {% if submitted_status == 'pending' %}selected{% endif %}>No renewal in progress</option>
                                             <option value="in_progress"
-                                                    {% if submitted_status == 'in_progress' %}selected{% endif %}>In progress — operator reported</option>
+                                                    {% if submitted_status == 'in_progress' %}selected{% endif %}>Renewal in progress</option>
                                         </select>
                                         {% if edit_errors.renewal_status %}<p id="endpoint-renewal-status-error" class="cw-hint t-crit">{{ edit_errors.renewal_status }}</p>{% endif %}
                                         <p class="cw-hint" id="endpoint-renewal-help">Operator-reported progress is not proof of renewal; it never suppresses expiry or expired alerts. A later scan confirms the replacement certificate.</p>

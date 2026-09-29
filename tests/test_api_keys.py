@@ -29,7 +29,11 @@ from cert_watch.auth.guards import (
 from cert_watch.auth.rbac import AuthContext
 from cert_watch.auth.request_context import authenticate_api_key, resolve_session_user
 from cert_watch.database import init_schema
-from cert_watch.database.api_keys import SqliteApiKeyRepository, hash_token
+from cert_watch.database.api_keys import (
+    MAX_API_KEY_NAME_LENGTH,
+    SqliteApiKeyRepository,
+    hash_token,
+)
 from cert_watch.security import SecurityContext
 
 # ── repository ───────────────────────────────────────────────────────────
@@ -54,12 +58,34 @@ def test_create_returns_prefixed_token_and_stores_only_hash(repo):
     assert row["key_hash"] != raw
 
 
+@pytest.mark.parametrize("name", ["bad\x00name", "bad\x85name", "bad\u202ename"])
+def test_key_names_reject_controls_and_bidirectional_text(repo, name):
+    with pytest.raises(ValueError, match="control or bidirectional"):
+        repo.create_key(name, "read")
+
+
+def test_key_names_are_capped_and_legacy_unsafe_names_are_visibly_escaped(repo):
+    with pytest.raises(ValueError, match="at most 100"):
+        repo.create_key("x" * (MAX_API_KEY_NAME_LENGTH + 1), "read")
+
+    entry, _raw = repo.create_key("legacy", "read")
+    with repo_conn(repo) as conn:
+        conn.execute(
+            "UPDATE api_keys SET name=? WHERE id=?",
+            ("prefix\x00\u202e" + "x" * 120, entry.id),
+        )
+        conn.commit()
+    displayed = repo.list_keys()[0].name
+    assert displayed.startswith(r"prefix\x00\u202e")
+    assert len(displayed) == MAX_API_KEY_NAME_LENGTH
+
+
 def test_renewal_report_key_uses_downgrade_safe_hash_prefix(repo):
     entry, raw = repo.create_key("renewal-hook", "renewal-report", binding="all")
     with repo_conn(repo) as conn:
-        stored = conn.execute(
-            "SELECT key_hash FROM api_keys WHERE id = ?", (entry.id,)
-        ).fetchone()["key_hash"]
+        stored = conn.execute("SELECT key_hash FROM api_keys WHERE id = ?", (entry.id,)).fetchone()[
+            "key_hash"
+        ]
 
     assert stored.startswith("rr-hmac:")
 
@@ -73,18 +99,19 @@ def test_renewal_report_key_uses_downgrade_safe_hash_prefix(repo):
     assert stored not in old_candidates
     with repo_conn(repo) as conn:
         placeholders = ",".join("?" for _ in old_candidates)
-        assert conn.execute(
-            f"SELECT id FROM api_keys WHERE key_hash IN ({placeholders})",
-            old_candidates,
-        ).fetchone() is None
+        assert (
+            conn.execute(
+                f"SELECT id FROM api_keys WHERE key_hash IN ({placeholders})",
+                old_candidates,
+            ).fetchone()
+            is None
+        )
 
 
 def test_renewal_report_creation_requires_explicit_nonempty_binding(repo):
     for binding, tags in ((None, None), ("", ""), ("tags", " , ")):
         with pytest.raises(ValueError):
-            repo.create_key(
-                "renewal-hook", "renewal-report", binding=binding, bound_tags=tags
-            )
+            repo.create_key("renewal-hook", "renewal-report", binding=binding, bound_tags=tags)
 
     all_entry, _ = repo.create_key("all", "renewal-report", binding="all")
     tags_entry, _ = repo.create_key(
@@ -104,20 +131,26 @@ def test_renewal_report_creation_requires_explicit_nonempty_binding(repo):
     ],
 )
 def test_renewal_report_binding_rejects_invisible_or_oversized_tags(
-    repo, bound_tags, message,
+    repo,
+    bound_tags,
+    message,
 ):
     with pytest.raises(ValueError, match=message):
         repo.create_key(
-            "renewal-hook", "renewal-report",
-            binding="tags", bound_tags=bound_tags,
+            "renewal-hook",
+            "renewal-report",
+            binding="tags",
+            bound_tags=bound_tags,
         )
 
 
 def test_renewal_report_binding_accepts_tag_limits(repo):
     tags = [f"tag-{index}" for index in range(19)] + ["x" * 64]
     entry, _ = repo.create_key(
-        "renewal-hook", "renewal-report",
-        binding="tags", bound_tags=",".join(tags),
+        "renewal-hook",
+        "renewal-report",
+        binding="tags",
+        bound_tags=",".join(tags),
     )
     assert entry.bound_tags == tuple(tags)
 
@@ -306,8 +339,15 @@ class _Provider:
 
 
 def _make_request(
-    db_path, *, bearer=None, role_map=None, security=None,
-    method="POST", path="/api/test", raw_path=None, cookie=None,
+    db_path,
+    *,
+    bearer=None,
+    role_map=None,
+    security=None,
+    method="POST",
+    path="/api/test",
+    raw_path=None,
+    cookie=None,
 ) -> Request:
     headers = []
     if bearer is not None:
@@ -321,9 +361,7 @@ def _make_request(
         admin_users=[],
     )
     app = SimpleNamespace(
-        state=SimpleNamespace(
-            auth_provider=_Provider(), settings=settings, security=security
-        )
+        state=SimpleNamespace(auth_provider=_Provider(), settings=settings, security=security)
     )
     scope = {
         "type": "http",
@@ -398,10 +436,7 @@ def test_api_key_audit_identity_is_stable_and_not_impersonable(seeded):
         f"api_key:{second.id}",
     }
     key_rows = [row for row in rows if row["actor"].startswith("api_key:")]
-    assert all(
-        json.loads(row["detail"])["api_key_name"] == "shared-name"
-        for row in key_rows
-    )
+    assert all(json.loads(row["detail"])["api_key_name"] == "shared-name" for row in key_rows)
     assert {audit_actor_display(row) for row in key_rows} == {
         f"shared-name (API key {first.id[:8]})",
         f"shared-name (API key {second.id[:8]})",
@@ -476,12 +511,8 @@ async def test_renewal_report_principal_and_guard(seeded):
     assert context.is_admin is False
     assert renewal_report_binding(context) == ("Prod", "edge")
 
-    _, all_raw = repo.create_key(
-        "all-renewals", "renewal-report", binding="all"
-    )
-    all_request = _make_request(
-        db, bearer=all_raw, path="/api/renewal-reports"
-    )
+    _, all_raw = repo.create_key("all-renewals", "renewal-report", binding="all")
+    all_request = _make_request(db, bearer=all_raw, path="/api/renewal-reports")
     assert await renewal_report_guard(all_request) == "all-renewals"
     assert renewal_report_binding(all_request.state.auth_context) == "all"
 
@@ -494,7 +525,11 @@ async def test_renewal_report_principal_and_guard(seeded):
     ],
 )
 def test_api_key_authentication_refuses_a_key_revoked_before_usage_recording(
-    seeded, monkeypatch, scope, binding, path,
+    seeded,
+    monkeypatch,
+    scope,
+    binding,
+    path,
 ):
     db, repo = seeded
     _, raw = repo.create_key("racing-key", scope, binding=binding)
@@ -505,9 +540,7 @@ def test_api_key_authentication_refuses_a_key_revoked_before_usage_recording(
             return None
         return original_verify(self, token, **kwargs)
 
-    monkeypatch.setattr(
-        SqliteApiKeyRepository, "verify_key", verify_with_revoke_race
-    )
+    monkeypatch.setattr(SqliteApiKeyRepository, "verify_key", verify_with_revoke_race)
     request = _make_request(db, bearer=raw, method="GET", path=path)
 
     assert authenticate_api_key(request, db) is None
@@ -516,22 +549,16 @@ def test_api_key_authentication_refuses_a_key_revoked_before_usage_recording(
 
 def test_resolve_session_user_preserves_report_key_state(seeded):
     db, repo = seeded
-    _, raw = repo.create_key(
-        "renewal-hook", "renewal-report", binding="all"
-    )
+    _, raw = repo.create_key("renewal-hook", "renewal-report", binding="all")
 
     allowed = _make_request(db, bearer=raw, path="/api/renewal-reports")
     assert authenticate_api_key(allowed, db) is not None
     assert resolve_session_user(allowed) == ("renewal-hook", None, True)
 
     forbidden = _make_request(db, bearer=raw, path="/api/health")
-    assert resolve_session_user(forbidden) == (
-        None, "forbidden for this key", True
-    )
+    assert resolve_session_user(forbidden) == (None, "forbidden for this key", True)
     # A second guard resolution takes the already-classified fast path.
-    assert resolve_session_user(forbidden) == (
-        None, "forbidden for this key", True
-    )
+    assert resolve_session_user(forbidden) == (None, "forbidden for this key", True)
 
 
 @pytest.mark.anyio
@@ -575,9 +602,7 @@ async def test_renewal_report_read_guard_refuses_missing_and_ordinary_key(seeded
     assert unauthenticated.value.status_code == 401
 
     _, raw = repo.create_key("reader", "read")
-    ordinary = _make_request(
-        db, bearer=raw, method="GET", path="/api/renewal-reports"
-    )
+    ordinary = _make_request(db, bearer=raw, method="GET", path="/api/renewal-reports")
     with pytest.raises(HTTPException) as forbidden:
         await renewal_report_read_guard(ordinary)
     assert forbidden.value.status_code == 403
@@ -594,15 +619,11 @@ def test_renewal_report_binding_rejects_wrong_or_corrupt_context():
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    "guard", [require_auth, write_guard, require_admin, admin_write_guard]
-)
+@pytest.mark.parametrize("guard", [require_auth, write_guard, require_admin, admin_write_guard])
 async def test_ordinary_guards_refuse_renewal_report_principal(seeded, guard):
     """Defense in depth if the middleware route allowlist is ever widened."""
     db, repo = seeded
-    _, raw = repo.create_key(
-        "renewal-hook", "renewal-report", binding="tags", bound_tags="prod"
-    )
+    _, raw = repo.create_key("renewal-hook", "renewal-report", binding="tags", bound_tags="prod")
     request = _make_request(db, bearer=raw, path="/api/renewal-reports")
 
     with pytest.raises(HTTPException) as exc:
@@ -640,12 +661,14 @@ def test_bearer_auth_http_end_to_end(reload_app):
         assert ok.status_code == 200
 
         # Unknown / revoked tokens → 401.
-        assert client.get(
-            "/api/hosts", headers={"Authorization": "Bearer cwk_nope"}
-        ).status_code == 401
-        assert client.get(
-            "/api/hosts", headers={"Authorization": f"Bearer {revoked_raw}"}
-        ).status_code == 401
+        assert (
+            client.get("/api/hosts", headers={"Authorization": "Bearer cwk_nope"}).status_code
+            == 401
+        )
+        assert (
+            client.get("/api/hosts", headers={"Authorization": f"Bearer {revoked_raw}"}).status_code
+            == 401
+        )
 
         # Read scope cannot reach a write route → 403; write scope can (404 here
         # only because the host doesn't exist, i.e. it passed the auth gate).
@@ -682,10 +705,15 @@ def test_renewal_report_key_route_allowlist_is_uniform(reload_app):
         refusals = [
             client.get(path, headers=headers, follow_redirects=False)
             for path in (
-                "/", "/metrics", "/api/health", "/healthz",
-                "/static/css/cw.css", "/does-not-exist",
+                "/",
+                "/metrics",
+                "/api/health",
+                "/healthz",
+                "/static/css/cw.css",
+                "/does-not-exist",
                 "/api/renewal-reports/",
-                "/api/renewal%2Dreports", "/api/renewal-reports/%2E",
+                "/api/renewal%2Dreports",
+                "/api/renewal-reports/%2E",
             )
         ]
         head = client.head("/api/renewal-reports", headers=headers)
@@ -737,13 +765,21 @@ def test_renewal_report_allowlist_rejects_raw_dot_segment(seeded):
         lambda raw: [("authorization", f" Bearer {raw}")],
     ],
     ids=[
-        "two-spaces", "tab", "trailing-space", "lowercase-scheme",
-        "uppercase-token-prefix", "duplicate-one-cwk", "no-scheme", "leading-space",
+        "two-spaces",
+        "tab",
+        "trailing-space",
+        "lowercase-scheme",
+        "uppercase-token-prefix",
+        "duplicate-one-cwk",
+        "no-scheme",
+        "leading-space",
     ],
 )
 @pytest.mark.parametrize("auth_enabled", [True, False], ids=["auth-on", "auth-off"])
 def test_malformed_authorization_is_rejected_everywhere(
-    reload_app, authorization_headers, auth_enabled,
+    reload_app,
+    authorization_headers,
+    auth_enabled,
 ):
     from fastapi.testclient import TestClient
 
@@ -754,9 +790,7 @@ def test_malformed_authorization_is_rejected_everywhere(
         **(
             {
                 "CERT_WATCH_LOCAL_ADMIN_USER": "admin",
-                "CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH": _scrypt_hash(
-                    "pw-for-tests-1"
-                ),
+                "CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH": _scrypt_hash("pw-for-tests-1"),
             }
             if auth_enabled
             else {}
@@ -764,17 +798,20 @@ def test_malformed_authorization_is_rejected_everywhere(
     )
     db = Settings.from_env().db_path
     init_schema(db)
-    _, raw = SqliteApiKeyRepository(db).create_key(
-        "renewal-hook", "renewal-report", binding="all"
-    )
+    _, raw = SqliteApiKeyRepository(db).create_key("renewal-hook", "renewal-report", binding="all")
     headers = authorization_headers(raw)
 
     with TestClient(app_mod.app) as client:
         responses = [
             client.get(path, headers=headers, follow_redirects=False)
             for path in (
-                "/", "/api/hosts", "/api/renewal-reports",
-                "/healthz", "/readyz", "/static/css/cw.css", "/login",
+                "/",
+                "/api/hosts",
+                "/api/renewal-reports",
+                "/healthz",
+                "/readyz",
+                "/static/css/cw.css",
+                "/login",
             )
         ]
 
@@ -806,7 +843,9 @@ def test_malformed_authorization_is_rejected_everywhere(
     ],
 )
 def test_non_cwk_authorization_preserves_origin_behavior(
-    reload_app, auth_enabled, authorization_headers,
+    reload_app,
+    auth_enabled,
+    authorization_headers,
 ):
     """Non-cwk credentials are invisible to the report-key precheck."""
     from fastapi.testclient import TestClient
@@ -825,9 +864,7 @@ def test_non_cwk_authorization_preserves_origin_behavior(
     paths = ("/healthz", "/readyz", "/login", "/", "/api/hosts")
 
     with TestClient(app_mod.app) as client:
-        baseline = {
-            path: client.get(path, follow_redirects=False) for path in paths
-        }
+        baseline = {path: client.get(path, follow_redirects=False) for path in paths}
         actual = {
             path: client.get(
                 path,
@@ -863,9 +900,7 @@ def test_public_path_does_not_consume_existing_key_scopes(reload_app):
     entry, raw = repo.create_key("reader", "read")
 
     with TestClient(app_mod.app) as client:
-        response = client.get(
-            "/healthz", headers={"Authorization": f"Bearer {raw}"}
-        )
+        response = client.get("/healthz", headers={"Authorization": f"Bearer {raw}"})
 
     assert response.status_code == 200
     refreshed = next(key for key in repo.list_keys() if key.id == entry.id)
@@ -915,9 +950,7 @@ def test_refused_renewal_report_key_has_no_usage_side_effects(reload_app):
         ).fetchone()["key_hash"]
 
     with TestClient(app_mod.app) as client:
-        response = client.get(
-            "/api/certificates", headers={"Authorization": f"Bearer {raw}"}
-        )
+        response = client.get("/api/certificates", headers={"Authorization": f"Bearer {raw}"})
 
     assert response.status_code == 403
     refreshed = next(key for key in repo.list_keys() if key.id == entry.id)
@@ -941,17 +974,13 @@ def test_report_hash_family_cannot_authenticate_a_regular_scope(reload_app):
     )
     db = Settings.from_env().db_path
     repo = SqliteApiKeyRepository(db)
-    entry, raw = repo.create_key(
-        "renewal-hook", "renewal-report", binding="all"
-    )
+    entry, raw = repo.create_key("renewal-hook", "renewal-report", binding="all")
     with repo_conn(repo) as conn:
         conn.execute("UPDATE api_keys SET scope = 'read' WHERE id = ?", (entry.id,))
         conn.commit()
 
     with TestClient(app_mod.app) as client:
-        response = client.get(
-            "/api/certificates", headers={"Authorization": f"Bearer {raw}"}
-        )
+        response = client.get("/api/certificates", headers={"Authorization": f"Bearer {raw}"})
 
     assert response.status_code == 401
 
@@ -967,11 +996,16 @@ def test_report_hash_family_cannot_authenticate_a_regular_scope(reload_app):
     ],
 )
 def test_verify_rejects_cross_family_or_binding_corruption(
-    repo, scope, binding, bound_tags, hash_prefix,
+    repo,
+    scope,
+    binding,
+    bound_tags,
+    hash_prefix,
 ):
     create_scope = "renewal-report" if scope == "renewal-report" else scope
     entry, raw = repo.create_key(
-        "key", create_scope,
+        "key",
+        create_scope,
         binding="all" if create_scope == "renewal-report" else None,
     )
     with repo_conn(repo) as conn:
@@ -1010,13 +1044,9 @@ def test_corrupt_renewal_report_binding_is_unauthenticated(reload_app, corruptio
     with repo_conn(repo) as conn:
         if corruption == "unknown-binding":
             conn.execute("PRAGMA ignore_check_constraints = ON")
-            conn.execute(
-                "UPDATE api_keys SET binding = 'future' WHERE id = ?", (entry.id,)
-            )
+            conn.execute("UPDATE api_keys SET binding = 'future' WHERE id = ?", (entry.id,))
         elif corruption == "empty-tags":
-            conn.execute(
-                "UPDATE api_keys SET bound_tags = '' WHERE id = ?", (entry.id,)
-            )
+            conn.execute("UPDATE api_keys SET bound_tags = '' WHERE id = ?", (entry.id,))
         elif corruption == "too-many-tags":
             conn.execute(
                 "UPDATE api_keys SET bound_tags = ? WHERE id = ?",
@@ -1063,7 +1093,8 @@ def test_revoked_renewal_report_key_is_unauthenticated(reload_app):
 
 
 def test_unknown_scope_is_unauthenticated_on_api_and_html_routes(
-    reload_app, caplog,
+    reload_app,
+    caplog,
 ):
     from fastapi.testclient import TestClient
 
@@ -1092,9 +1123,7 @@ def test_unknown_scope_is_unauthenticated_on_api_and_html_routes(
         TestClient(app_mod.app) as client,
     ):
         assert client.get("/api/hosts", headers=headers).status_code == 401
-        assert client.get(
-            "/", headers=headers, follow_redirects=False
-        ).status_code == 401
+        assert client.get("/", headers=headers, follow_redirects=False).status_code == 401
 
     assert any(entry.id in record.message for record in caplog.records)
     assert all(raw not in record.message for record in caplog.records)
@@ -1159,9 +1188,12 @@ def test_api_keys_management_routes(reload_app):
         read_hdr = {"Authorization": f"Bearer {read_raw}"}
         assert client.get("/api/api-keys", headers=read_hdr).status_code == 403
         assert client.get("/api/api-keys", headers=admin_hdr).status_code == 403
-        assert client.post(
-            "/api/api-keys", headers=admin_hdr, json={"name": "x", "scope": "read"}
-        ).status_code == 403
+        assert (
+            client.post(
+                "/api/api-keys", headers=admin_hdr, json={"name": "x", "scope": "read"}
+            ).status_code
+            == 403
+        )
 
         token = create_session(
             "admin", client.app.state.security, version=0, roles=[BREAK_GLASS_CLAIM]
@@ -1169,9 +1201,7 @@ def test_api_keys_management_routes(reload_app):
         client.cookies.set(SESSION_COOKIE, token)
 
         # The admin browser session creates a key and gets the raw token once.
-        created = client.post(
-            "/api/api-keys", json={"name": "deploy", "scope": "write"}
-        )
+        created = client.post("/api/api-keys", json={"name": "deploy", "scope": "write"})
         assert created.status_code == 201
         body = created.json()
         assert body["token"].startswith("cwk_")
@@ -1181,44 +1211,55 @@ def test_api_keys_management_routes(reload_app):
         new_id = body["id"]
 
         # Bad scope is rejected.
-        assert client.post(
-            "/api/api-keys", json={"name": "x", "scope": "root"}
-        ).status_code == 400
+        assert client.post("/api/api-keys", json={"name": "x", "scope": "root"}).status_code == 400
 
         # Renewal-report bindings are explicit and use the shared tag parser.
-        assert client.post(
-            "/api/api-keys", json={"name": "rr", "scope": "renewal-report"}
-        ).status_code == 400
-        assert client.post(
-            "/api/api-keys",
-            json={
-                "name": "rr", "scope": "renewal-report",
-                "binding": "tags", "bound_tags": [],
-            },
-        ).status_code == 400
-        assert client.post(
-            "/api/api-keys",
-            json={
-                "name": "bad-read", "scope": "read",
-                "binding": "tags", "bound_tags": ["prod"],
-            },
-        ).status_code == 400
+        assert (
+            client.post("/api/api-keys", json={"name": "rr", "scope": "renewal-report"}).status_code
+            == 400
+        )
+        assert (
+            client.post(
+                "/api/api-keys",
+                json={
+                    "name": "rr",
+                    "scope": "renewal-report",
+                    "binding": "tags",
+                    "bound_tags": [],
+                },
+            ).status_code
+            == 400
+        )
+        assert (
+            client.post(
+                "/api/api-keys",
+                json={
+                    "name": "bad-read",
+                    "scope": "read",
+                    "binding": "tags",
+                    "bound_tags": ["prod"],
+                },
+            ).status_code
+            == 400
+        )
         comma_tag = client.post(
             "/api/api-keys",
             json={
-                "name": "bad-comma", "scope": "renewal-report",
-                "binding": "tags", "bound_tags": ["prod,edge"],
+                "name": "bad-comma",
+                "scope": "renewal-report",
+                "binding": "tags",
+                "bound_tags": ["prod,edge"],
             },
         )
         assert comma_tag.status_code == 400
-        assert comma_tag.json() == {
-            "error": "bound_tags list elements cannot contain commas"
-        }
+        assert comma_tag.json() == {"error": "bound_tags list elements cannot contain commas"}
         report_key = client.post(
             "/api/api-keys",
             json={
-                "name": "rr", "scope": "renewal-report",
-                "binding": "tags", "bound_tags": [" Prod ", "edge", "prod"],
+                "name": "rr",
+                "scope": "renewal-report",
+                "binding": "tags",
+                "bound_tags": [" Prod ", "edge", "prod"],
             },
         )
         assert report_key.status_code == 201

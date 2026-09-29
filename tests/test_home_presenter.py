@@ -102,9 +102,12 @@ def test_home_presenter_derives_three_blocks_and_twelve_week_strip() -> None:
     assert view.monitoring_rows[0].state_label == "Failing"
     assert "accepting connections" in view.monitoring_rows[0].cause.lower()
     assert view.monitoring_rows[0].when_label == "since 2026-09-22 06:00 UTC"
+    assert view.monitoring_rows[0].when_prefix == "since"
+    assert view.monitoring_rows[0].when_time_label == "2026-09-22 06:00 UTC"
     assert view.monitoring_rows[1].state == "failing"
     assert view.monitoring_rows[1].state_label == "Overdue"
     assert view.monitoring_rows[1].cause == "Scan overdue since 2026-09-20 07:23 UTC."
+    assert view.monitoring_rows[1].cause_time_label == "2026-09-20 07:23 UTC"
     assert view.monitoring_rows[1].name == "overdue.example.test:8443"
     assert view.monitoring_rows[1].owner_name == ""
     assert view.monitoring_rows[2].when_label == "added 2026-09-22 06:00 UTC"

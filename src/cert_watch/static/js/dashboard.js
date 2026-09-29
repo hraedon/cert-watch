@@ -91,8 +91,12 @@
       }[status.chain_status || entry.chain_status] || 'Chain problem', 't-warn');
     }
     var renewal = (status.renewal || {}).state || entry.renewal;
-    addFact(flags, { stalled: 'Renewal stalled', in_progress: 'Renewal in progress' }[renewal],
-      renewal === 'stalled' ? 't-warn' : 't-ink');
+    addFact(flags, {
+      not_deployed: 'Deployment not confirmed', failed: 'Renewal failed',
+      stalled: 'Renewal stalled', verifying: 'Verifying renewal',
+      in_progress: 'Renewal in progress'
+    }[renewal], renewal === 'failed' || renewal === 'not_deployed' ? 't-crit' :
+      (renewal === 'stalled' ? 't-warn' : 't-neutral'));
     var delivery = (status.delivery || {}).state || entry.delivery;
     addFact(flags, { failing: "Can't be delivered", unrouted: 'Unrouted' }[delivery],
       delivery === 'failing' ? 't-crit' : 't-muted');

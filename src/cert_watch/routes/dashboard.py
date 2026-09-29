@@ -51,9 +51,22 @@ templates = get_templates()
 # Query params that belong to the inventory table (now at /browse). A request
 # for / carrying any of them is a legacy bookmark — redirect to /browse.
 _BROWSE_PARAMS = {
-    "q", "urgency", "source", "condition", "monitoring", "renewal", "delivery",
-    "chain_problem", "routing_gap", "issuer", "expiry_week",
-    "sort_by", "sort_order", "page", "grouped", "view",
+    "q",
+    "urgency",
+    "source",
+    "condition",
+    "monitoring",
+    "renewal",
+    "delivery",
+    "chain_problem",
+    "routing_gap",
+    "issuer",
+    "expiry_week",
+    "sort_by",
+    "sort_order",
+    "page",
+    "grouped",
+    "view",
 }
 
 
@@ -77,16 +90,21 @@ def home(
     # scoped estate, so display-row work cannot grow with estate size.
     status = prepare_status(db, datetime.now(UTC))
     axis_settings = AxisSettings.from_settings(settings)
-    axes = prepare_status_model_context(
-        db, certificate_status=status, settings=axis_settings
-    )
+    axes = prepare_status_model_context(db, certificate_status=status, settings=axis_settings)
     axis_stats = dashboard_axis_stats(
         db,
         scope_tags=scope_tags,
         status=status,
         axes=axes,
         axis_columns=frozenset(
-            {"condition", "monitoring", "delivery", "chain", "routing"}
+            {
+                "condition",
+                "monitoring",
+                "renewal_risks",
+                "delivery",
+                "chain",
+                "routing",
+            }
         ),
         home=True,
     )
@@ -113,7 +131,8 @@ def home(
         name="home.html",
         context={
             **view.template_context(),
-            "version": __version__, "commit": __commit__,
+            "version": __version__,
+            "commit": __commit__,
             **auth_ctx,
             "active_page": "home",
             **csrf_ctx,
@@ -205,7 +224,8 @@ def dashboard(
         name="dashboard.html",
         context={
             **presented.template_context(),
-            "version": __version__, "commit": __commit__,
+            "version": __version__,
+            "commit": __commit__,
             "error": error,
             "warning": warning,
             "notice": notice,
@@ -218,7 +238,8 @@ def dashboard(
 
 @router.post("/alerts/flush")
 async def flush_alert_queue(
-    request: Request, _auth: str = Depends(write_form_guard),
+    request: Request,
+    _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
     """Flush the pending alert queue: trigger immediate send via process_pending()."""
     if not check_rate_limit(f"flush_alerts:{_extract_client_ip(request)}", 3, 300):
@@ -307,13 +328,9 @@ async def retry_failed_alert(
         return RedirectResponse(url="/alerts?error=alert+not+found", status_code=303)
     if not retried:
         with _connect(db) as conn:
-            row = conn.execute(
-                "SELECT status FROM alerts WHERE id = ?", (alert_id,)
-            ).fetchone()
+            row = conn.execute("SELECT status FROM alerts WHERE id = ?", (alert_id,)).fetchone()
         if row is None:
-            return RedirectResponse(
-                url="/alerts?error=alert+not+found", status_code=303
-            )
+            return RedirectResponse(url="/alerts?error=alert+not+found", status_code=303)
         return RedirectResponse(
             url="/alerts?warning=only+failed+alerts+can+be+retried", status_code=303
         )
@@ -331,7 +348,8 @@ async def retry_failed_alert(
 
 @router.post("/alerts/mark-all-read")
 async def mark_all_alerts_read(
-    request: Request, _auth: str = Depends(write_form_guard),
+    request: Request,
+    _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
     """Mark all unread alerts as read."""
     if not check_rate_limit(f"mark_all_read:{_extract_client_ip(request)}", 10, 300):
