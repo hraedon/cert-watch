@@ -166,6 +166,14 @@ def test_add_drawer_visual(
 
 _POPULATED_MASKS = [*_MASKS, "tbody td:nth-child(3)"]  # Condition column (dates + relative strings)
 _HOME_POPULATED_MASKS = [*_MASKS, ".cw-home-state", ".cw-home-foot"]
+_RENEWAL_HOME_MASKS = [
+    *_HOME_POPULATED_MASKS,
+    "[data-testid=home-monitoring-row] .cw-home-detail:last-child",
+]
+_RENEWAL_DETAIL_MASKS = [
+    *_MASKS,
+    "[data-testid=detail-state-axes] .cw-detail-axis:nth-child(-n+2) .cw-detail-axis-detail",
+]
 
 
 @pytest.fixture(scope="module")
@@ -316,10 +324,16 @@ def test_renewal_ui_visuals(
     if surface == "detail":
         page.get_by_test_id("renewal-panel").scroll_into_view_if_needed()
     assert page.evaluate("document.documentElement.scrollWidth === window.innerWidth")
+    masks = {
+        "home": _RENEWAL_HOME_MASKS,
+        "browse": _POPULATED_MASKS,
+        "detail": _RENEWAL_DETAIL_MASKS,
+        "api-keys": _MASKS,
+    }[surface]
     assert_snapshot(
         page,
         name=f"renewal-{surface}-{theme}-{width}.png",
-        mask_elements=_HOME_POPULATED_MASKS if surface == "home" else _MASKS,
+        mask_elements=masks,
     )
 
 
