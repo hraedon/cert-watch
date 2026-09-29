@@ -170,8 +170,7 @@ _HOME_POPULATED_MASKS = [*_MASKS, ".cw-home-state", ".cw-home-foot"]
 _RENEWAL_HOME_MASKS = [
     *_MASKS,
     ".cw-home-foot",
-    "[data-testid=home-monitoring-row] .cw-home-when",
-    "[data-testid=home-monitoring-row] .cw-home-detail.cw-muted",
+    "[data-testid=home-monitoring-row] .cw-home-time",
 ]
 _RENEWAL_DETAIL_MASKS = [
     *_MASKS,

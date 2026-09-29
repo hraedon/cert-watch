@@ -39,8 +39,11 @@ class HomeMonitoringRow:
     state_label: str
     tone: str
     when_label: str
+    when_prefix: str
+    when_time_label: str
     last_success_label: str
     cause: str
+    cause_time_label: str
     cause_is_raw: bool
     owner_name: str
 
@@ -245,20 +248,28 @@ def _monitoring_rows(
                 and bool(row.get("monitoring_last_success"))
             )
             if overdue:
-                cause = f"Scan overdue since {_format_datetime(since)}."
+                cause_time_label = _format_datetime(since)
+                cause = f"Scan overdue since {cause_time_label}."
             elif guidance is not None:
+                cause_time_label = ""
                 cause = guidance.cause
             elif raw_error:
+                cause_time_label = ""
                 compact = " ".join(str(raw_error).split())
                 cause = compact if len(compact) <= 160 else compact[:159].rstrip() + "…"
             elif state == "never_scanned":
+                cause_time_label = ""
                 cause = "No scan attempt has been recorded; check the endpoint and scan settings."
             else:
+                cause_time_label = ""
                 cause = "The latest scan attempt failed."
             when_label = ""
+            when_prefix = ""
+            when_time_label = ""
             if not overdue:
-                prefix = "added" if state == "never_scanned" else "since"
-                when_label = f"{prefix} {_format_datetime(since)}"
+                when_prefix = "added" if state == "never_scanned" else "since"
+                when_time_label = _format_datetime(since)
+                when_label = f"{when_prefix} {when_time_label}"
             result.append(
                 HomeMonitoringRow(
                     detail_url=f"/certificates/{row['id']}",
@@ -273,8 +284,11 @@ def _monitoring_rows(
                     ),
                     tone=Tone.WARNING,
                     when_label=when_label,
+                    when_prefix=when_prefix,
+                    when_time_label=when_time_label,
                     last_success_label=_format_datetime(row.get("monitoring_last_success")),
                     cause=cause,
+                    cause_time_label=cause_time_label,
                     cause_is_raw=bool(raw_error) and guidance is None and not overdue,
                     owner_name=str(row.get("owner_name") or ""),
                 )

@@ -88,10 +88,10 @@
         {% for row in monitoring_rows %}
         <li class="cw-home-row cw-home-row--stack" data-testid="home-monitoring-row" data-monitoring="{{ row.state }}">
           <div class="cw-home-row-main">
-            <span class="cw-home-state {{ row.tone }}"><span class="cw-home-dot"></span>{{ row.state_label }}{% if row.when_label %} <span class="cw-home-when">{{ row.when_label }}</span>{% endif %}</span>
+            <span class="cw-home-state {{ row.tone }}"><span class="cw-home-dot"></span>{{ row.state_label }}{% if row.when_label %} <span class="cw-home-when">{{ row.when_prefix }} <span class="cw-home-time">{{ row.when_time_label }}</span></span>{% endif %}</span>
             <a class="cw-id cw-home-id" href="{{ row.detail_url }}">{{ row.name }}</a>
-            <span class="cw-home-detail{% if row.cause_is_raw %} cw-id{% endif %}">{{ row.cause }}</span>
-            {% if row.last_success_label != 'Not yet' %}<span class="cw-home-detail cw-muted">Last good scan {{ row.last_success_label }}</span>{% endif %}
+            {% if row.cause_time_label %}<span class="cw-home-detail">Scan overdue since <span class="cw-home-time">{{ row.cause_time_label }}</span>.</span>{% else %}<span class="cw-home-detail{% if row.cause_is_raw %} cw-id{% endif %}">{{ row.cause }}</span>{% endif %}
+            {% if row.last_success_label != 'Not yet' %}<span class="cw-home-detail cw-muted">Last good scan <span class="cw-home-time">{{ row.last_success_label }}</span></span>{% endif %}
           </div>
           <span class="cw-home-side{% if not row.owner_name %} cw-muted{% endif %}">{{ row.owner_name or 'No owner' }}</span>
         </li>
