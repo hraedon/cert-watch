@@ -1,4 +1,5 @@
 """SQL aggregate counts for the four-axis status model."""
+
 from __future__ import annotations
 
 import json
@@ -18,7 +19,7 @@ from cert_watch.status_model import (
 )
 
 
-def dashboard_axis_stats(
+def _dashboard_axis_stats(
     db_path: str | Path,
     *,
     q: str | None = None,
@@ -41,7 +42,11 @@ def dashboard_axis_stats(
         db_path, certificate_status=status, settings=axis_settings
     )
     candidates = inventory_candidates_sql(
-        q=q, source=source, scope_tags=scope_tags, status=status, axes=axes,
+        q=q,
+        source=source,
+        scope_tags=scope_tags,
+        status=status,
+        axes=axes,
         axis_columns=axis_columns,
     )
     result: dict[str, Any] = {
@@ -57,24 +62,41 @@ def dashboard_axis_stats(
         return result
     sql, params = candidates
     requested = set(result) if axis_columns is None else set(axis_columns)
+    renewal_requested = bool(requested & {"renewal", "renewal_summary", "renewal_risks"})
+    renewal_states_requested = (
+        {"failed", "not_deployed"}
+        if "renewal_risks" in requested
+        else {"failed", "not_deployed", "verifying"}
+        if "renewal_summary" in requested
+        else set(RENEWAL_STATES)
+    )
     columns = {
         f"{axis}_{state}": (axis, state)
         for axis, states in result.items()
-        if axis in requested
+        if axis in requested or (axis == "renewal" and renewal_requested)
         for state in states
+        if axis != "renewal" or state in renewal_states_requested
     }
-    aggregates = ", ".join(
-        f"SUM(CASE WHEN {'etype = \'leaf\' AND ' if axis == 'overall' else ''}"
-        f"{'overall_state' if axis == 'overall' else axis} = '{state}' "
-        f"THEN 1 ELSE 0 END) AS {alias}"
-        for alias, (axis, state) in columns.items()
-    )
+    aggregate_parts: list[str] = []
+    for alias, (axis, state) in columns.items():
+        if axis == "renewal":
+            aggregate_parts.append(
+                "COUNT(DISTINCT CASE WHEN renewal = "
+                f"'{state}' THEN COALESCE(host_id, etype || ':' || ekey) END) "
+                f"AS {alias}"
+            )
+            continue
+        predicate = "etype = 'leaf' AND " if axis == "overall" else ""
+        state_column = "overall_state" if axis == "overall" else axis
+        aggregate_parts.append(
+            f"SUM(CASE WHEN {predicate}{state_column} = '{state}' THEN 1 ELSE 0 END) AS {alias}"
+        )
+    aggregates = ", ".join(aggregate_parts)
     with _connect(db_path) as conn:
         register_status_model_functions(conn, axes)
         if not home:
             row = conn.execute(
-                f"WITH inventory AS MATERIALIZED ({sql}) "
-                f"SELECT {aggregates} FROM inventory",
+                f"WITH inventory AS MATERIALIZED ({sql}) SELECT {aggregates} FROM inventory",
                 params,
             ).fetchone()
             if row is not None:
@@ -89,17 +111,25 @@ def dashboard_axis_stats(
         current = axes.now
         week_start = (current - timedelta(days=current.weekday())).date().isoformat()
         horizon_end = (
-            current - timedelta(days=current.weekday()) + timedelta(weeks=12)
-        ).date().isoformat()
+            (current - timedelta(days=current.weekday()) + timedelta(weeks=12)).date().isoformat()
+        )
         stats_json_args = ["'tracked'", "COUNT(*)"]
         for alias, (axis, state) in columns.items():
+            if axis == "renewal":
+                stats_json_args.extend(
+                    [
+                        f"'{alias}'",
+                        "COUNT(DISTINCT CASE WHEN renewal = "
+                        f"'{state}' THEN COALESCE(host_id, etype || ':' || ekey) END)",
+                    ]
+                )
+                continue
             predicate = "etype = 'leaf' AND " if axis == "overall" else ""
             state_column = "overall_state" if axis == "overall" else axis
             stats_json_args.extend(
                 [
                     f"'{alias}'",
-                    f"SUM(CASE WHEN {predicate}{state_column} = '{state}' "
-                    "THEN 1 ELSE 0 END)",
+                    f"SUM(CASE WHEN {predicate}{state_column} = '{state}' THEN 1 ELSE 0 END)",
                 ]
             )
         stats_json_args.extend(
@@ -140,7 +170,6 @@ def dashboard_axis_stats(
                        ) AS n
                 FROM inventory
                 WHERE condition IN ('expired', 'le7', '8to30')
-                  AND renewal NOT IN ('failed', 'not_deployed')
             ),
             renewal_risk_ranked AS (
                 SELECT etype, ekey, hostname, port, renewal,
@@ -150,6 +179,7 @@ def dashboard_axis_stats(
                        ) AS n
                 FROM inventory
                 WHERE renewal IN ('failed', 'not_deployed')
+                  AND COALESCE(condition, '') NOT IN ('expired', 'le7', '8to30')
             ),
             monitoring_ranked AS (
                 SELECT etype, ekey, hostname, port, monitoring,
@@ -245,8 +275,7 @@ def dashboard_axis_stats(
         home_sql = home_sql.replace(
             "FROM chain_counted\n            ORDER BY cert_count DESC, issuer ASC\n"
             "            LIMIT 8",
-            "FROM (SELECT * FROM chain_counted "
-            "ORDER BY cert_count DESC, issuer ASC LIMIT 8)",
+            "FROM (SELECT * FROM chain_counted ORDER BY cert_count DESC, issuer ASC LIMIT 8)",
         )
         home_sql += """
             UNION ALL
@@ -300,9 +329,7 @@ def dashboard_axis_stats(
                 axes=axes,
                 entry_keys=unique_keys,
                 history_endpoints=endpoints,
-                axis_columns=frozenset(
-                    {"condition", "monitoring", "chain", "renewal"}
-                ),
+                axis_columns=frozenset({"condition", "monitoring", "chain", "renewal"}),
             )
             assert bounded is not None
             bounded_sql, bounded_params = bounded
@@ -312,9 +339,7 @@ def dashboard_axis_stats(
                 for candidate in bounded_rows
             }
             ordered = [by_key[key] for key in unique_keys if key in by_key]
-            built = build_inventory_entries(
-                db_path, conn, ordered, status=status, axes=axes
-            )
+            built = build_inventory_entries(db_path, conn, ordered, status=status, axes=axes)
         built_by_key = {
             (
                 "pending" if entry.get("kind") == "pending" else "leaf",
@@ -338,4 +363,47 @@ def dashboard_axis_stats(
             "chain_groups": chain_groups,
             "calendar": sorted(calendar, key=lambda item: str(item["bucket_start"])),
         }
+    return result
+
+
+def dashboard_axis_stats(
+    db_path: str | Path,
+    *,
+    q: str | None = None,
+    source: str | None = None,
+    scope_tags: list[str] | tuple[str, ...] | None = None,
+    status: StatusContext | None = None,
+    axes: StatusModelContext | None = None,
+    axis_settings: AxisSettings | None = None,
+    axis_columns: frozenset[str] | None = None,
+    home: bool = False,
+    renewal_summary: bool = False,
+) -> dict[str, Any]:
+    """Count dashboard axes, optionally adding the cheap renewal summary."""
+    result = _dashboard_axis_stats(
+        db_path,
+        q=q,
+        source=source,
+        scope_tags=scope_tags,
+        status=status,
+        axes=axes,
+        axis_settings=axis_settings,
+        axis_columns=axis_columns,
+        home=home,
+    )
+    if not renewal_summary:
+        return result
+    if source == "uploaded":
+        result["renewal"] = dict.fromkeys(result["renewal"], 0)
+        return result
+    result["renewal"] = _dashboard_axis_stats(
+        db_path,
+        q=q,
+        source="scanned",
+        scope_tags=scope_tags,
+        status=status,
+        axes=axes,
+        axis_settings=axis_settings,
+        axis_columns=frozenset({"renewal_summary"}),
+    )["renewal"]
     return result

@@ -62,12 +62,16 @@ def rbac_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     _RENEWAL_CERT_ID = ids["current"]
     db = data_dir / "cert-watch.sqlite3"
     key, _RENEWAL_KEY = SqliteApiKeyRepository(db, security=_SEC).create_key(
-        '<img src=x onerror="window.renewalXss=1">',
+        "renewal-e2e-key",
         "renewal-report",
         binding="all",
     )
     now = "2026-09-28T12:00:00+00:00"
     with _connect(db) as conn:
+        conn.execute(
+            "UPDATE api_keys SET name=? WHERE id=?",
+            ('<img src=x onerror="window.renewalXss=1">', key.id),
+        )
         host = conn.execute(
             "SELECT h.id FROM hosts h JOIN certificates c "
             "ON c.hostname=h.hostname AND c.port=h.port WHERE c.id=?",
@@ -108,7 +112,9 @@ def rbac_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     }
     proc = subprocess.Popen(
         [sys.executable, "-m", "cert_watch", "--host", "127.0.0.1", "--port", str(port)],
-        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
     base = f"http://127.0.0.1:{port}"
     for _ in range(80):
@@ -166,7 +172,8 @@ def test_viewer_write_route_forbidden(page: Page, rbac_server: str) -> None:
     # A JSON-API write must be denied for a viewer role (403), proving the
     # gating is enforced server-side, not just hidden in the UI.
     resp = page.request.patch(
-        f"{rbac_server}/api/hosts/none/owner", data=json.dumps({"owner_name": "x"}),
+        f"{rbac_server}/api/hosts/none/owner",
+        data=json.dumps({"owner_name": "x"}),
         headers={"content-type": "application/json"},
     )
     assert resp.status == 403
@@ -180,7 +187,8 @@ def test_admin_and_writer_see_renewal_report_details_and_controls(
     page.goto(f"{rbac_server}/certificates/{_RENEWAL_CERT_ID}")
 
     panel = page.get_by_test_id("renewal-panel")
-    expect(panel).to_contain_text("Verifying renewal")
+    expect(panel).to_contain_text("Renewal failed")
+    expect(panel).to_contain_text("A new attempt is in progress")
     expect(panel).to_contain_text("Failed")
     expect(panel).to_contain_text("Reported by automation")
     expect(panel).to_contain_text("second line")
@@ -213,9 +221,7 @@ def test_admin_and_writer_see_renewal_report_details_and_controls(
     assert {item["renewal"] for item in payload["certificates"]} == {"failed"}
 
 
-def test_viewer_sees_only_renewal_outcome_and_time(
-    page: Page, rbac_server: str
-) -> None:
+def test_viewer_sees_only_renewal_outcome_and_time(page: Page, rbac_server: str) -> None:
     _login_as(page, rbac_server, groups=[_VIEWER_DN])
     page.goto(f"{rbac_server}/certificates/{_RENEWAL_CERT_ID}")
 

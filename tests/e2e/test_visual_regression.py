@@ -51,7 +51,9 @@ def visual_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     }
     proc = subprocess.Popen(
         [sys.executable, "-m", "cert_watch", "--host", "127.0.0.1", "--port", str(port)],
-        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
     base = f"http://127.0.0.1:{port}"
     for _ in range(80):
@@ -72,6 +74,7 @@ def visual_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+
 
 # Regions that legitimately vary between runs/builds.
 _MASKS = [
@@ -100,9 +103,7 @@ _VISUAL_PAGES = {
 
 @pytest.mark.visual
 @pytest.mark.parametrize("name,spec", list(_VISUAL_PAGES.items()))
-def test_page_visual(
-    page: Page, visual_server: str, assert_snapshot, name, spec
-) -> None:
+def test_page_visual(page: Page, visual_server: str, assert_snapshot, name, spec) -> None:
     path, heading = spec
     page.goto(f"{visual_server}{path}")
     if heading:
@@ -115,7 +116,9 @@ def test_page_visual(
 
 @pytest.mark.visual
 def test_add_drawer_visual(
-    page: Page, visual_server: str, assert_snapshot,
+    page: Page,
+    visual_server: str,
+    assert_snapshot,
 ) -> None:
     page.goto(f"{visual_server}/browse")
     page.get_by_test_id("add-host-btn").click()
@@ -146,9 +149,7 @@ def test_add_drawer_visual(
             );
         }"""
     )
-    assert not page.get_by_test_id("tab-bulk-btn").evaluate(
-        "element => element.matches(':hover')"
-    )
+    assert not page.get_by_test_id("tab-bulk-btn").evaluate("element => element.matches(':hover')")
     assert_snapshot(page, name="add-drawer.png", mask_elements=_MASKS)
 
 
@@ -169,7 +170,8 @@ _HOME_POPULATED_MASKS = [*_MASKS, ".cw-home-state", ".cw-home-foot"]
 _RENEWAL_HOME_MASKS = [
     *_MASKS,
     ".cw-home-foot",
-    "[data-testid=home-monitoring-row]",
+    "[data-testid=home-monitoring-row] .cw-home-when",
+    "[data-testid=home-monitoring-row] .cw-home-detail.cw-muted",
 ]
 _RENEWAL_DETAIL_MASKS = [
     *_MASKS,
@@ -191,7 +193,9 @@ def populated_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     }
     proc = subprocess.Popen(
         [sys.executable, "-m", "cert_watch", "--host", "127.0.0.1", "--port", str(port)],
-        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
     base = f"http://127.0.0.1:{port}"
     for _ in range(80):
@@ -339,24 +343,18 @@ def test_renewal_ui_visuals(
 
 
 @pytest.mark.visual
-def test_dashboard_populated_visual(
-    page: Page, populated_server: str, assert_snapshot
-) -> None:
+def test_dashboard_populated_visual(page: Page, populated_server: str, assert_snapshot) -> None:
     page.goto(f"{populated_server}/browse")
     expect(page.get_by_test_id("dashboard-heading")).to_be_visible()
     # All five seeded rows rendered before the shot.
     expect(page.locator("tbody tr")).to_have_count(5)
     page.evaluate("document.fonts.ready")
     page.wait_for_timeout(400)
-    assert_snapshot(
-        page, name="dashboard-populated.png", mask_elements=_POPULATED_MASKS
-    )
+    assert_snapshot(page, name="dashboard-populated.png", mask_elements=_POPULATED_MASKS)
 
 
 @pytest.mark.visual
-def test_home_populated_visual(
-    page: Page, populated_server: str, assert_snapshot
-) -> None:
+def test_home_populated_visual(page: Page, populated_server: str, assert_snapshot) -> None:
     page.goto(populated_server)
     expect(page.get_by_test_id("home-heading")).to_be_visible()
     # The seed has three expiring/expired leaves and two issuing-CA groups.
@@ -364,14 +362,10 @@ def test_home_populated_visual(
     expect(page.get_by_test_id("home-chain-row")).to_have_count(2)
     page.evaluate("document.fonts.ready")
     page.wait_for_timeout(400)
-    assert_snapshot(
-        page, name="home-populated.png", mask_elements=_HOME_POPULATED_MASKS
-    )
+    assert_snapshot(page, name="home-populated.png", mask_elements=_HOME_POPULATED_MASKS)
 
 
-def test_home_a_blocks_layout_and_every_filtered_link(
-    page: Page, populated_server: str
-) -> None:
+def test_home_a_blocks_layout_and_every_filtered_link(page: Page, populated_server: str) -> None:
     page.set_viewport_size({"width": 1440, "height": 1000})
     page.goto(populated_server)
     blocks = [
@@ -414,9 +408,11 @@ def test_home_a_blocks_layout_and_every_filtered_link(
         assert href is not None
         links.append((href, int(link.get_attribute("data-count") or "0")))
 
-    all_home_hrefs = set(page.locator("main a").evaluate_all(
-        "els => els.map(el => el.getAttribute('href')).filter(Boolean)"
-    ))
+    all_home_hrefs = set(
+        page.locator("main a").evaluate_all(
+            "els => els.map(el => el.getAttribute('href')).filter(Boolean)"
+        )
+    )
     assert len(links) == 27
     for href, expected in links:
         page.goto(f"{populated_server}{href}")
@@ -427,9 +423,14 @@ def test_home_a_blocks_layout_and_every_filtered_link(
 
     page.set_viewport_size({"width": 390, "height": 844})
     page.goto(populated_server)
-    boxes = [page.get_by_test_id(testid).bounding_box() for testid in (
-        "certificate-risk-block", "monitoring-gaps-block", "delivery-routing-block",
-    )]
+    boxes = [
+        page.get_by_test_id(testid).bounding_box()
+        for testid in (
+            "certificate-risk-block",
+            "monitoring-gaps-block",
+            "delivery-routing-block",
+        )
+    ]
     assert all(box is not None for box in boxes)
     assert [box["y"] for box in boxes if box] == sorted(box["y"] for box in boxes if box)
     assert page.evaluate("document.documentElement.scrollWidth === innerWidth")
@@ -448,9 +449,7 @@ def _assert_home_mobile_never_scrolls(page: Page, base: str) -> None:
     assert strip.evaluate("el => el.scrollWidth === el.clientWidth")
 
 
-def test_empty_home_mobile_never_scrolls_the_document(
-    page: Page, visual_server: str
-) -> None:
+def test_empty_home_mobile_never_scrolls_the_document(page: Page, visual_server: str) -> None:
     _assert_home_mobile_never_scrolls(page, visual_server)
 
 

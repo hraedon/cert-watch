@@ -21,6 +21,7 @@ from cert_watch.database import (
     record_cert_history,
     replace_scanned,
 )
+from cert_watch.database.chain_status_cache import prepare_status
 from cert_watch.database.connection import _connect
 from cert_watch.database.dashboard_axes import dashboard_axis_stats
 from cert_watch.database.dashboard_page import list_dashboard_page
@@ -31,6 +32,7 @@ from cert_watch.renewal_analytics import (
     refresh_endpoint_analytics,
     refresh_stale_classifier_rows,
 )
+from cert_watch.status_model import prepare_status_model_context
 
 NOW = datetime(2026, 9, 25, 12, tzinfo=UTC)
 _STATE = {
@@ -146,9 +148,7 @@ def test_rounding_boundary_uses_persisted_python_result_for_rows_filters_and_cou
     rows, total = list_dashboard_page(db, renewal="manual", per_page=0, now=NOW)
     assert total == 1
     assert rows[0]["renewal"] == "manual"
-    assert list_dashboard_page(
-        db, renewal="automation_configured", per_page=0, now=NOW
-    )[1] == 0
+    assert list_dashboard_page(db, renewal="automation_configured", per_page=0, now=NOW)[1] == 0
     assert dashboard_axis_stats(db)["renewal"]["manual"] == 1
 
 
@@ -161,10 +161,13 @@ def test_out_of_band_history_change_invalidates_to_unknown_until_refreshed(tmp_p
 
     with _connect(db) as conn:
         refresh_endpoint_analytics(conn, hostname, 443)
-        assert conn.execute(
-            "SELECT classification FROM endpoint_renewal_analytics WHERE hostname = ?",
-            (hostname,),
-        ).fetchone() is not None
+        assert (
+            conn.execute(
+                "SELECT classification FROM endpoint_renewal_analytics WHERE hostname = ?",
+                (hostname,),
+            ).fetchone()
+            is not None
+        )
         conn.execute(
             """INSERT INTO cert_history
                (id, hostname, port, fingerprint_sha256, issuer,
@@ -177,10 +180,13 @@ def test_out_of_band_history_change_invalidates_to_unknown_until_refreshed(tmp_p
                 NOW.isoformat(),
             ),
         )
-        assert conn.execute(
-            "SELECT classification FROM endpoint_renewal_analytics WHERE hostname = ?",
-            (hostname,),
-        ).fetchone() is None
+        assert (
+            conn.execute(
+                "SELECT classification FROM endpoint_renewal_analytics WHERE hostname = ?",
+                (hostname,),
+            ).fetchone()
+            is None
+        )
         conn.commit()
 
     rows, total = list_dashboard_page(db, renewal="unknown", per_page=0, now=NOW)
@@ -232,15 +238,16 @@ def test_history_writers_refresh_basis_and_host_delete_removes_cache(tmp_path):
 
     assert SqliteHostRepository(db).delete(host_id)
     with _connect(db) as conn:
-        assert conn.execute(
-            "SELECT 1 FROM endpoint_renewal_analytics WHERE hostname = ?",
-            (hostname,),
-        ).fetchone() is None
+        assert (
+            conn.execute(
+                "SELECT 1 FROM endpoint_renewal_analytics WHERE hostname = ?",
+                (hostname,),
+            ).fetchone()
+            is None
+        )
 
 
-def test_repeat_scan_skips_history_refresh_but_new_period_does_not(
-    tmp_path, monkeypatch
-):
+def test_repeat_scan_skips_history_refresh_but_new_period_does_not(tmp_path, monkeypatch):
     import cert_watch.renewal_analytics as analytics
 
     db = tmp_path / "repeat.sqlite3"
@@ -337,9 +344,7 @@ def test_same_fingerprint_validity_recovery_still_refreshes(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("invalid_kind", ["julian-day", "malformed"])
-def test_non_iso_validity_never_takes_the_repeat_scan_fast_path(
-    tmp_path, invalid_kind
-):
+def test_non_iso_validity_never_takes_the_repeat_scan_fast_path(tmp_path, invalid_kind):
     db = tmp_path / f"non-iso-{invalid_kind}.sqlite3"
     init_schema(db)
     hostname = f"non-iso-{invalid_kind}.example.test"
@@ -369,9 +374,7 @@ def test_non_iso_validity_never_takes_the_repeat_scan_fast_path(
         invalid_not_before = "not-a-date"
         if invalid_kind == "julian-day":
             invalid_not_before = str(
-                conn.execute(
-                    "SELECT julianday(?)", (issued_at.isoformat(),)
-                ).fetchone()[0]
+                conn.execute("SELECT julianday(?)", (issued_at.isoformat(),)).fetchone()[0]
             )
         conn.execute(
             """INSERT INTO cert_history
@@ -464,9 +467,7 @@ def test_incremental_cache_matches_from_scratch_after_each_insert_and_prune(tmp_
         if randomizer.random() < 0.3:
             fingerprints.append(f"fp-{len(fingerprints)}")
         fingerprint = randomizer.choice(fingerprints[-2:])
-        scanned_at = base + timedelta(
-            days=index * 3 + randomizer.choice([-4, -1, 0, 0, 1])
-        )
+        scanned_at = base + timedelta(days=index * 3 + randomizer.choice([-4, -1, 0, 0, 1]))
         lifetime = randomizer.choice([60, 90, 365])
         record_cert_history(
             db,
@@ -523,9 +524,7 @@ def test_init_schema_refreshes_stale_versions_once(tmp_path, monkeypatch):
     with _connect(db) as conn:
         _seed_acme(conn, hostname, 443)
         refresh_endpoint_analytics(conn, hostname, 443)
-        conn.execute(
-            "UPDATE endpoint_renewal_analytics SET classifier_version = 0"
-        )
+        conn.execute("UPDATE endpoint_renewal_analytics SET classifier_version = 0")
         conn.commit()
 
     original = analytics.refresh_stale_classifier_rows
@@ -583,9 +582,7 @@ def test_repeat_write_refreshes_a_stale_classifier_version(tmp_path):
     assert _cached(db, hostname, 443) == "likely-automated"
 
 
-def test_startup_refresh_logs_one_failure_and_continues(
-    tmp_path, monkeypatch, caplog
-):
+def test_startup_refresh_logs_one_failure_and_continues(tmp_path, monkeypatch, caplog):
     import cert_watch.database.schema as schema
     import cert_watch.renewal_analytics as analytics
 
@@ -596,9 +593,7 @@ def test_startup_refresh_logs_one_failure_and_continues(
         for hostname in hostnames:
             _seed_acme(conn, hostname, 443)
             refresh_endpoint_analytics(conn, hostname, 443)
-        conn.execute(
-            "UPDATE endpoint_renewal_analytics SET classifier_version = 0"
-        )
+        conn.execute("UPDATE endpoint_renewal_analytics SET classifier_version = 0")
         conn.commit()
 
     original = analytics.refresh_endpoint_analytics
@@ -619,9 +614,7 @@ def test_startup_refresh_logs_one_failure_and_continues(
     assert attempted == sorted(hostnames)
     with _connect(db) as conn:
         versions = dict(
-            conn.execute(
-                "SELECT hostname, classifier_version FROM endpoint_renewal_analytics"
-            )
+            conn.execute("SELECT hostname, classifier_version FROM endpoint_renewal_analytics")
         )
     assert versions == {
         "broken.example.test": 0,
@@ -629,8 +622,7 @@ def test_startup_refresh_logs_one_failure_and_continues(
         "good-two.example.test": CLASSIFIER_VERSION,
     }
     assert any(
-        "broken.example.test:443 (ValueError)" in record.getMessage()
-        for record in caplog.records
+        "broken.example.test:443 (ValueError)" in record.getMessage() for record in caplog.records
     )
 
 
@@ -659,10 +651,13 @@ def test_migration_backfill_runs_the_python_classifier(tmp_path):
                     first_seen.isoformat(),
                 ),
             )
-        assert conn.execute(
-            "SELECT 1 FROM endpoint_renewal_analytics WHERE hostname = ?",
-            (hostname,),
-        ).fetchone() is None
+        assert (
+            conn.execute(
+                "SELECT 1 FROM endpoint_renewal_analytics WHERE hostname = ?",
+                (hostname,),
+            ).fetchone()
+            is None
+        )
         upgrade(conn)
         cached = conn.execute(
             """SELECT classification, basis_history_count, basis_latest_history_id
@@ -687,9 +682,7 @@ def test_renewal_classifier_fuzz_agrees_with_browse_filters_and_counts(tmp_path)
         hostname = f"h{index}.fuzz.example.test"
         endpoints.append((hostname, 443))
         host_ids[hostname] = hosts.add(hostname, 443)
-        replace_scanned(
-            db, hostname, 443, _live_cert(hostname, f"live-{index}"), [], True
-        )
+        replace_scanned(db, hostname, 443, _live_cert(hostname, f"live-{index}"), [], True)
         period_count = randomizer.choice([2, 3, 3, 4, 5])
         acme = randomizer.random() < 0.8
         first_seen = NOW - timedelta(days=400)
@@ -699,8 +692,7 @@ def test_renewal_classifier_fuzz_agrees_with_browse_filters_and_counts(tmp_path)
             lifetime = randomizer.choice([30, 60, 89.6, 90, 90.2, 397])
             if period:
                 first_seen += timedelta(
-                    days=cadence
-                    + randomizer.choice([0, 0.04, 0.5, 2.9, 3.0, 3.1, 4.3, -2.95])
+                    days=cadence + randomizer.choice([0, 0.04, 0.5, 2.9, 3.0, 3.1, 4.3, -2.95])
                 )
             lead = randomizer.choice([30, 20, 1, 0.06, 0.051, 0.04, -0.04, 0])
             periods.append((first_seen, lifetime, lead, acme))
@@ -731,10 +723,12 @@ def test_renewal_classifier_fuzz_agrees_with_browse_filters_and_counts(tmp_path)
                             not_before, not_after, scanned_at)
                            VALUES (?, ?, 443, ?, ?, ?, ?, ?)""",
                         (
-                            str(uuid.uuid5(
-                                uuid.NAMESPACE_DNS,
-                                f"{endpoint_index}:{period_index}:{scan_index}",
-                            )),
+                            str(
+                                uuid.uuid5(
+                                    uuid.NAMESPACE_DNS,
+                                    f"{endpoint_index}:{period_index}:{scan_index}",
+                                )
+                            ),
                             hostname,
                             f"fp-{endpoint_index}-{period_index}",
                             "CN=R3, O=Let's Encrypt" if acme else "CN=Example Test CA",
@@ -791,9 +785,7 @@ def test_renewal_classifier_fuzz_agrees_with_browse_filters_and_counts(tmp_path)
     displayed = {str(row["hostname"]): str(row["renewal"]) for row in rows}
     filtered: dict[str, str] = {}
     for state in set(expected.values()):
-        state_rows, state_total = list_dashboard_page(
-            db, renewal=state, per_page=0, now=NOW
-        )
+        state_rows, state_total = list_dashboard_page(db, renewal=state, per_page=0, now=NOW)
         assert state_total == sum(value == state for value in expected.values())
         filtered.update({str(row["hostname"]): state for row in state_rows})
 
@@ -810,6 +802,68 @@ def test_renewal_classifier_fuzz_agrees_with_browse_filters_and_counts(tmp_path)
         "stalled": 0,
         "unknown": Counter(expected.values())["unknown"],
     }
+
+
+def test_generated_attempt_fuzz_agrees_with_sql_risk_projections(tmp_path) -> None:
+    db = tmp_path / "attempt-fuzz.sqlite3"
+    init_schema(db)
+    randomizer = random.Random(118_602)
+    current = datetime.now(UTC)
+    hosts = SqliteHostRepository(db)
+    states = ("open", "verifying", "not_deployed", "verified", "failed", "cancelled")
+
+    seeded: list[tuple[int, str]] = []
+    for index in range(180):
+        hostname = f"attempt-{index}.fuzz.example.test"
+        host_id = hosts.add(hostname, 443, renewal_method="acme")
+        replace_scanned(
+            db, hostname, 443, _live_cert(hostname, f"attempt-live-{index}"), [], True
+        )
+        seeded.append((index, host_id))
+
+    with _connect(db) as conn:
+        for index, host_id in seeded:
+            state = randomizer.choice(states)
+            failure_open = randomizer.random() < 0.35
+            failure_id = f"origin-{index}" if randomizer.random() < 0.5 else None
+            conn.execute(
+                """INSERT INTO renewal_attempts
+                   (attempt_id,host_id,is_current,source,state,opened_seq,
+                    lease_expires_at,suppresses_stalled,received_at,
+                    failure_attempt_id,failure_reported_at,failure_cleared_at)
+                   VALUES (?,?,1,'fuzz',?,1,?,?,?,?,?,?)""",
+                (
+                    f"attempt-{index}",
+                    host_id,
+                    state,
+                    (current + timedelta(hours=randomizer.choice([-2, 2]))).isoformat(),
+                    randomizer.randrange(2),
+                    current.isoformat(),
+                    failure_id,
+                    current.isoformat() if failure_open else None,
+                    None,
+                ),
+            )
+        conn.commit()
+
+    status = prepare_status(db, current)
+    axes = prepare_status_model_context(db, certificate_status=status)
+    full = dashboard_axis_stats(db, status=status, axes=axes, axis_columns=frozenset({"renewal"}))[
+        "renewal"
+    ]
+    summary = dashboard_axis_stats(
+        db, status=status, axes=axes, axis_columns=frozenset({"renewal_summary"})
+    )["renewal"]
+    risks = dashboard_axis_stats(
+        db, status=status, axes=axes, axis_columns=frozenset({"renewal_risks"})
+    )["renewal"]
+
+    for state in ("failed", "not_deployed"):
+        assert risks[state] == summary[state] == full[state]
+    assert summary["verifying"] == full["verifying"]
+    for state in ("failed", "not_deployed", "verifying"):
+        _rows, total = list_dashboard_page(db, renewal=state, per_page=0, status=status, axes=axes)
+        assert total == full[state]
 
 
 # ---------------------------------------------------------------------------
@@ -870,8 +924,7 @@ def _scan_cert(hostname: str, port: int, issuer: str, lifetime_days: float) -> C
 def _cached(db, hostname: str, port: int) -> str | None:
     with _connect(db) as conn:
         row = conn.execute(
-            "SELECT classification FROM endpoint_renewal_analytics "
-            "WHERE hostname = ? AND port = ?",
+            "SELECT classification FROM endpoint_renewal_analytics WHERE hostname = ? AND port = ?",
             (hostname, port),
         ).fetchone()
     return None if row is None else str(row["classification"])
@@ -883,15 +936,29 @@ _PRIVATE = "CN=Example Test CA"
 
 def _seed_acme(conn, hostname: str, port: int) -> None:
     _seed_history(
-        conn, hostname, port, issuer=_ACME, lifetime_days=90, cadence_days=60,
-        lead_days=30, periods=3, last_seen=datetime.now(UTC),
+        conn,
+        hostname,
+        port,
+        issuer=_ACME,
+        lifetime_days=90,
+        cadence_days=60,
+        lead_days=30,
+        periods=3,
+        last_seen=datetime.now(UTC),
     )
 
 
 def _seed_manual(conn, hostname: str, port: int) -> None:
     _seed_history(
-        conn, hostname, port, issuer=_PRIVATE, lifetime_days=365, cadence_days=365,
-        lead_days=0, periods=3, last_seen=datetime.now(UTC),
+        conn,
+        hostname,
+        port,
+        issuer=_PRIVATE,
+        lifetime_days=365,
+        cadence_days=365,
+        lead_days=0,
+        periods=3,
+        last_seen=datetime.now(UTC),
     )
 
 
@@ -909,9 +976,7 @@ def test_real_scan_store_refreshes_classification_for_browse_filter_and_counts(t
     assert _cached(db, hostname, 443) is None
 
     store_scanned(
-        ScannedEntry(
-            host=hostname, port=443, leaf=_scan_cert(hostname, 443, _ACME, 90)
-        ),
+        ScannedEntry(host=hostname, port=443, leaf=_scan_cert(hostname, 443, _ACME, 90)),
         db,
     )
 
@@ -953,9 +1018,7 @@ def test_refresh_classifies_each_port_from_its_own_history(tmp_path):
         db,
     )
     store_scanned(
-        ScannedEntry(
-            host=hostname, port=8443, leaf=_scan_cert(hostname, 8443, _PRIVATE, 365)
-        ),
+        ScannedEntry(host=hostname, port=8443, leaf=_scan_cert(hostname, 8443, _PRIVATE, 365)),
         db,
     )
 
@@ -987,9 +1050,7 @@ def test_raw_history_delete_invalidates_only_that_endpoint(tmp_path):
     assert _cached(db, hostname, 443) is not None
 
     with _connect(db) as conn:
-        conn.execute(
-            "DELETE FROM cert_history WHERE id = ?", (f"seed-{hostname}-443-0",)
-        )
+        conn.execute("DELETE FROM cert_history WHERE id = ?", (f"seed-{hostname}-443-0",))
         conn.commit()
 
     assert _cached(db, hostname, 443) is None
@@ -1080,8 +1141,15 @@ def test_purge_refreshes_exactly_the_endpoints_it_purged(tmp_path):
     now = datetime.now(UTC)
     with _connect(db) as conn:
         _seed_history(
-            conn, old_host, 443, issuer=_ACME, lifetime_days=90, cadence_days=60,
-            lead_days=30, periods=3, last_seen=now - timedelta(days=200),
+            conn,
+            old_host,
+            443,
+            issuer=_ACME,
+            lifetime_days=90,
+            cadence_days=60,
+            lead_days=30,
+            periods=3,
+            last_seen=now - timedelta(days=200),
         )
         _seed_acme(conn, fresh_host, 443)
         refresh_endpoint_analytics(conn, old_host, 443)

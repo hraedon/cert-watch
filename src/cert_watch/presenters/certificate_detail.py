@@ -573,25 +573,18 @@ def _when(value: object) -> str:
 
 
 def _renewal_activity(
-    data: CertificateDetailData, *, reveal: bool
+    data: CertificateDetailData, *, renewal: str, reveal: bool
 ) -> tuple[RenewalAttemptView | None, tuple[RenewalReportView, ...]]:
     raw = data.renewal_attempt
     attempt: RenewalAttemptView | None = None
     if raw is not None:
         state = str(raw.get("state") or "unknown")
-        failure_open = bool(
-            raw.get("failure_attempt_id") and not raw.get("failure_cleared_at")
-        )
-        label, tone = {
-            "open": ("In progress", "t-neutral"),
-            "verifying": ("Verifying renewal", "t-neutral"),
-            "not_deployed": ("Deployment not confirmed", "t-crit"),
-            "verified": ("Verified", "t-ok"),
-            "failed": ("Renewal failed", "t-crit"),
-            "abandoned": ("No longer in progress", "t-warn"),
-            "cancelled": ("Cancelled", "t-muted"),
-        }.get(state, (state.replace("_", " ").capitalize(), "t-muted"))
-        if state == "open":
+        failure_open = bool(raw.get("failure_reported_at") and not raw.get("failure_cleared_at"))
+        display = renewal_display(renewal)
+        label, tone = display.label, display.tone
+        if renewal == "failed" and state in {"open", "verifying"}:
+            detail = "A new attempt is in progress."
+        elif state == "open":
             detail = f"Lease ends {_when(raw.get('lease_expires_at'))}."
         elif state == "verifying":
             detail = f"Next check {_when(raw.get('next_check_at'))}."
@@ -603,8 +596,10 @@ def _renewal_activity(
                 f"Verified leaf {leaf} · "
                 f"{_when(raw.get('last_check_at') or raw.get('received_at'))}."
             )
+        elif state == "failed" and raw.get("failure_cleared_at"):
+            detail = f"Failure cleared {_when(raw.get('failure_cleared_at'))}."
         elif state == "failed":
-            detail = f"Reported {_when(raw.get('failure_reported_at'))}."
+            detail = f"Received {_when(raw.get('failure_reported_at'))}."
         else:
             detail = f"Last changed {_when(raw.get('received_at'))}."
         attempt = RenewalAttemptView(state, label, detail, tone, failure_open)
@@ -620,18 +615,14 @@ def _renewal_activity(
                 str(item.get("outcome") or ""),
                 str(item.get("outcome") or "unknown").replace("_", " ").capitalize(),
             ),
-            reported_at=_when(item.get("occurred_at") or item.get("received_at")),
+            reported_at=_when(item.get("received_at")),
             message=str(item.get("message")) if reveal and item.get("message") else None,
             tool=str(item.get("tool")) if reveal and item.get("tool") else None,
             correlation_id=(
-                str(item.get("correlation_id"))
-                if reveal and item.get("correlation_id")
-                else None
+                str(item.get("correlation_id")) if reveal and item.get("correlation_id") else None
             ),
             source_name=(
-                str(item.get("source_name"))
-                if reveal and item.get("source_name")
-                else None
+                str(item.get("source_name")) if reveal and item.get("source_name") else None
             ),
         )
         for item in data.renewal_reports
@@ -688,9 +679,7 @@ def _detail_axes(
                 f"scan at {_when(last_seen)}. "
                 "cert-watch can't confirm what the server serves now."
             )
-        certificate_axis = DetailAxisView(
-            "Certificate", display.label, detail, display.tone
-        )
+        certificate_axis = DetailAxisView("Certificate", display.label, detail, display.tone)
 
     if monitoring == "not_monitored":
         monitoring_axis = DetailAxisView(
@@ -736,8 +725,7 @@ def _detail_axes(
             f"{_when((attempt or {}).get('lease_expires_at'))}."
         ),
         "verifying": (
-            "Waiting for scan evidence · next check "
-            f"{_when((attempt or {}).get('next_check_at'))}."
+            f"Waiting for scan evidence · next check {_when((attempt or {}).get('next_check_at'))}."
         ),
         "not_deployed": (
             "The reported replacement is not being served · raised "
@@ -835,8 +823,7 @@ def _detail_actions(
                     "Run the overdue scan and check the scheduler."
                     if may_write
                     else (
-                        "Ask an administrator or the certificate's owner to check "
-                        "the overdue scan."
+                        "Ask an administrator or the certificate's owner to check the overdue scan."
                     )
                 ),
                 "The scheduled scan is overdue; no failed connection attempt is recorded.",
@@ -943,17 +930,20 @@ def _chain_guidance_for_role(guidance: ChainGuidance, is_admin: bool) -> ChainGu
     """Delegate trust-anchor settings work without hiding endpoint remediation."""
     if is_admin or "ask an administrator" in guidance.remediation:
         return guidance
-    remediation = guidance.remediation.replace(
-        "configure the verified issuing CA in Settings → Trust anchors",
-        "ask an administrator to configure the verified issuing CA in "
-        "Settings → Trust anchors",
-    ).replace(
-        "verify the root with your CA and add it in Settings → Trust anchors",
-        "ask an administrator to verify the root with your CA and add it in "
-        "Settings → Trust anchors",
-    ).replace(
-        "verify it and add it in Settings → Trust anchors",
-        "ask an administrator to verify it and add it in Settings → Trust anchors",
+    remediation = (
+        guidance.remediation.replace(
+            "configure the verified issuing CA in Settings → Trust anchors",
+            "ask an administrator to configure the verified issuing CA in Settings → Trust anchors",
+        )
+        .replace(
+            "verify the root with your CA and add it in Settings → Trust anchors",
+            "ask an administrator to verify the root with your CA and add it in "
+            "Settings → Trust anchors",
+        )
+        .replace(
+            "verify it and add it in Settings → Trust anchors",
+            "ask an administrator to verify it and add it in Settings → Trust anchors",
+        )
     )
     return replace(guidance, remediation=remediation)
 
@@ -1049,6 +1039,7 @@ def present_certificate_detail(
     scanned: bool = False,
     added: bool = False,
     reveal_delivery_identities: bool = False,
+    reveal_renewal_report_details: bool = False,
     now: datetime | None = None,
 ) -> CertificateDetailView:
     """Build either stored-certificate or pending-host detail view."""
@@ -1063,7 +1054,7 @@ def present_certificate_detail(
             data.status, endpoint=True
         )
         renewal_attempt, renewal_reports = _renewal_activity(
-            data, reveal=reveal_delivery_identities
+            data, renewal=renewal, reveal=reveal_renewal_report_details
         )
         axes = _detail_axes(
             model=data.status,
@@ -1153,7 +1144,7 @@ def present_certificate_detail(
             reveal_delivery_identities=reveal_delivery_identities,
             renewal_attempt=renewal_attempt,
             renewal_reports=renewal_reports,
-            reveal_renewal_report_details=reveal_delivery_identities,
+            reveal_renewal_report_details=reveal_renewal_report_details,
         )
 
     technical = present_certificate_technical_details(
@@ -1183,7 +1174,7 @@ def present_certificate_detail(
         data.status, endpoint=data.host is not None
     )
     renewal_attempt, renewal_reports = _renewal_activity(
-        data, reveal=reveal_delivery_identities
+        data, renewal=renewal, reveal=reveal_renewal_report_details
     )
     axes = _detail_axes(
         model=data.status,
@@ -1300,5 +1291,5 @@ def present_certificate_detail(
         reveal_delivery_identities=reveal_delivery_identities,
         renewal_attempt=renewal_attempt,
         renewal_reports=renewal_reports,
-        reveal_renewal_report_details=reveal_delivery_identities,
+        reveal_renewal_report_details=reveal_renewal_report_details,
     )

@@ -91,16 +91,13 @@ def load_browse_page(
     # row below is judged at one instant with one chain status per row.
     status = prepare_status(db_path)
     axis_settings = axis_settings or AxisSettings(
-        sched_hour=sched_hour, sched_min=sched_min,
+        sched_hour=sched_hour,
+        sched_min=sched_min,
     )
-    axes = prepare_status_model_context(
-        db_path, certificate_status=status, settings=axis_settings
-    )
+    axes = prepare_status_model_context(db_path, certificate_status=status, settings=axis_settings)
 
     pivot_groups = (
-        list_fleet_pivot(
-            db_path, view, scope_tags=scope_tags, status=status, axes=axes
-        )
+        list_fleet_pivot(db_path, view, scope_tags=scope_tags, status=status, axes=axes)
         if view in {"issuer", "owner", "renewal_method"}
         else None
     )
@@ -168,7 +165,8 @@ def load_browse_page(
         scope_tags=scope_tags,
         status=status,
         axes=axes,
-        axis_columns=frozenset({"condition", "renewal", "overall"}),
+        axis_columns=frozenset({"condition", "overall"}),
+        renewal_summary=True,
     )
     pivot_stats = dict(axis_stats["overall"])
 
@@ -178,10 +176,18 @@ def load_browse_page(
         # Calendar buckets only contain certificates with an expiry date; the
         # page-level inventory total must still include pending hosts.
         tracked_total = dashboard_inventory_count(db_path, scope_tags=scope_tags)
-    elif not any((
-        urgency, condition, monitoring, renewal, delivery,
-        chain_problem, routing_gap, expiry_week,
-    )):
+    elif not any(
+        (
+            urgency,
+            condition,
+            monitoring,
+            renewal,
+            delivery,
+            chain_problem,
+            routing_gap,
+            expiry_week,
+        )
+    ):
         tracked_total = total
     else:
         tracked_total = dashboard_inventory_count(

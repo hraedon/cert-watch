@@ -145,9 +145,7 @@ _TRUST_PROBLEMS = {"incomplete", "invalid", "unknown", "self-signed", "unverifie
 
 def _renewal_method_label(value: object) -> str:
     method = str(value or "")
-    return {"acme": "ACME", "cert-manager": "cert-manager"}.get(
-        method.casefold(), method
-    )
+    return {"acme": "ACME", "cert-manager": "cert-manager"}.get(method.casefold(), method)
 
 
 def _risk_difference(row: dict[str, Any]) -> str:
@@ -157,7 +155,12 @@ def _risk_difference(row: dict[str, Any]) -> str:
     else:
         renewal = str(row.get("renewal") or "")
         method = _renewal_method_label(row.get("renewal_method"))
-        if renewal == "manual":
+        if renewal in {"failed", "not_deployed"}:
+            failed = renewal == "failed"
+            label = "Renewal failed" if failed else "Deployment not confirmed"
+            when = row.get("renewal_failure_reported_at" if failed else "renewal_raised_at")
+            return f"{label} · {_format_datetime(when)}"
+        elif renewal == "manual":
             details.append("Manual renewal")
         elif renewal == "in_progress":
             details.append("Renewal in progress (operator report)")
@@ -181,9 +184,7 @@ def _condition_label(days: int | None) -> str:
 
 def _risk_rows(raw_rows: dict[str, list[dict[str, Any]]]) -> tuple[HomeRiskRow, ...]:
     expiry_rows = [
-        row
-        for state in ("expired", "le7", "8to30")
-        for row in raw_rows.get(f"risk:{state}", [])
+        row for state in ("expired", "le7", "8to30") for row in raw_rows.get(f"risk:{state}", [])
     ]
     expiry_rows.sort(
         key=lambda row: (
@@ -203,9 +204,7 @@ def _risk_rows(raw_rows: dict[str, list[dict[str, Any]]]) -> tuple[HomeRiskRow, 
         if renewal_problem:
             failed = renewal == "failed"
             condition_label = "Renewal failed" if failed else "Deployment not confirmed"
-            when = row.get(
-                "renewal_failure_reported_at" if failed else "renewal_raised_at"
-            )
+            when = row.get("renewal_failure_reported_at" if failed else "renewal_raised_at")
             condition_label = f"{condition_label} · {_format_datetime(when)}"
             difference = ""
         else:
@@ -253,9 +252,7 @@ def _monitoring_rows(
                 compact = " ".join(str(raw_error).split())
                 cause = compact if len(compact) <= 160 else compact[:159].rstrip() + "…"
             elif state == "never_scanned":
-                cause = (
-                    "No scan attempt has been recorded; check the endpoint and scan settings."
-                )
+                cause = "No scan attempt has been recorded; check the endpoint and scan settings."
             else:
                 cause = "The latest scan attempt failed."
             when_label = ""
@@ -309,9 +306,8 @@ def _chain_groups(raw: list[dict[str, Any]]) -> tuple[HomeChainGroup, ...]:
             HomeChainGroup(
                 issuer=issuer_cn(raw_issuer) or "Unknown issuer",
                 count=int(group.get("count") or 0),
-                browse_url="/browse?" + urlencode(
-                    {"chain_problem": "1", "issuer": raw_issuer, "grouped": 0}
-                ),
+                browse_url="/browse?"
+                + urlencode({"chain_problem": "1", "issuer": raw_issuer, "grouped": 0}),
                 guidance=guidance,
                 examples=tuple(examples),
             )
@@ -424,9 +420,7 @@ def _delivery_lines(
     return tuple(lines)
 
 
-def _horizon(
-    raw: list[dict[str, Any]], current: datetime
-) -> tuple[HorizonBucketView, ...]:
+def _horizon(raw: list[dict[str, Any]], current: datetime) -> tuple[HorizonBucketView, ...]:
     monday = (current - timedelta(days=current.weekday())).date()
     buckets = {str(bucket["bucket_start"]): bucket for bucket in raw}
     counts = {key: int(bucket.get("count") or 0) for key, bucket in buckets.items()}
@@ -450,9 +444,7 @@ def _horizon(
                 count=count,
                 tone=tone,
                 bar_height=height,
-                browse_url="/browse?" + urlencode(
-                    {"expiry_week": bucket_start, "grouped": 0}
-                ),
+                browse_url="/browse?" + urlencode({"expiry_week": bucket_start, "grouped": 0}),
                 title=(
                     f"Week of {bucket_label}: {count} "
                     f"certificate{'s' if count != 1 else ''} — open in Browse"
@@ -478,9 +470,7 @@ def present_home(
 ) -> HomeView:
     """Build Home A without HTTP, database, or template dependencies."""
     current = now or datetime.now(UTC)
-    next_run = current.replace(
-        hour=sched_hour, minute=sched_min, second=0, microsecond=0
-    )
+    next_run = current.replace(hour=sched_hour, minute=sched_min, second=0, microsecond=0)
     if next_run <= current:
         next_run += timedelta(days=1)
     monitoring = axis_stats["monitoring"]
@@ -510,9 +500,7 @@ def present_home(
             webhook_outcome=home_data.get("webhook_outcome"),
             webhook_failed_at=home_data.get("webhook_failed_at"),
             routing_gap_total=int(home_data.get("routing_gap_total") or 0),
-            monitoring_gap_total=(
-                int(monitoring["failing"]) + int(monitoring["never_scanned"])
-            ),
+            monitoring_gap_total=(int(monitoring["failing"]) + int(monitoring["never_scanned"])),
         ),
         last_scan_activity_label=(
             f"Last scan activity {_format_datetime(home_data.get('last_scan'))}"

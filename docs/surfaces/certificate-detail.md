@@ -19,10 +19,14 @@ result and remediation, the current renewal attempt and recent reports,
 renewal/drift history, tags and notes, SANs,
 fingerprint, serial, algorithms, and stored chain certificates. Pending hosts
 must show latest scan status and error without pretending a certificate exists.
-Report outcome and time are visible to every endpoint reader. Report message,
+Report outcome and server receive time are visible to every endpoint reader and
+reports are ordered by their server-assigned sequence. Report message,
 tool, correlation, and source-key name are restricted to administrators and
 callers with host-tag write access. Only those writers can clear an open
 renewal failure or report manual progress.
+
+The Renewal panel headline uses the same canonical renewal-axis state as
+Browse. Attempt-specific progress and timing are secondary detail beneath it.
 
 ## Ownership and boundaries
 

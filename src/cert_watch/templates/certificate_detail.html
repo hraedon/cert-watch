@@ -75,6 +75,11 @@
                role="status"
                data-testid="endpoint-settings-saved">{{ icons.svg_icon('check-circle', 14) }}Host details saved.</p>
         {% endif %}
+        {% if renewal_failure_cleared %}
+            <p class="cw-note t-ok"
+               role="status"
+               data-testid="renewal-failure-cleared">{{ icons.svg_icon('check-circle', 14) }}Failure cleared</p>
+        {% endif %}
         <section class="cw-detail-axes"
                  aria-label="Certificate status"
                  data-testid="detail-state-axes">

@@ -242,6 +242,18 @@ def may_reveal_routing_identities(
     return bool(callable(may_write_tags) and may_write_tags(effective_tags))
 
 
+def may_reveal_renewal_report_details(
+    auth_ctx: Any, host_tags: list[str] | tuple[str, ...]
+) -> bool:
+    """Reveal automation details only through the endpoint host's tags.
+
+    Certificate tags deliberately do not participate.  The renewal-report
+    history API and certificate detail page share this predicate so their
+    redaction boundary cannot drift.
+    """
+    return may_reveal_routing_identities(auth_ctx, host_tags)
+
+
 def ensure_new_tags_in_scope(auth_ctx: Any, new_tags: str) -> None:
     """Raise unless every submitted tag is in the caller's writable scope."""
     require_auth_context(auth_ctx)

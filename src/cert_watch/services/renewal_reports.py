@@ -18,7 +18,7 @@ from cert_watch.auth.guards import renewal_report_binding
 from cert_watch.auth.scope import (
     ScopeDeniedError,
     ensure_write_scope_on,
-    may_reveal_routing_identities,
+    may_reveal_renewal_report_details,
 )
 from cert_watch.config import Settings
 from cert_watch.database import get_write_lock
@@ -209,11 +209,7 @@ def _open_failure(
     attempt: sqlite3.Row | None,
 ) -> tuple[str | None, str | None, str | None]:
     """Return the endpoint-cycle failure carried by *attempt*, if unresolved."""
-    if (
-        attempt is None
-        or not attempt["failure_reported_at"]
-        or attempt["failure_cleared_at"]
-    ):
+    if attempt is None or not attempt["failure_reported_at"] or attempt["failure_cleared_at"]:
         return None, None, None
     return (
         str(attempt["failure_attempt_id"] or attempt["attempt_id"]),
@@ -566,9 +562,7 @@ def clear_renewal_failure(
         conn = _connect(db_path)
         try:
             begin_immediate(conn)
-            host = conn.execute(
-                "SELECT id FROM hosts WHERE id=?", (host_id,)
-            ).fetchone()
+            host = conn.execute("SELECT id FROM hosts WHERE id=?", (host_id,)).fetchone()
             if host is None:
                 raise RenewalReportNotFoundError("endpoint not found")
             ensure_write_scope_on(conn, auth, host_id=host_id)
@@ -653,9 +647,7 @@ def _report_baseline(
     use_current_predecessor: bool,
 ) -> tuple[str | None, str | None]:
     """Choose a safe, recent predecessor or the currently served leaf."""
-    candidate = (
-        target.baseline_fingerprint.lower() if target.baseline_fingerprint else None
-    )
+    candidate = target.baseline_fingerprint.lower() if target.baseline_fingerprint else None
     requested_predecessor = (
         candidate if candidate is not None and candidate != current_fingerprint else None
     )
@@ -974,17 +966,12 @@ def _reduce_verified_success(
 ) -> tuple[str, str, bool, str, str | None, str | None]:
     """Separate a verified attempt's late reports from a new renewal cycle."""
     verified_leaf = (
-        str(attempt["verified_fingerprint"]).lower()
-        if attempt["verified_fingerprint"]
-        else None
+        str(attempt["verified_fingerprint"]).lower() if attempt["verified_fingerprint"] else None
     )
     comparison_leaf = verified_leaf or baseline_fingerprint
     explicit_new_leaf = bool(
         report.new_fingerprint
-        and (
-            comparison_leaf is None
-            or report.new_fingerprint.lower() != comparison_leaf.lower()
-        )
+        and (comparison_leaf is None or report.new_fingerprint.lower() != comparison_leaf.lower())
     )
     succeeded_at = datetime.fromisoformat(
         str(attempt["success_received_at"] or attempt["received_at"])
@@ -1116,8 +1103,8 @@ def create_report(
                 (target.host_id,),
             ).fetchone()
             attempt = _expire_current_attempt_on(conn, target.host_id, attempt, received=received)
-            carried_failure_id, carried_failure_at, carried_failure_expected = (
-                _open_failure(attempt)
+            carried_failure_id, carried_failure_at, carried_failure_expected = _open_failure(
+                attempt
             )
 
             (
@@ -1222,8 +1209,7 @@ def create_report(
                 elif current_state == "verified" and (
                     report.outcome == "failed"
                     and (
-                        same_correlation
-                        or attempt["baseline_fingerprint"] == baseline_fingerprint
+                        same_correlation or attempt["baseline_fingerprint"] == baseline_fingerprint
                     )
                 ):
                     state, effect, new_attempt = "verified", "ignored_late", False
@@ -1347,10 +1333,8 @@ def create_report(
                         received_at if state == "verifying" else None,
                         None if state in {"open", "verifying"} else "reported_failed",
                         received_at if state == "verifying" else None,
-                        carried_failure_id
-                        or (attempt_id if state == "failed" else None),
-                        carried_failure_at
-                        or (received_at if state == "failed" else None),
+                        carried_failure_id or (attempt_id if state == "failed" else None),
+                        carried_failure_at or (received_at if state == "failed" else None),
                         (
                             report.new_fingerprint
                             if carried_failure_id
@@ -1359,8 +1343,7 @@ def create_report(
                             else carried_failure_expected
                             or (report.new_fingerprint if state == "failed" else None)
                         ),
-                        carried_failure_at
-                        or (received_at if state == "failed" else None),
+                        carried_failure_at or (received_at if state == "failed" else None),
                         claims_baseline,
                     ),
                 )
@@ -1528,7 +1511,7 @@ def list_reports(
                 ORDER BY r.seq DESC LIMIT ? OFFSET ?""",
             [current, *params, limit, offset],
         ).fetchall()
-    reveal = is_report_key or may_reveal_routing_identities(auth, parse_tags(target.tags))
+    reveal = is_report_key or may_reveal_renewal_report_details(auth, parse_tags(target.tags))
     items: list[dict[str, Any]] = []
     for row in rows:
         item = {

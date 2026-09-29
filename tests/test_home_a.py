@@ -15,7 +15,7 @@ def _anchor(html: str, testid: str) -> tuple[str, int]:
     match = re.search(
         rf'<a[^>]*data-testid="{re.escape(testid)}"[^>]*href="([^"]+)"[^>]*>'
         rf'(.*?)</a>|<a[^>]*href="([^"]+)"[^>]*data-testid="{re.escape(testid)}"[^>]*>'
-        rf'(.*?)</a>',
+        rf"(.*?)</a>",
         html,
         flags=re.DOTALL,
     )
@@ -64,9 +64,7 @@ def test_home_a_structure_wording_and_empty_estate(reload_app, monkeypatch) -> N
         assert retired not in html
 
 
-def test_home_copy_describes_delivery_and_missing_owners(
-    reload_app, tmp_path, monkeypatch
-) -> None:
+def test_home_copy_describes_delivery_and_missing_owners(reload_app, tmp_path, monkeypatch) -> None:
     _seed(tmp_path, "cert-watch.sqlite3")
     monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", lambda self: None)
     monkeypatch.setattr("cert_watch.scheduler.Scheduler.stop", lambda self: None)
@@ -135,9 +133,7 @@ def test_every_home_number_opens_exactly_the_rows_it_counts(
             assert _row_count(client, unescape(href)) == int(expected), href
 
 
-def test_home_rows_are_bounded_and_ranked_by_expiry(
-    reload_app, tmp_path, monkeypatch
-) -> None:
+def test_home_rows_are_bounded_and_ranked_by_expiry(reload_app, tmp_path, monkeypatch) -> None:
     from cert_watch.database import SqliteHostRepository, replace_scanned
     from tests.test_four_axis_status import _cert
 
@@ -154,9 +150,7 @@ def test_home_rows_are_bounded_and_ranked_by_expiry(
         response = client.get("/")
     expired = [row for row in response.context["risk_rows"] if row.condition == "expired"]
     assert len(expired) == 6
-    assert [row.name for row in expired] == [
-        f"rank-{index:02d}.example.test" for index in range(6)
-    ]
+    assert [row.name for row in expired] == [f"rank-{index:02d}.example.test" for index in range(6)]
 
 
 def test_home_renewal_outcomes_follow_expiry_rows_and_link_exact_population(
@@ -167,12 +161,8 @@ def test_home_renewal_outcomes_follow_expiry_rows_and_link_exact_population(
     db, _settings = _seed(tmp_path, "cert-watch.sqlite3")
     now = "2026-09-28T12:00:00+00:00"
     with _connect(db) as conn:
-        hosts = conn.execute(
-            "SELECT id,hostname FROM hosts ORDER BY hostname LIMIT 2"
-        ).fetchall()
-        for index, (host, state) in enumerate(
-            zip(hosts, ("failed", "not_deployed"), strict=True)
-        ):
+        hosts = conn.execute("SELECT id,hostname FROM hosts ORDER BY hostname LIMIT 2").fetchall()
+        for index, (host, state) in enumerate(zip(hosts, ("failed", "not_deployed"), strict=True)):
             attempt_id = f"home-renewal-{index}"
             conn.execute(
                 """INSERT INTO renewal_attempts
@@ -202,9 +192,7 @@ def test_home_renewal_outcomes_follow_expiry_rows_and_link_exact_population(
         assert rows.index(renewal_rows[0]) >= sum(
             row.condition in {"expired", "le7", "8to30"} for row in rows
         )
-        assert renewal_rows[0].condition_label == (
-            "Renewal failed · 2026-09-28 12:00 UTC"
-        )
+        assert renewal_rows[0].condition_label == ("Renewal failed · 2026-09-28 12:00 UTC")
         assert renewal_rows[1].condition_label == (
             "Deployment not confirmed · 2026-09-28 12:00 UTC"
         )
@@ -216,9 +204,52 @@ def test_home_renewal_outcomes_follow_expiry_rows_and_link_exact_population(
             assert _row_count(client, href) == expected == 1
 
 
-def test_home_escapes_an_unmapped_scan_error(
+def test_home_keeps_expiry_headline_when_renewal_also_failed(
     reload_app, tmp_path, monkeypatch
 ) -> None:
+    from cert_watch.database.connection import _connect
+
+    db, _settings = _seed(tmp_path, "cert-watch.sqlite3")
+    with _connect(db) as conn:
+        target = conn.execute(
+            """SELECT h.id AS host_id,c.id AS cert_id FROM hosts h JOIN certificates c
+               ON c.hostname=h.hostname AND c.port=h.port
+               ORDER BY c.not_after LIMIT 1"""
+        ).fetchone()
+        conn.execute(
+            "UPDATE certificates SET not_after='2026-09-24T12:00:00+00:00' WHERE id=?",
+            (target["cert_id"],),
+        )
+        conn.execute(
+            """INSERT INTO renewal_attempts
+               (attempt_id,host_id,is_current,source,state,opened_seq,received_at,
+                failure_reported_at)
+               VALUES ('expiry-failure',?,1,'test','verifying',1,?,?)""",
+            (
+                target["host_id"],
+                "2026-09-28T12:00:00+00:00",
+                "2026-09-28T12:00:00+00:00",
+            ),
+        )
+        conn.commit()
+
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", lambda self: None)
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.stop", lambda self: None)
+    with TestClient(reload_app().app) as client:
+        response = client.get("/")
+    matching = [
+        item
+        for item in response.context["risk_rows"]
+        if item.detail_url.endswith(target["cert_id"])
+    ]
+    assert len(matching) == 1
+    assert matching[0].condition == "expired"
+    assert matching[0].condition_label.startswith("Expired ")
+    assert matching[0].condition_label.endswith(" days ago")
+    assert matching[0].difference == "Renewal failed · 2026-09-28 12:00 UTC"
+
+
+def test_home_escapes_an_unmapped_scan_error(reload_app, tmp_path, monkeypatch) -> None:
     from cert_watch.database import SqliteHostRepository, init_schema
     from cert_watch.scheduler import ScanHistory, record_scan_history
 
@@ -253,9 +284,11 @@ def test_home_webhook_failure_uses_scoped_delivery_evidence(tmp_path) -> None:
 
     db, _settings = _seed(tmp_path, "cert-watch.sqlite3")
     with _connect(db) as conn:
-        cert_id = str(conn.execute(
-            "SELECT id FROM certificates WHERE is_leaf = 1 ORDER BY id LIMIT 1"
-        ).fetchone()["id"])
+        cert_id = str(
+            conn.execute(
+                "SELECT id FROM certificates WHERE is_leaf = 1 ORDER BY id LIMIT 1"
+            ).fetchone()["id"]
+        )
     alert_id = SqliteAlertRepository(db).create(
         Alert(
             cert_id=cert_id,
@@ -268,9 +301,7 @@ def test_home_webhook_failure_uses_scoped_delivery_evidence(tmp_path) -> None:
     complete_attempt(db, attempt, {"outcome": "failed", "error": "HTTP 500"})
     status = prepare_status(db)
     settings = AxisSettings(webhook_configured=True, webhook_kind="slack")
-    axes = prepare_status_model_context(
-        db, certificate_status=status, settings=settings
-    )
+    axes = prepare_status_model_context(db, certificate_status=status, settings=settings)
 
     result = dashboard_axis_stats(
         db,
