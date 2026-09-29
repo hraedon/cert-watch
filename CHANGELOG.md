@@ -4,6 +4,17 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-28
+
+Renewal automation can report back (#118). A least-privilege `renewal-report`
+key lets renewal scripts report `started`, `succeeded` or `failed` for an
+endpoint; cert-watch verifies a reported success by scanning, raises
+`renewal_not_deployed` when the endpoint keeps serving the old certificate,
+and raises `renewal_failed` for a reported failure. Reports never suppress
+expiry alerts. Five schema migrations (0045–0049); hosts left "in progress"
+start getting renewal-stalled notices 24 hours after the upgrade. Read
+[UPGRADING.md](UPGRADING.md) and [docs/renewal-reports.md](docs/renewal-reports.md).
+
 ### Security
 
 - Added a least-privilege `renewal-report` API-key scope with an explicit
