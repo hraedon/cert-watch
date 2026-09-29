@@ -555,9 +555,11 @@ def test_helper_rejects_invalid_key_without_reporting(
         "plain.example.test",
         "--port",
         "443",
+        check=False,
     )
+    assert completed.returncode == 3
     assert not capture.exists()
-    assert "invalid renewal-report key; renewal continues" in completed.stderr
+    assert "invalid renewal-report key" in completed.stderr
 
 
 def test_helper_trims_exactly_one_key_file_newline(tmp_path: Path) -> None:
@@ -597,13 +599,15 @@ def test_helper_trims_exactly_one_key_file_newline(tmp_path: Path) -> None:
         "plain.example.test",
         "--port",
         "443",
+        check=False,
     )
+    assert completed.returncode == 3
     assert not capture.exists()
-    assert "invalid renewal-report key; renewal continues" in completed.stderr
+    assert "invalid renewal-report key" in completed.stderr
 
 
 @pytest.mark.parametrize("mode", [0o1777, 0o770], ids=["shared", "group-writable"])
-def test_hook_skips_reporting_for_writable_existing_state_directory(
+def test_hook_reports_without_shared_state_for_writable_state_directory(
     tmp_path: Path, mode: int
 ) -> None:
     report, capture = _install_recording_report(tmp_path)
@@ -621,7 +625,9 @@ def test_hook_skips_reporting_for_writable_existing_state_directory(
             "FAKE_REPORT_CAPTURE": str(capture),
         },
     )
-    assert not capture.exists()
+    # The report is still sent; only the shared correlation file is skipped.
+    assert len(capture.read_text(encoding="utf-8").splitlines()) == 1
+    assert not list(state_dir.glob("*.correlation"))
     assert state_dir.stat().st_mode & 0o7777 == mode
     assert "state directory is writable by group or other" in completed.stderr
 
@@ -654,7 +660,93 @@ def test_hook_refuses_symlinked_state_file(tmp_path: Path) -> None:
             "RENEWED_DOMAINS": "certbot.example.test",
         },
     )
-    assert len(capture.read_text(encoding="utf-8").splitlines()) == 1
+    reports = capture.read_text(encoding="utf-8")
+    assert len(reports.splitlines()) == 2
+    assert "planted-correlation" not in reports
     assert state_file.is_symlink()
     assert planted.read_text(encoding="utf-8") == "planted-correlation\n"
     assert "refusing symlinked correlation state" in completed.stderr
+
+
+def test_wrapper_reports_failure_when_state_directory_is_unusable(tmp_path: Path) -> None:
+    """Review R3-1: an unusable state directory must not suppress the
+    wrapper's `failed` report."""
+    report, capture = _install_recording_report(tmp_path)
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o500)
+    fake_certbot = tmp_path / "certbot"
+    fake_certbot.write_text('#!/bin/sh\nexit "$FAKE_CERTBOT_STATUS"\n', encoding="utf-8")
+    fake_certbot.chmod(0o755)
+    try:
+        completed = _run(
+            "certbot-renew.sh",
+            {
+                **os.environ,
+                "CW_REPORT_SCRIPT": str(report),
+                "CW_RENEWAL_STATE_DIR": str(locked / "state"),
+                "CW_HOST": "certbot.example.test",
+                "CW_PORT": "443",
+                "CERTBOT_CERT_NAME": "certbot.example.test",
+                "CERTBOT_BIN": str(fake_certbot),
+                "FAKE_CERTBOT_STATUS": "9",
+                "FAKE_REPORT_CAPTURE": str(capture),
+            },
+            check=False,
+        )
+    finally:
+        locked.chmod(0o700)
+    assert completed.returncode == 9
+    assert "failed" in capture.read_text(encoding="utf-8")
+
+
+def test_acme_wrapper_not_due_run_succeeds_without_home(tmp_path: Path) -> None:
+    """Review R3-2: an ordinary not-due run must exit 0 when HOME is unset."""
+    fake_acme = tmp_path / "acme.sh"
+    fake_acme.write_text("#!/bin/sh\nexit 2\n", encoding="utf-8")
+    fake_acme.chmod(0o755)
+    env = {key: value for key, value in os.environ.items() if key != "HOME"}
+    env.update(
+        {
+            "ACME_DOMAIN": "acme.example.test",
+            "ACME_SH_BIN": str(fake_acme),
+            "CW_RENEWAL_STATE_DIR": str(tmp_path / "state"),
+        }
+    )
+    for shell in ("sh", "bash"):
+        completed = subprocess.run(
+            [shell, str(EXAMPLES / "acme-renew.sh")],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert completed.returncode == 0, (shell, completed.stderr)
+
+
+@pytest.mark.parametrize("problem", ["directory", "nul"])
+def test_helper_rejects_unusable_key_file(tmp_path: Path, problem: str) -> None:
+    fake_bin, capture = _install_capturing_curl(tmp_path)
+    key_file = tmp_path / "report.key"
+    if problem == "directory":
+        key_file.mkdir()
+    else:
+        key_file.write_bytes(b"cwk_Az09\x00_-\n")
+    completed = _run(
+        "cw-report.sh",
+        {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CW_RENEWAL_REPORT_KEY_FILE": str(key_file),
+            "FAKE_CURL_CAPTURE": str(capture),
+        },
+        "started",
+        "--host",
+        "plain.example.test",
+        "--port",
+        "443",
+        check=False,
+    )
+    assert completed.returncode == 3
+    assert not capture.exists()

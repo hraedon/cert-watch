@@ -47,6 +47,12 @@ and reload command. The helper unsets that variable as soon as it reads it. It
 never accepts a token argument, and it keeps the token out of curl's process
 arguments.
 
+The file must hold exactly the token, optionally followed by one Unix newline.
+A Windows (CRLF) line ending, a NUL byte, or any character outside the token
+alphabet is rejected rather than stripped. When called directly, `cw-report.sh`
+exits 3 for such key problems and non-zero when cert-watch rejects or cannot
+receive the report; the hook examples below never let that affect a renewal.
+
 ## Send a report
 
 `POST /api/renewal-reports` requires `Content-Type: application/json` and a
@@ -118,7 +124,7 @@ responses an integration should handle are:
 |---:|---|
 | `400` | More than one `Idempotency-Key` header was sent. |
 | `401` | No API key was supplied, or the supplied key is invalid. |
-| `403` | A valid authenticated key is not a `renewal-report` key. |
+| `403` | The caller is authenticated (a key of another kind, or a signed-in browser session) but is not a `renewal-report` key. |
 | `404` | The endpoint is unknown, outside the key's live host-tag binding, or not addressable by the supplied fingerprint. These cases deliberately look identical. |
 | `409` | A fingerprint matches several in-binding endpoints; an `Idempotency-Key` was reused with another body or endpoint; or a bare `succeeded` report targets an endpoint that has never completed a scan. |
 | `413` | The request body exceeds 16 KiB. |
@@ -227,7 +233,8 @@ precedence.
 
 Reporting is strictly best effort. Every hook logs a reporting error to
 standard error and exits zero when cert-watch is unavailable, times out, or
-rejects a request. The wrappers preserve the renewal command's own exit status;
+rejects a request. If the state directory cannot be used safely, the hooks
+still report, each with a fresh correlation id, and say so on standard error. The wrappers preserve the renewal command's own exit status;
 whether cert-watch accepted a report never changes a renewal from succeeded to
 failed or from failed to succeeded.
 

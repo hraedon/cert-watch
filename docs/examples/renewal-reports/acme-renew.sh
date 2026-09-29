@@ -38,9 +38,14 @@ case $renewal_status in
             cw_hook_prepare terminal acme.sh "$CW_HOST:$CW_PORT" || true
             cw_hook_finish
         fi
-        acme_config_home=${LE_CONFIG_HOME:-${LE_WORKING_DIR:-${HOME}/.acme.sh}}
-        if [ ! -d "$acme_config_home/$ACME_DOMAIN" ] &&
-            [ ! -d "$acme_config_home/${ACME_DOMAIN}_ecc" ]; then
+        # acme.sh keeps per-domain directories in CERT_HOME, which defaults
+        # to its config home. Skip the hint when neither can be determined.
+        acme_default_home=
+        [ -z "${HOME:-}" ] || acme_default_home=$HOME/.acme.sh
+        acme_cert_home=${CERT_HOME:-${LE_CONFIG_HOME:-${LE_WORKING_DIR:-$acme_default_home}}}
+        if [ -n "$acme_cert_home" ] &&
+            [ ! -d "$acme_cert_home/$ACME_DOMAIN" ] &&
+            [ ! -d "$acme_cert_home/${ACME_DOMAIN}_ecc" ]; then
             echo "acme.sh skipped renewal: ACME_DOMAIN may not exactly name an issued certificate" >&2
         fi
         exit 0

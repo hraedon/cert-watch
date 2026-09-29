@@ -34,26 +34,29 @@ cw_hook_prepare() {
         state_uid=$(stat -c '%u' -- "$state_dir" 2>/dev/null) || state_uid=
         state_mode=$(stat -c '%a' -- "$state_dir" 2>/dev/null) || state_mode=
         group_other_mode=$(printf '%s' "$state_mode" | sed 's/.*\(..\)$/\1/')
+        # An unusable state directory only disables the shared correlation
+        # file; the report is still sent, with a fresh random correlation.
+        state_ok=1
         if [ ! -d "$state_dir" ] || [ -L "$state_dir" ] ||
             [ "$state_uid" != "$(id -u)" ]; then
-            echo "cert-watch reporting: cannot prepare private state directory $state_dir" >&2
-            return 1
+            echo "cert-watch reporting: cannot use private state directory $state_dir; reporting without shared correlation" >&2
+            state_ok=
         fi
         case $group_other_mode in
             [2367]?|?[2367])
-                echo "cert-watch reporting: state directory is writable by group or other; renewal continues" >&2
-                return 1
+                echo "cert-watch reporting: state directory is writable by group or other; reporting without shared correlation" >&2
+                state_ok=
                 ;;
         esac
-        CW_HOOK_STATE_FILE=$state_dir/$state_key.correlation
-        if [ -L "$CW_HOOK_STATE_FILE" ]; then
-            echo "cert-watch reporting: refusing symlinked correlation state; renewal continues" >&2
-            CW_HOOK_STATE_FILE=
-            return 1
+        if [ -n "$state_ok" ]; then
+            CW_HOOK_STATE_FILE=$state_dir/$state_key.correlation
+            if [ -L "$CW_HOOK_STATE_FILE" ]; then
+                echo "cert-watch reporting: refusing symlinked correlation state; reporting without shared correlation" >&2
+                CW_HOOK_STATE_FILE=
+            fi
         fi
     else
-        echo "cert-watch reporting: cannot derive a correlation state name" >&2
-        return 1
+        echo "cert-watch reporting: cannot derive a correlation state name; reporting without shared correlation" >&2
     fi
 
     if [ -n "${CW_CORRELATION_ID:-}" ]; then
@@ -82,10 +85,9 @@ cw_hook_prepare() {
             mv -f "$state_tmp" "$CW_HOOK_STATE_FILE" 2>/dev/null; then
             :
         else
-            echo "cert-watch reporting: cannot save correlation state" >&2
+            echo "cert-watch reporting: cannot save correlation state; reporting without shared correlation" >&2
             [ -z "$state_tmp" ] || rm -f "$state_tmp"
-            umask "$old_umask"
-            return 1
+            CW_HOOK_STATE_FILE=
         fi
         umask "$old_umask"
     fi

@@ -65,11 +65,20 @@ if [ -n "$new_pem" ]; then
     }
 fi
 
+# Key problems are configuration errors: exit 3 so a direct caller sees them.
+# The hook examples call this through cw_hook_report, which never fails the
+# renewal.
 if [ -n "${CW_RENEWAL_REPORT_KEY_FILE:-}" ]; then
-    [ -r "$CW_RENEWAL_REPORT_KEY_FILE" ] || {
-        echo "cert-watch reporting: renewal-report key file is not readable; renewal continues" >&2
-        exit 0
-    }
+    if [ ! -f "$CW_RENEWAL_REPORT_KEY_FILE" ] || [ ! -r "$CW_RENEWAL_REPORT_KEY_FILE" ]; then
+        echo "cert-watch reporting: renewal-report key file is not a readable file" >&2
+        exit 3
+    fi
+    # Command substitution would drop NUL bytes silently; reject them instead.
+    if [ "$(tr -d '\000' <"$CW_RENEWAL_REPORT_KEY_FILE" | wc -c)" != \
+        "$(wc -c <"$CW_RENEWAL_REPORT_KEY_FILE")" ]; then
+        echo "cert-watch reporting: renewal-report key file contains a NUL byte" >&2
+        exit 3
+    fi
     # The sentinel prevents command substitution from stripping every trailing
     # newline. Remove the sentinel, then allow exactly one conventional final LF.
     api_key=$(cat -- "$CW_RENEWAL_REPORT_KEY_FILE"; printf x)
@@ -81,8 +90,8 @@ if [ -n "${CW_RENEWAL_REPORT_KEY_FILE:-}" ]; then
 elif [ -n "${CW_RENEWAL_REPORT_KEY:-}" ]; then
     api_key=$CW_RENEWAL_REPORT_KEY
 else
-    echo "cert-watch reporting: set CW_RENEWAL_REPORT_KEY or CW_RENEWAL_REPORT_KEY_FILE; renewal continues" >&2
-    exit 0
+    echo "cert-watch reporting: set CW_RENEWAL_REPORT_KEY or CW_RENEWAL_REPORT_KEY_FILE" >&2
+    exit 3
 fi
 unset CW_RENEWAL_REPORT_KEY
 case $api_key in
@@ -91,8 +100,8 @@ case $api_key in
 esac
 case $key_payload in
     ''|*[!A-Za-z0-9_-]*)
-        echo "cert-watch reporting: invalid renewal-report key; renewal continues" >&2
-        exit 0
+        echo "cert-watch reporting: invalid renewal-report key (expected cwk_ followed by A-Z a-z 0-9 _ -)" >&2
+        exit 3
         ;;
 esac
 
@@ -138,8 +147,9 @@ print(json.dumps(body, ensure_ascii=False, separators=(",", ":")))
 PY
 
 # Keep the bearer token out of curl's argv. The temporary config is private and
-# is removed by the trap; argv contains only its path. Backslashes and quotes
-# have special meaning in a double-quoted curl config value, so escape both.
+# is removed by the trap; argv contains only its path. The key format check
+# above already excludes quotes, backslashes and line breaks; the escaping
+# below is defence in depth only.
 umask 077
 escaped_api_key=$(printf '%s' "$api_key" | sed 's/\\/\\\\/g; s/"/\\"/g')
 {
