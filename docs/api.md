@@ -23,7 +23,7 @@ per minute per key and endpoint.
 ### `POST /api/renewal-reports`
 
 The body is a strict JSON object, limited to 16 KiB, and the request must send
-`Content-Type: application/json` (a `charset` parameter is allowed). Other
+`Content-Type: application/json`; media-type parameters are ignored. Other
 media types return 415. Unknown fields, duplicate JSON keys, non-finite
 numbers and type coercion are rejected. Select exactly one target:
 

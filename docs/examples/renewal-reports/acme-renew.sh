@@ -38,7 +38,11 @@ case $renewal_status in
             cw_hook_prepare terminal acme.sh "$CW_HOST:$CW_PORT" || true
             cw_hook_finish
         fi
-        echo "acme.sh skipped renewal: the certificate may not be due, or ACME_DOMAIN may not exactly name an issued certificate" >&2
+        acme_config_home=${LE_CONFIG_HOME:-${LE_WORKING_DIR:-${HOME}/.acme.sh}}
+        if [ ! -d "$acme_config_home/$ACME_DOMAIN" ] &&
+            [ ! -d "$acme_config_home/${ACME_DOMAIN}_ecc" ]; then
+            echo "acme.sh skipped renewal: ACME_DOMAIN may not exactly name an issued certificate" >&2
+        fi
         exit 0
         ;;
     *)

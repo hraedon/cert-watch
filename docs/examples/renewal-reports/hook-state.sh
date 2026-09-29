@@ -26,14 +26,34 @@ cw_hook_prepare() {
     if [ -n "$state_key" ]; then
         old_umask=$(umask)
         umask 077
-        if mkdir -p "$state_dir" 2>/dev/null && chmod 700 "$state_dir" 2>/dev/null; then
-            CW_HOOK_STATE_FILE=$state_dir/$state_key.correlation
-        else
-            echo "cert-watch reporting: cannot prepare private state directory $state_dir" >&2
+        if [ ! -e "$state_dir" ] && [ ! -L "$state_dir" ]; then
+            mkdir -p "$state_dir" 2>/dev/null || true
         fi
         umask "$old_umask"
+
+        state_uid=$(stat -c '%u' -- "$state_dir" 2>/dev/null) || state_uid=
+        state_mode=$(stat -c '%a' -- "$state_dir" 2>/dev/null) || state_mode=
+        group_other_mode=$(printf '%s' "$state_mode" | sed 's/.*\(..\)$/\1/')
+        if [ ! -d "$state_dir" ] || [ -L "$state_dir" ] ||
+            [ "$state_uid" != "$(id -u)" ]; then
+            echo "cert-watch reporting: cannot prepare private state directory $state_dir" >&2
+            return 1
+        fi
+        case $group_other_mode in
+            [2367]?|?[2367])
+                echo "cert-watch reporting: state directory is writable by group or other; renewal continues" >&2
+                return 1
+                ;;
+        esac
+        CW_HOOK_STATE_FILE=$state_dir/$state_key.correlation
+        if [ -L "$CW_HOOK_STATE_FILE" ]; then
+            echo "cert-watch reporting: refusing symlinked correlation state; renewal continues" >&2
+            CW_HOOK_STATE_FILE=
+            return 1
+        fi
     else
         echo "cert-watch reporting: cannot derive a correlation state name" >&2
+        return 1
     fi
 
     if [ -n "${CW_CORRELATION_ID:-}" ]; then
@@ -54,16 +74,18 @@ cw_hook_prepare() {
     fi
 
     if [ "$phase" = pre ] && [ -n "$CW_HOOK_STATE_FILE" ]; then
-        state_tmp=$CW_HOOK_STATE_FILE.tmp.$$
         old_umask=$(umask)
         umask 077
-        if printf '%s\n' "$CW_HOOK_CORRELATION" >"$state_tmp" 2>/dev/null &&
-            chmod 600 "$state_tmp" 2>/dev/null &&
+        state_tmp=$(mktemp "$state_dir/.cw-correlation.XXXXXX" 2>/dev/null) || state_tmp=
+        if [ -n "$state_tmp" ] &&
+            printf '%s\n' "$CW_HOOK_CORRELATION" >"$state_tmp" 2>/dev/null &&
             mv -f "$state_tmp" "$CW_HOOK_STATE_FILE" 2>/dev/null; then
             :
         else
             echo "cert-watch reporting: cannot save correlation state" >&2
-            rm -f "$state_tmp"
+            [ -z "$state_tmp" ] || rm -f "$state_tmp"
+            umask "$old_umask"
+            return 1
         fi
         umask "$old_umask"
     fi

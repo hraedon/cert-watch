@@ -117,7 +117,8 @@ responses an integration should handle are:
 | Status | Meaning |
 |---:|---|
 | `400` | More than one `Idempotency-Key` header was sent. |
-| `403` | The key kind is missing or is not `renewal-report`. |
+| `401` | No API key was supplied, or the supplied key is invalid. |
+| `403` | A valid authenticated key is not a `renewal-report` key. |
 | `404` | The endpoint is unknown, outside the key's live host-tag binding, or not addressable by the supplied fingerprint. These cases deliberately look identical. |
 | `409` | A fingerprint matches several in-binding endpoints; an `Idempotency-Key` was reused with another body or endpoint; or a bare `succeeded` report targets an endpoint that has never completed a scan. |
 | `413` | The request body exceeds 16 KiB. |
@@ -264,9 +265,12 @@ deployment explicitly:
 - Keep the stock timer and rely on the saved hooks for `started` and
   `succeeded`. Put `CW_REPORT_SCRIPT`, `CW_BASE_URL`,
   `CW_RENEWAL_REPORT_KEY_FILE`, `CW_RENEWAL_STATE_DIR`, `CW_HOST`, and `CW_PORT`
-  in the timer service's environment. This path cannot report Certbot's own
-  failing exit; use separate timer instances when certificates map to different
-  monitored endpoints.
+  in the timer service's environment. A global `CW_HOST` makes this option
+  suitable for a single certificate only: Certbot runs an identical pre-hook
+  once per invocation, even when several certificates are due. For multiple
+  certificates, use separate timer instances that each pass `--cert-name` and
+  set the matching endpoint. This path cannot report Certbot's own failing
+  exit.
 
 Do not leave both schedules enabled. The per-run state makes saved hooks safe
 when they run without the wrapper, but two schedulers would still perform two
@@ -308,9 +312,10 @@ post-hook runs after both successful and failed issuance and does not expose a
 portable success flag, so it is not used to infer an outcome. The wrapper
 reports other non-zero exits as failures and treats acme.sh status 2 as “not
 due,” not a failure. Because status 2 can also mean the requested domain is not
-an issued certificate, the wrapper prints a warning to verify the exact
-`ACME_DOMAIN` spelling. For wildcard certificates, set `CW_HOST` to the actual
-monitored endpoint; a wildcard `Le_Domain` is not a valid report target.
+an issued certificate, the wrapper warns about the exact `ACME_DOMAIN` spelling
+when neither its standard RSA nor ECC config directory exists. For wildcard
+certificates, set `CW_HOST` to the actual monitored endpoint; a wildcard
+`Le_Domain` is not a valid report target.
 
 Choose how acme.sh is scheduled:
 

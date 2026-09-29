@@ -100,6 +100,46 @@ def _run(script: str, env: dict[str, str], *args: str, check: bool = True):
     )
 
 
+def _install_capturing_curl(tmp_path: Path) -> tuple[Path, Path]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    capture = tmp_path / "curl.conf"
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(
+        """#!/bin/sh
+set -eu
+config=
+output=
+while [ "$#" -gt 0 ]; do
+  case $1 in
+    --config) config=$2; shift 2 ;;
+    --output) output=$2; shift 2 ;;
+    --write-out) shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -z "${CW_RENEWAL_REPORT_KEY:-}" ]
+cp "$config" "$FAKE_CURL_CAPTURE"
+printf '%s' '{}' >"$output"
+printf '%s' 202
+""",
+        encoding="utf-8",
+    )
+    fake_curl.chmod(0o755)
+    return fake_bin, capture
+
+
+def _install_recording_report(tmp_path: Path) -> tuple[Path, Path]:
+    capture = tmp_path / "reports"
+    report = tmp_path / "record-report"
+    report.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" >>"$FAKE_REPORT_CAPTURE"\n',
+        encoding="utf-8",
+    )
+    report.chmod(0o755)
+    return report, capture
+
+
 @contextmanager
 def _http_status(status: int) -> Iterator[str]:
     class Handler(BaseHTTPRequestHandler):
@@ -145,6 +185,7 @@ def test_documented_hook_examples_store_expected_reports(
         "CW_BASE_URL": base_url,
         "CW_RENEWAL_REPORT_KEY_FILE": str(key_file),
         "CW_REPORT_SCRIPT": str(EXAMPLES / "cw-report.sh"),
+        "CW_RENEWAL_STATE_DIR": str(tmp_path / "hook-state"),
     }
 
     # The reusable helper covers all outcomes and derives the replacement
@@ -244,6 +285,17 @@ RENEWED_LINEAGE=$FAKE_LINEAGE RENEWED_DOMAINS=$FAKE_DOMAINS \"$deploy\"
     assert failed_acme.returncode == 7
     skipped_acme = _run("acme-renew.sh", {**wrapper_env, "FAKE_ACME_STATUS": "2"})
     assert "ACME_DOMAIN may not exactly name an issued certificate" in skipped_acme.stderr
+    acme_config_home = tmp_path / "acme-config"
+    (acme_config_home / "acme.example.test").mkdir(parents=True)
+    ordinary_skip = _run(
+        "acme-renew.sh",
+        {
+            **wrapper_env,
+            "FAKE_ACME_STATUS": "2",
+            "LE_CONFIG_HOME": str(acme_config_home),
+        },
+    )
+    assert "ACME_DOMAIN may not exactly name an issued certificate" not in ordinary_skip.stderr
 
     with _connect(db) as conn:
         reports = [
@@ -456,39 +508,15 @@ exit "$status"
     assert "renewal continues" in completed.stderr
 
 
-def test_helper_escapes_config_key_and_unsets_its_environment_copy(
+def test_helper_accepts_generated_key_alphabet_and_unsets_environment_copy(
     tmp_path: Path,
 ) -> None:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    capture = tmp_path / "curl.conf"
-    fake_curl = fake_bin / "curl"
-    fake_curl.write_text(
-        """#!/bin/sh
-set -eu
-config=
-output=
-while [ "$#" -gt 0 ]; do
-  case $1 in
-    --config) config=$2; shift 2 ;;
-    --output) output=$2; shift 2 ;;
-    --write-out) shift 2 ;;
-    *) shift ;;
-  esac
-done
-[ -z "${CW_RENEWAL_REPORT_KEY:-}" ]
-cp "$config" "$FAKE_CURL_CAPTURE"
-printf '%s' '{}' >"$output"
-printf '%s' 202
-""",
-        encoding="utf-8",
-    )
-    fake_curl.chmod(0o755)
+    fake_bin, capture = _install_capturing_curl(tmp_path)
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "CW_BASE_URL": "https://unused.example.test",
-        "CW_RENEWAL_REPORT_KEY": 'cwk_a"b\\c',
+        "CW_RENEWAL_REPORT_KEY": "cwk_Az09_-",
         "FAKE_CURL_CAPTURE": str(capture),
     }
     _run(
@@ -501,5 +529,132 @@ printf '%s' 202
         "443",
     )
     assert capture.read_text(encoding="utf-8") == (
-        'header = "Authorization: Bearer cwk_a\\"b\\\\c"\n'
+        'header = "Authorization: Bearer cwk_Az09_-"\n'
     )
+
+
+@pytest.mark.parametrize(
+    "invalid_key",
+    ["cwk_valid\ninjected", "cwk_valid\r", "cwk_valid key"],
+    ids=["lf", "cr", "space"],
+)
+def test_helper_rejects_invalid_key_without_reporting(
+    tmp_path: Path, invalid_key: str
+) -> None:
+    fake_bin, capture = _install_capturing_curl(tmp_path)
+    completed = _run(
+        "cw-report.sh",
+        {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CW_RENEWAL_REPORT_KEY": invalid_key,
+            "FAKE_CURL_CAPTURE": str(capture),
+        },
+        "started",
+        "--host",
+        "plain.example.test",
+        "--port",
+        "443",
+    )
+    assert not capture.exists()
+    assert "invalid renewal-report key; renewal continues" in completed.stderr
+
+
+def test_helper_trims_exactly_one_key_file_newline(tmp_path: Path) -> None:
+    fake_bin, capture = _install_capturing_curl(tmp_path)
+    key_file = tmp_path / "report.key"
+    key_file.write_text("cwk_Az09_-\n", encoding="utf-8")
+    _run(
+        "cw-report.sh",
+        {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CW_RENEWAL_REPORT_KEY_FILE": str(key_file),
+            "FAKE_CURL_CAPTURE": str(capture),
+        },
+        "started",
+        "--host",
+        "plain.example.test",
+        "--port",
+        "443",
+    )
+    assert capture.read_text(encoding="utf-8") == (
+        'header = "Authorization: Bearer cwk_Az09_-"\n'
+    )
+
+    capture.unlink()
+    key_file.write_text("cwk_Az09_-\n\n", encoding="utf-8")
+    completed = _run(
+        "cw-report.sh",
+        {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CW_RENEWAL_REPORT_KEY_FILE": str(key_file),
+            "FAKE_CURL_CAPTURE": str(capture),
+        },
+        "started",
+        "--host",
+        "plain.example.test",
+        "--port",
+        "443",
+    )
+    assert not capture.exists()
+    assert "invalid renewal-report key; renewal continues" in completed.stderr
+
+
+@pytest.mark.parametrize("mode", [0o1777, 0o770], ids=["shared", "group-writable"])
+def test_hook_skips_reporting_for_writable_existing_state_directory(
+    tmp_path: Path, mode: int
+) -> None:
+    report, capture = _install_recording_report(tmp_path)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    state_dir.chmod(mode)
+    completed = _run(
+        "certbot-pre-hook.sh",
+        {
+            **os.environ,
+            "CW_REPORT_SCRIPT": str(report),
+            "CW_RENEWAL_STATE_DIR": str(state_dir),
+            "CW_HOST": "certbot.example.test",
+            "CW_PORT": "443",
+            "FAKE_REPORT_CAPTURE": str(capture),
+        },
+    )
+    assert not capture.exists()
+    assert state_dir.stat().st_mode & 0o7777 == mode
+    assert "state directory is writable by group or other" in completed.stderr
+
+
+def test_hook_refuses_symlinked_state_file(tmp_path: Path) -> None:
+    report, capture = _install_recording_report(tmp_path)
+    state_dir = tmp_path / "state"
+    env = {
+        **os.environ,
+        "CW_REPORT_SCRIPT": str(report),
+        "CW_RENEWAL_STATE_DIR": str(state_dir),
+        "CW_HOST": "certbot.example.test",
+        "CW_PORT": "443",
+        "FAKE_REPORT_CAPTURE": str(capture),
+    }
+    _run("certbot-pre-hook.sh", env)
+    state_file = next(state_dir.glob("*.correlation"))
+    state_file.unlink()
+    planted = tmp_path / "planted"
+    planted.write_text("planted-correlation\n", encoding="utf-8")
+    state_file.symlink_to(planted)
+    lineage = tmp_path / "lineage"
+    lineage.mkdir()
+    (lineage / "cert.pem").write_text("unused", encoding="utf-8")
+    completed = _run(
+        "certbot-deploy-hook.sh",
+        {
+            **env,
+            "RENEWED_LINEAGE": str(lineage),
+            "RENEWED_DOMAINS": "certbot.example.test",
+        },
+    )
+    assert len(capture.read_text(encoding="utf-8").splitlines()) == 1
+    assert state_file.is_symlink()
+    assert planted.read_text(encoding="utf-8") == "planted-correlation\n"
+    assert "refusing symlinked correlation state" in completed.stderr

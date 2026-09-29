@@ -67,25 +67,34 @@ fi
 
 if [ -n "${CW_RENEWAL_REPORT_KEY_FILE:-}" ]; then
     [ -r "$CW_RENEWAL_REPORT_KEY_FILE" ] || {
-        echo "renewal-report key file is not readable" >&2
-        exit 1
+        echo "cert-watch reporting: renewal-report key file is not readable; renewal continues" >&2
+        exit 0
     }
-    api_key=$(tr -d '\r\n' <"$CW_RENEWAL_REPORT_KEY_FILE")
+    # The sentinel prevents command substitution from stripping every trailing
+    # newline. Remove the sentinel, then allow exactly one conventional final LF.
+    api_key=$(cat -- "$CW_RENEWAL_REPORT_KEY_FILE"; printf x)
+    api_key=${api_key%x}
+    case $api_key in
+        *'
+') api_key=${api_key%?} ;;
+    esac
 elif [ -n "${CW_RENEWAL_REPORT_KEY:-}" ]; then
     api_key=$CW_RENEWAL_REPORT_KEY
 else
-    echo "set CW_RENEWAL_REPORT_KEY or CW_RENEWAL_REPORT_KEY_FILE" >&2
-    exit 1
+    echo "cert-watch reporting: set CW_RENEWAL_REPORT_KEY or CW_RENEWAL_REPORT_KEY_FILE; renewal continues" >&2
+    exit 0
 fi
 unset CW_RENEWAL_REPORT_KEY
-[ -n "$api_key" ] || {
-    echo "renewal-report key is empty" >&2
-    exit 1
-}
-if printf '%s' "$api_key" | LC_ALL=C grep -q '[[:cntrl:]]'; then
-    echo "renewal-report key contains a control character" >&2
-    exit 1
-fi
+case $api_key in
+    cwk_*) key_payload=${api_key#cwk_} ;;
+    *) key_payload= ;;
+esac
+case $key_payload in
+    ''|*[!A-Za-z0-9_-]*)
+        echo "cert-watch reporting: invalid renewal-report key; renewal continues" >&2
+        exit 0
+        ;;
+esac
 
 base_url=${CW_BASE_URL:-http://127.0.0.1:8000}
 idempotency_key=${CW_IDEMPOTENCY_KEY:-}
