@@ -35,6 +35,7 @@ call the reporting routes.
 Put the token in a root- or service-readable file, not in a script:
 
 ```sh
+install -d -m 755 /etc/cert-watch
 install -m 600 /dev/null /etc/cert-watch/renewal-report.key
 # Write the token to that file using your secret-management process.
 export CW_RENEWAL_REPORT_KEY_FILE=/etc/cert-watch/renewal-report.key
@@ -231,6 +232,11 @@ generates a fresh random id; it never uses a fixed fallback. An explicitly
 supplied `CW_CORRELATION_ID`, such as a `renewal_needed` event id, takes
 precedence.
 
+Each reporting key can send five reports per endpoint per minute and 30 per
+minute in total. Above that, cert-watch answers `429`. The hooks do not retry,
+so a renewal re-run within the same minute can lose a report; the hook logs the
+`429` to standard error.
+
 Reporting is strictly best effort. Every hook logs a reporting error to
 standard error and exits zero when cert-watch is unavailable, times out, or
 rejects a request. If the state directory cannot be used safely, the hooks
@@ -283,6 +289,12 @@ Do not leave both schedules enabled. The per-run state makes saved hooks safe
 when they run without the wrapper, but two schedulers would still perform two
 renewal checks.
 
+To try the wiring before a certificate is due, add
+`--force-renewal --no-random-sleep-on-renew` to the wrapper command; it passes
+extra arguments to `certbot renew`. This issues a real certificate. Without a
+terminal, Certbot otherwise waits a random delay of up to eight minutes before
+it renews.
+
 Behavior was checked against the official
 [Certbot renewal hook documentation](https://eff-certbot.readthedocs.io/en/stable/using.html#renewing-certificates).
 
@@ -302,6 +314,16 @@ acme.sh --issue -d www.example.com \
   --pre-hook /opt/cert-watch-hooks/acme-pre-hook.sh \
   --renew-hook /opt/cert-watch-hooks/acme-renew-hook.sh
 ```
+
+acme.sh also runs the pre-hook for this first `--issue`, but it runs the renew
+hook only on later renewals. If `CW_REPORT_SCRIPT` is set, the issue therefore
+reports `started` and never sends a matching `succeeded`. The attempt can
+still be verified, by a scan that finds a certificate other than the one served
+when it started, but only while the attempt is open. Once cert-watch processes
+the lapsed lease (24 hours by default), the attempt is abandoned and stalled
+evaluation resumes (see [`started`](#started)). To send no
+report at all, run `--issue` with `CW_REPORT_SCRIPT` unset. The pre-hook then
+logs that reporting is unset and exits zero, and acme.sh still saves both hooks.
 
 Run one certificate through the failure-aware wrapper:
 
@@ -356,6 +378,15 @@ now**. A report cannot clear this state; only a successful scan serving the
 expected certificate can. If the report omitted `new_fingerprint`, check
 whether another certificate replacement happened in the preceding 24 hours
 and send fingerprints on future runs to remove that ambiguity.
+
+### A hook logs “cert-watch returned HTTP 400” and “invalid Host header”
+
+The instance runs without sign-in, for example with
+`CERT_WATCH_ALLOW_UNAUTH=1`. In that mode, every request except the
+`/healthz` and `/readyz` probes must carry a `Host` of `localhost`, a loopback
+address, or the host named in `CERT_WATCH_BASE_URL`. That includes renewal
+reports. Set `CERT_WATCH_BASE_URL` to the address in `CW_BASE_URL`, or point
+`CW_BASE_URL` at that host.
 
 ### The failure will not clear
 

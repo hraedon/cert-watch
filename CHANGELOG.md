@@ -15,6 +15,13 @@ All notable changes to cert-watch are documented in this file.
   other leaf replaces, else the newest, chosen the way a scan chooses it. A
   direct link to the other leaf still opens it. The next successful scan of
   such an endpoint removes the extra leaf, as before (#151).
+- The renewal-report guide's key-file step now creates `/etc/cert-watch`
+  first; as written, `install` failed when the directory did not exist. Real
+  Certbot and acme.sh renewals against a local ACME test server confirmed the
+  rest of the hook examples. The guide now also covers testing a forced
+  Certbot renewal, the `started` report acme.sh sends on its first `--issue`,
+  the per-endpoint report rate limit, and the `invalid Host header` response
+  from an instance running without sign-in.
 
 ## [1.2.0] - 2026-09-28
 
