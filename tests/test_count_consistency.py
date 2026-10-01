@@ -129,6 +129,36 @@ def _seed_estate(db: Path) -> None:
             record_scan_history(db, ScanHistory(host, port, "success", scanned_at=at))
     for cn, days, _chain in UPLOADS:
         store_uploaded(UploadedEntry(f"{cn}.pem", parse_certificate(_der(cn, days))), db)
+    _add_alias_merge_duplicate(db)
+
+
+def _add_alias_merge_duplicate(db: Path) -> None:
+    """An old alias merge left a.example.test with a second, older scanned
+    leaf (#151). It is not the endpoint's current certificate, so no count
+    may include it; it expired a month ago, so a leak shows in every status
+    count as well as every total."""
+    import json
+
+    from cert_watch.database.connection import _connect
+
+    stale = parse_certificate(_der("a.example.test", -30))
+    created = (NOW - dt.timedelta(days=60)).isoformat()
+    with _connect(db) as conn:
+        conn.execute(
+            """INSERT INTO certificates
+               (id, subject, issuer, not_before, not_after, san_dns_names,
+                fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
+                parent_cert_id, chain_valid, replaces_cert_id, created_at,
+                updated_at, tags)
+               VALUES ('alias-merge-stale', ?, ?, ?, ?, ?, ?, ?, 'scanned',
+                       'a.example.test', 443, 1, NULL, 1, NULL, ?, ?, '')""",
+            (
+                stale.subject, stale.issuer, stale.not_before.isoformat(),
+                stale.not_after.isoformat(), json.dumps(stale.san_dns_names),
+                stale.fingerprint_sha256, stale.raw_der, created, created,
+            ),
+        )
+        conn.commit()
 
 
 @pytest.fixture
@@ -309,6 +339,40 @@ def test_metrics_urgency_counts_match_the_dashboard(tmp_path, reload_app, monkey
             label = line.split('urgency="', 1)[1].split('"', 1)[0]
             got[label] = int(float(line.rsplit(" ", 1)[1]))
     assert got == {**EXPECTED_STATS, "failing": 0, "gray": 0}
+
+
+def test_probe_and_metrics_certificate_counts_match_browse(tmp_path, reload_app, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr("cert_watch.cert_chain.chain_status", _fake_chain_status)
+    app_mod = reload_app()
+    _seed_estate(tmp_path / "cert-watch.sqlite3")
+    with TestClient(app_mod.app) as client:
+        checks = client.get("/readyz").json()["checks"]
+        text = client.get("/metrics").text
+    expired = EXPECTED_STATS["expired"]
+    assert (checks["certificates"], checks["expired"]) == (
+        str(EXPECTED_CERTIFICATES), str(expired),
+    )
+    gauges = {
+        line.split(" ", 1)[0]: int(float(line.rsplit(" ", 1)[1]))
+        for line in text.splitlines()
+        if line.startswith(("cert_watch_certificates_tracked ", "cert_watch_certificates_expired "))
+    }
+    assert gauges == {
+        "cert_watch_certificates_tracked": EXPECTED_CERTIFICATES,
+        "cert_watch_certificates_expired": expired,
+    }
+    assert "alias-merge-stale" not in text
+
+
+def test_calendar_buckets_count_current_certificates(estate):
+    from cert_watch.database import list_calendar
+
+    buckets = list_calendar(estate, bucket="week")
+    ids = [cert_id for b in buckets for cert_id in b["cert_ids"]]
+    assert sum(b["count"] for b in buckets) == len(ids) == EXPECTED_CERTIFICATES
+    assert "alias-merge-stale" not in ids
 
 
 def test_partial_scan_is_not_counted_as_a_success(tmp_path):

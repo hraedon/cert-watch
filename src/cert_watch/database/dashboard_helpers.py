@@ -23,6 +23,41 @@ _SORT_COLUMNS_GROUPED = frozenset({
 _SQL_DIRS = frozenset({"ASC", "DESC"})
 
 
+def scanned_head_rowid_sql(alias: str) -> str:
+    """SQL selecting the rowid of the head scanned leaf at *alias*'s endpoint.
+
+    An old alias merge can leave one endpoint holding several scanned leaves
+    until its next successful scan replaces them all (#151). The head is chosen
+    the way the scan write path (``cert_ops._select_predecessors``) chooses it:
+    a leaf that no other leaf at the endpoint names as its
+    ``replaces_cert_id``, then the newest by ``created_at`` and ``rowid``.
+    When every row is replaced (a lineage cycle), the newest wins.
+    """
+    return (
+        "SELECT head.rowid FROM certificates head"
+        f" WHERE head.hostname = {alias}.hostname AND head.port = {alias}.port"
+        " AND head.is_leaf = 1 AND head.source = 'scanned'"
+        " ORDER BY EXISTS(SELECT 1 FROM certificates succ"
+        " WHERE succ.replaces_cert_id = head.id AND succ.id != head.id"
+        " AND succ.hostname = head.hostname AND succ.port = head.port"
+        " AND succ.is_leaf = 1),"
+        " head.created_at DESC, head.rowid DESC LIMIT 1"
+    )
+
+
+def current_leaf_sql(alias: str) -> str:
+    """SQL predicate: *alias* is a current leaf certificate.
+
+    That is every uploaded leaf plus one scanned leaf per endpoint, its head
+    (:func:`scanned_head_rowid_sql`) -- the population every estate count
+    uses (docs/operations.md, "What the numbers mean").
+    """
+    return (
+        f"({alias}.is_leaf = 1 AND ({alias}.source != 'scanned'"
+        f" OR {alias}.rowid = ({scanned_head_rowid_sql(alias)})))"
+    )
+
+
 def search_patterns(q: str | None) -> tuple[str | None, str | None]:
     """``(like, host_like)`` LIKE patterns for a free-text inventory search.
 

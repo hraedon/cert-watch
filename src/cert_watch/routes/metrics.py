@@ -12,6 +12,7 @@ from prometheus_client import CollectorRegistry, Gauge, generate_latest
 from cert_watch.auth.guards import metrics_guard
 from cert_watch.database import dashboard_overall_stats, get_posture_grades_for_certs
 from cert_watch.database.connection import _connect, _parse_iso
+from cert_watch.database.dashboard_helpers import current_leaf_sql
 from cert_watch.routes._deps import _db_path, _get_settings
 from cert_watch.security.ratelimit import rate_limit
 from cert_watch.status_model import AxisSettings
@@ -110,7 +111,7 @@ def metrics(
         cert_rows = conn.execute(
             "SELECT c.id, c.hostname, c.port, c.subject, c.not_after, "
             "c.fingerprint_sha256 "
-            "FROM certificates c WHERE c.is_leaf = 1"
+            f"FROM certificates c WHERE {current_leaf_sql('c')}"
         ).fetchall()
 
         cert_ids = [r["id"] for r in cert_rows]

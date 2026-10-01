@@ -4,9 +4,9 @@ An old alias merge (see ``resolve_target``) can leave one endpoint holding two
 scanned leaf rows. Browse renders one row per endpoint, so every count over the
 inventory must count that endpoint once too: the Browse total and pager, the
 grouped view, the Home cards, and the per-axis counts Home links into Browse.
-The row shown is the endpoint's head leaf -- the newest by ``created_at`` then
-``rowid`` -- the same head renewal reports, readiness and the renewal webhook
-read.
+The row shown is the endpoint's head leaf, chosen as the scan write path
+(``cert_ops._select_predecessors``) chooses it: a leaf no other leaf at the
+endpoint replaces, then the newest by ``created_at`` and ``rowid``.
 """
 
 from __future__ import annotations
@@ -161,3 +161,34 @@ def test_direct_lookup_of_the_stale_leaf_still_resolves(tmp_path) -> None:
 
     assert entry is not None
     assert entry["id"] == "stale-leaf"
+
+
+def test_head_follows_lineage_before_timestamps(tmp_path) -> None:
+    """A row another leaf replaces is stale however new its timestamp."""
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    SqliteHostRepository(db).add("merge.example.test", 443, tags="t")
+    with _connect(db) as conn:
+        _insert_leaf(conn, "live", "merge.example.test", "d4", NOW - timedelta(days=9), days=150)
+        _insert_leaf(conn, "stale", "merge.example.test", "e5", NOW - timedelta(days=1), days=3)
+        conn.execute("UPDATE certificates SET replaces_cert_id='stale' WHERE id='live'")
+        conn.commit()
+
+    rows, total = list_dashboard_page(db, per_page=0)
+    assert [r["id"] for r in rows] == ["live"]
+    assert total == 1
+
+
+def test_lineage_cycle_falls_back_to_the_newest_leaf(tmp_path) -> None:
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    SqliteHostRepository(db).add("merge.example.test", 443, tags="t")
+    with _connect(db) as conn:
+        _insert_leaf(conn, "older", "merge.example.test", "d4", NOW - timedelta(days=9), days=150)
+        _insert_leaf(conn, "newer", "merge.example.test", "e5", NOW - timedelta(days=1), days=120)
+        conn.execute("UPDATE certificates SET replaces_cert_id='newer' WHERE id='older'")
+        conn.execute("UPDATE certificates SET replaces_cert_id='older' WHERE id='newer'")
+        conn.commit()
+
+    rows, total = list_dashboard_page(db, per_page=0)
+    assert ([r["id"] for r in rows], total) == (["newer"], 1)

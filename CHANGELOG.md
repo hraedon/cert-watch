@@ -7,12 +7,14 @@ All notable changes to cert-watch are documented in this file.
 ### Fixed
 
 - Browse counted every scanned leaf an endpoint held but showed only one row
-  per endpoint, so an endpoint left with two scanned leaves (an old alias
-  merge) made the Browse total, pager, grouped view and the Home counts that
-  link into Browse report more rows than the page listed. The inventory now
-  holds one row per endpoint, its newest scanned leaf (the same leaf renewal
-  reports and readiness read); a direct link to the other leaf still opens it
-  (#151).
+  per endpoint. An endpoint left with two scanned leaves by an old alias merge
+  therefore made the Browse total, pager, grouped and calendar views, and the
+  Home counts that link into Browse, report more rows than the page listed.
+  The compliance report, Posture, `/readyz` and `/metrics` counted the extra
+  leaf too. Each endpoint now counts once, as its current leaf: the one no
+  other leaf replaces, else the newest, chosen the way a scan chooses it. A
+  direct link to the other leaf still opens it. The next successful scan of
+  such an endpoint removes the extra leaf, as before (#151).
 
 ## [1.2.0] - 2026-09-28
 

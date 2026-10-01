@@ -19,6 +19,7 @@ from cert_watch.auth.request_context import (
     resolve_session_user,
 )
 from cert_watch.database.connection import _connect, _sql_now
+from cert_watch.database.dashboard_helpers import current_leaf_sql
 from cert_watch.routes._deps import _db_path, _get_settings
 
 logger = logging.getLogger("cert_watch.routes.health")
@@ -204,11 +205,11 @@ def readyz(request: Request) -> JSONResponse:
     try:
         with _connect(db) as conn:
             total_row = conn.execute(
-                "SELECT COUNT(*) FROM certificates WHERE is_leaf = 1"
+                f"SELECT COUNT(*) FROM certificates c WHERE {current_leaf_sql('c')}"
             ).fetchone()
             expired_row = conn.execute(
-                "SELECT COUNT(*) FROM certificates WHERE is_leaf = 1 "
-                "AND julianday(not_after) <= julianday(?)",
+                f"SELECT COUNT(*) FROM certificates c WHERE {current_leaf_sql('c')} "
+                "AND julianday(c.not_after) <= julianday(?)",
                 (_sql_now(),),
             ).fetchone()
         checks["certificates"] = str(total_row[0] if total_row else 0)

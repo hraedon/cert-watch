@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 from cert_watch.database import get_posture_for_certs, init_schema
 from cert_watch.database.connection import _connect
-from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
+from cert_watch.database.dashboard_helpers import _add_effective_tag_filter, current_leaf_sql
 from cert_watch.filters import subject_cn
 from cert_watch.posture import grade_contributing_findings
 
@@ -101,7 +101,7 @@ def load_posture_headline(
     sql = (
         "SELECT c.id, c.subject, c.hostname, c.port, c.raw_der "
         "FROM certificates c LEFT JOIN hosts h "
-        "ON h.hostname = c.hostname AND h.port = c.port WHERE c.is_leaf = 1"
+        f"ON h.hostname = c.hostname AND h.port = c.port WHERE {current_leaf_sql('c')}"
     )
     params: list[Any] = []
     sql, params = _add_effective_tag_filter(

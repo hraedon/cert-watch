@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from cert_watch.database.connection import _connect
+from cert_watch.database.dashboard_helpers import current_leaf_sql
 from cert_watch.database.schema import init_schema
 
 
@@ -37,7 +38,8 @@ def list_calendar(
     else:  # month
         group_expr = "DATE(not_after, 'start of month')"
 
-    conditions = ["is_leaf = 1"]
+    # One current leaf per endpoint, like every estate count (#151).
+    conditions = [current_leaf_sql("certificates")]
     params: list[str] = []
     if from_date:
         conditions.append("not_after >= ?")
