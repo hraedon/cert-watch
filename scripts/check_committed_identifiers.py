@@ -608,6 +608,131 @@ def leaked_tracked_files(paths: list[Path], guarded: frozenset[str]) -> list[Pat
     return leaked
 
 
+def _git_or_none(args: list[str]) -> str | None:
+    """Return the stdout of a git command, or None when it fails (optional lookups)."""
+    try:
+        return _run_git(args)
+    except GateError:
+        return None
+    except UnicodeDecodeError:
+        # Present but not UTF-8 text: never a clean "private-until-review", and
+        # must not read as "absent" either, or a corrupt last declaration would
+        # launder a public one. A non-empty non-declaration says exactly that.
+        return "\ufffd"
+
+
+def _text_declares_private(text: str) -> bool:
+    """True only when a declaration cleanly names "private-until-review".
+
+    Anything else -- public, an unknown value, a missing key, unparseable text --
+    is not a safe last word before a deletion: a public -> garbage -> delete
+    sequence would otherwise launder a public declaration into "never opted in".
+    """
+    try:
+        section = tomllib.loads(text).get("publication")
+    except tomllib.TOMLDecodeError:
+        return False
+    declared = section.get("visibility") if isinstance(section, dict) else None
+    if not isinstance(declared, str):
+        return False
+    return declared.strip().casefold() == "private-until-review"
+
+
+def _absent_declaration_verdict() -> bool:
+    """Verdict for a repo whose declaration is ABSENT: False, unless that is unsafe.
+
+    Absence is the "never opted in" skip. But deleting a declaration that said
+    public does not make the remote private: it only disarms the gate. So the
+    whole history decides, not one log query: a commit WITH a declaration is safe
+    only if it cleanly says "private-until-review"; a commit WITHOUT one is safe
+    only if every parent is safe (a root commit without one is safe -- never opted
+    in). The state being judged (the index or worktree with no declaration) has
+    HEAD as its parent, so absence is a skip exactly when HEAD is safe. This covers
+    plain and merge deletions, laundering through an invalid declaration, and a
+    merge that joins an unsafe absent lineage to a private one. To leave the
+    publication system, declare "private-until-review" and remove the file in a
+    later commit.
+
+    Best effort on shallow clones: history beyond the graft is invisible here and
+    the shallow root counts as a root.
+    """
+    if _git_or_none(["git", "rev-parse", "--verify", "-q", "HEAD"]) is None:
+        return False
+    graph: dict[str, list[str]] = {}
+    order: list[str] = []
+    for line in _run_git(["git", "rev-list", "--topo-order", "--parents", "HEAD"]).splitlines():
+        if line.strip():
+            commit, *parents = line.split()
+            graph[commit] = parents
+            order.append(commit)
+    head = order[0]
+    # Bare "git", as _run_git passes it: the argv is a variable, as there.
+    # %(objectmode) (git >= 2.45): a symlink or gitlink at publication.toml is
+    # reported as a blob too, and its target string could read as a private
+    # declaration. Only a regular file is a declaration, as on every other path.
+    check_argv = ["git", "cat-file", "--batch-check=%(objectmode) %(objecttype) %(objectname)"]
+    batch_argv = ["git", "cat-file", "--batch"]
+    try:
+        check_proc = subprocess.run(
+            check_argv,
+            input="".join(f"{c}:{_DECLARATION_FILENAME}\n" for c in order).encode(),
+            capture_output=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, OSError) as exc:
+        raise GateError(f"could not read the declaration history ({exc})") from exc
+    checked = check_proc.stdout.decode("utf-8", "replace").splitlines()
+    if len(checked) != len(order):
+        raise GateError("could not read the declaration history (short batch-check output)")
+    present: dict[str, str | None] = {}
+    for commit, row in zip(order, checked, strict=True):
+        fields = row.split()
+        if row.endswith(" missing"):
+            present[commit] = None
+        elif len(fields) != 3 or fields[0] not in ("100644", "100755") or fields[1] != "blob":
+            present[commit] = ""  # present but not a regular file: never a clean private
+        else:
+            present[commit] = fields[2]
+    blobs = sorted({oid for oid in present.values() if oid})
+    private_blob: dict[str, bool] = {}
+    if blobs:
+        try:
+            out = subprocess.run(
+                batch_argv,
+                input="".join(f"{oid}\n" for oid in blobs).encode(),
+                capture_output=True,
+                check=True,
+            ).stdout
+        except (subprocess.CalledProcessError, OSError) as exc:
+            raise GateError(f"could not read the declaration history ({exc})") from exc
+        pos = 0
+        for oid in blobs:
+            header_end = out.index(b"\n", pos)
+            size = int(out[pos:header_end].split()[2])
+            data = out[header_end + 1 : header_end + 1 + size]
+            pos = header_end + 1 + size + 1
+            try:
+                private_blob[oid] = _text_declares_private(data.decode("utf-8"))
+            except UnicodeDecodeError:
+                private_blob[oid] = False
+    safe: dict[str, bool] = {}
+    for commit in reversed(order):  # --topo-order lists children first
+        entry = present[commit]
+        if entry is not None:
+            safe[commit] = bool(entry) and private_blob.get(entry, False)
+        else:
+            safe[commit] = all(safe.get(p, True) for p in graph[commit])
+    if safe[head]:
+        return False
+    raise GateError(
+        f"{_DECLARATION_FILENAME} is absent, but this history declared a visibility "
+        'other than "private-until-review" without a later clean private '
+        "declaration; removing a declaration does not make the remote private, so "
+        "the gate will not treat it as never opted in. Restore it, or declare "
+        '"private-until-review" before removing it.'
+    )
+
+
 def _declares_public(*, staged: bool = False) -> bool:
     """True when this repo's publication.toml declares public visibility.
 
@@ -648,16 +773,46 @@ def _declares_public(*, staged: bool = False) -> bool:
 
     raw_text: str | None
     if staged:
-        try:
-            raw_text = _read_staged_blob(Path(_DECLARATION_FILENAME)).decode(
-                "utf-8", errors="replace",
+        # Only absence from the index is "nothing being committed declares
+        # visibility". `git show :0:` also fails on a conflicted entry (no stage
+        # 0) and a gitlink; swallowing that as False read a present-but-unreadable
+        # declaration as "not public". Ask the index what is there first.
+        listing = _run_git(
+            ["git", "ls-files", "--stage", "-z", "--", f":(top,literal){_DECLARATION_FILENAME}"]
+        )
+        entries = [e for e in listing.split("\0") if e]
+        if not entries:
+            return _absent_declaration_verdict()
+        meta = entries[0].split("\t", 1)[0].split()
+        if len(entries) != 1 or len(meta) != 3 or meta[2] != "0" or meta[0] not in (
+            "100644",
+            "100755",
+        ):
+            raise GateError(
+                f"{_DECLARATION_FILENAME} is staged as a conflicted or non-regular "
+                "entry; the gate cannot tell whether this repo is public, so it will "
+                "not pass."
             )
-        except GateError:
-            return False
+        try:
+            raw_text = _read_staged_blob(Path(_DECLARATION_FILENAME)).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise GateError(
+                f"the staged {_DECLARATION_FILENAME} is not valid UTF-8 ({exc}); the "
+                "gate cannot tell whether this repo is public, so it will not pass."
+            ) from exc
     else:
         path = repo_root / _DECLARATION_FILENAME
-        if not path.is_file():
-            return False
+        # Only genuine absence is the "never opted in" skip. A path that exists
+        # but is not a regular file (a directory, or a symlink -- dangling or
+        # not) used to take the same branch via `not path.is_file()`, so a
+        # stray directory or link silently disarmed a public repo's gate.
+        if not os.path.lexists(path):
+            return _absent_declaration_verdict()
+        if path.is_symlink() or not path.is_file():
+            raise GateError(
+                f"{_DECLARATION_FILENAME} is present but is not a regular file; the "
+                "gate cannot tell whether this repo is public, so it will not pass."
+            )
         try:
             raw_text = path.read_text(encoding="utf-8")
         except OSError as exc:
@@ -682,7 +837,42 @@ def _declares_public(*, staged: bool = False) -> bool:
             f"{_DECLARATION_FILENAME} has no [publication] table; the gate cannot "
             "tell whether this repo is public, so it will not pass."
         )
-    return str(section.get("visibility", "")).strip() == "public"
+    # The set of legal visibilities is closed, and owned by Visibility in
+    # check_publication_plumbing.py. Compare against it rather than against the
+    # bare string "public": anything outside the set is a GateError, not a quiet
+    # "not public".
+    #
+    # This used to be `str(section.get("visibility", "")).strip() == "public"`,
+    # which coerced every other shape into the fail-OPEN branch. On a public repo
+    # that silently disarmed the gate -- the exact "nothing was scanned and CI is
+    # green" failure this function exists to prevent. A wrong-cased value
+    # ("Public"), a missing visibility key, an empty string, and a non-string
+    # (visibility = true) all took that branch. The declaration flip is precisely
+    # the commit where this matters: a case typo or a dropped line in the
+    # publication-review commit disarmed every later run.
+    if "visibility" not in section:
+        raise GateError(
+            f"{_DECLARATION_FILENAME} has a [publication] table but no visibility "
+            "key; the gate cannot tell whether this repo is public, so it will "
+            "not pass."
+        )
+    declared = section["visibility"]
+    if not isinstance(declared, str):
+        raise GateError(
+            f"{_DECLARATION_FILENAME} declares visibility={declared!r}, which is "
+            f"{type(declared).__name__} rather than a string; the gate cannot tell "
+            "whether this repo is public, so it will not pass."
+        )
+    normalised = declared.strip().casefold()
+    if normalised == "public":
+        return True
+    if normalised == "private-until-review":
+        return False
+    raise GateError(
+        f"{_DECLARATION_FILENAME} declares visibility={declared!r}, which is not "
+        'one of "public" or "private-until-review"; the gate cannot tell whether '
+        "this repo is public, so it will not pass."
+    )
 
 
 def _unconfigured(reason: str, *, staged: bool = False) -> None:
