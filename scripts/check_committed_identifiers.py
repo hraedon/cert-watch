@@ -656,8 +656,17 @@ def _declares_public(*, staged: bool = False) -> bool:
             return False
     else:
         path = repo_root / _DECLARATION_FILENAME
-        if not path.is_file():
+        # Only genuine absence is the "never opted in" skip. A path that exists
+        # but is not a regular file (a directory, or a symlink -- dangling or
+        # not) used to take the same branch via `not path.is_file()`, so a
+        # stray directory or link silently disarmed a public repo's gate.
+        if not os.path.lexists(path):
             return False
+        if path.is_symlink() or not path.is_file():
+            raise GateError(
+                f"{_DECLARATION_FILENAME} is present but is not a regular file; the "
+                "gate cannot tell whether this repo is public, so it will not pass."
+            )
         try:
             raw_text = path.read_text(encoding="utf-8")
         except OSError as exc:

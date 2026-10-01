@@ -1205,8 +1205,8 @@ def test_workflow_fork_pr_fails_closed_without_secret_or_checkout() -> None:
     workflow = _identifier_gate_workflow()
     job = workflow["jobs"]["identifier-gate"]
     cases = [
-        ("push", None, {"checkout", "setup", "scan"}),
-        ("pull_request", "owner/cert-watch", {"checkout", "setup", "scan"}),
+        ("push", None, {"checkout", "setup", "contract", "scan"}),
+        ("pull_request", "owner/cert-watch", {"checkout", "setup", "contract", "scan"}),
         ("pull_request", "contributor/fork", set()),
         ("pull_request_target", "owner/cert-watch", set()),
         ("pull_request_target", "contributor/fork", {"reject"}),
@@ -1220,6 +1220,8 @@ def test_workflow_fork_pr_fails_closed_without_secret_or_checkout() -> None:
             return "setup"
         if name == "Check for committed work-domain identifiers":
             return "scan"
+        if name == "Gate contract (publication visibility is a closed set)":
+            return "contract"
         uses = step.get("uses")
         if isinstance(uses, str) and uses.startswith("actions/checkout@"):
             return "checkout"
