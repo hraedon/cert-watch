@@ -332,7 +332,8 @@ def test_renewal_ui_visuals(
         "home": _RENEWAL_HOME_MASKS,
         "browse": _POPULATED_MASKS,
         "detail": _RENEWAL_DETAIL_MASKS,
-        "api-keys": _MASKS,
+        # The key's Created date is the wall-clock day the server seeded it.
+        "api-keys": [*_MASKS, "[data-testid=api-key-row] td:nth-child(4)"],
     }[surface]
     assert_snapshot(
         page,

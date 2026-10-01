@@ -20,6 +20,7 @@ from cert_watch.database.dashboard_helpers import (
     _reorder_by_candidates,
     _safe_col,
     _safe_dir,
+    scanned_head_rowid_sql,
     search_patterns,
 )
 from cert_watch.database.dashboard_unified import (
@@ -331,8 +332,17 @@ def inventory_candidates_sql(
         """
         scanned_params: list[Any] = list(status_params)
         if entry_id:
+            # A direct lookup describes the certificate it names, head or not,
+            # so a detail link to a stale duplicate still resolves.
             scanned_sql += " AND c.id = ?"
             scanned_params.append(entry_id)
+        else:
+            # One row per endpoint (#151). An old alias merge can leave two
+            # scanned leaves on one endpoint; the row builder keys scanned rows
+            # by endpoint and shows one, so counting both made every total
+            # larger than the rows it rendered. Keep the endpoint's head
+            # (scanned_head_rowid_sql), chosen as the scan write path chooses it.
+            scanned_sql += f" AND c.rowid = ({scanned_head_rowid_sql('c')})"
         if entry_keys:
             leaf_keys = [key for kind, key in entry_keys if kind == "leaf"]
             if not leaf_keys:

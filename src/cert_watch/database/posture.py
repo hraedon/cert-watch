@@ -249,14 +249,14 @@ def list_leaf_certificate_der(
     The input to the fleet crypto inventory. ``scope_tags`` restricts it to
     certificates whose effective tags match (#112).
     """
-    from cert_watch.database.dashboard_helpers import build_scope_tag_clause
+    from cert_watch.database.dashboard_helpers import build_scope_tag_clause, current_leaf_sql
 
     clause, params = build_scope_tag_clause(scope_tags, cert_table="certificates")
     init_schema(db_path)
     with _connect(db_path) as conn:
         rows = conn.execute(
             "SELECT id, subject, hostname, port, raw_der FROM certificates"
-            f" WHERE is_leaf = 1 AND {clause}",
+            f" WHERE {current_leaf_sql('certificates')} AND {clause}",
             params,
         ).fetchall()
     return [dict(r) for r in rows]

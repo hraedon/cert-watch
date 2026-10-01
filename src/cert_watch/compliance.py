@@ -275,6 +275,7 @@ def _load_compliance_rows(
     from cert_watch.database import init_schema
     from cert_watch.database.chain_status_cache import prepare_status, verified_chain_status_sql
     from cert_watch.database.connection import _connect, _parse_iso
+    from cert_watch.database.dashboard_helpers import current_leaf_sql
     from cert_watch.status_rule import effective_days_sql, effective_urgency
 
     init_schema(db_path)
@@ -299,7 +300,7 @@ def _load_compliance_rows(
                 COALESCE(h.owner_name, '') AS owner_name
             FROM certificates c
             LEFT JOIN hosts h ON c.hostname = h.hostname AND c.port = h.port
-            WHERE c.is_leaf = 1
+            WHERE {current_leaf_sql("c")}
         """
         params: list[Any] = [status.trust, status.sql_now]
         # Match EFFECTIVE tags (cert ∪ host) like every other scope path
@@ -443,10 +444,11 @@ def fleet_grade_summary(
     """
     from cert_watch.database import init_schema
     from cert_watch.database.connection import _connect
+    from cert_watch.database.dashboard_helpers import current_leaf_sql
 
     init_schema(db_path)
     sql = "SELECT c.id FROM certificates c LEFT JOIN hosts h ON c.hostname = h.hostname " \
-          "AND c.port = h.port WHERE c.is_leaf = 1"
+          f"AND c.port = h.port WHERE {current_leaf_sql('c')}"
     params: list[Any] = []
     if scope_tags:
         from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
