@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 
 import pytest
+from freezegun import freeze_time
 
 from cert_watch.alerting.model import OutboundMessage, WebhookConfig
 from cert_watch.alerting.resolve import resolve_webhook_for_renewed_cert
@@ -1315,14 +1316,17 @@ def test_manual_and_succeeded_attempts_carry_failure_origin(estate):
     db, host_id, _cert_id, _baseline, _settings = estate
     failed = _post(estate, "failed", NOW)
 
-    update_host_settings(
-        db,
-        host_id,
-        HostSettingsUpdate(None, None, "in_progress"),
-        auth=AuthContext.system(),
-        actor="system",
-        source_ip=None,
-    )
+    # The manual start stamps the wall clock; pin it between the fixed-time
+    # reports, or the test breaks once real time passes NOW + 48 h.
+    with freeze_time(NOW + timedelta(hours=1)):
+        update_host_settings(
+            db,
+            host_id,
+            HostSettingsUpdate(None, None, "in_progress"),
+            auth=AuthContext.system(),
+            actor="system",
+            source_ip=None,
+        )
     manual = _row(db)
     assert manual["attempt_id"] != failed.attempt_id
     assert manual["failure_attempt_id"] == failed.attempt_id
