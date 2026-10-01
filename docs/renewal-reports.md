@@ -317,11 +317,13 @@ acme.sh --issue -d www.example.com \
 
 acme.sh also runs the pre-hook for this first `--issue`, but it runs the renew
 hook only on later renewals. If `CW_REPORT_SCRIPT` is set, the issue therefore
-reports `started` and never sends a matching `succeeded`. The attempt is still
-verified once a scan finds a certificate other than the one served when it
-started; until then, its lease mutes **Renewal stalled**. To send no report at
-all, run `--issue` with `CW_REPORT_SCRIPT` unset. The pre-hook then logs that
-reporting is unset and exits zero, and acme.sh still saves both hooks.
+reports `started` and never sends a matching `succeeded`. The attempt is
+verified only if a scan finds a certificate other than the one served when it
+started before the lease (24 hours by default) lapses. If no such scan comes,
+the attempt is abandoned when the lease lapses and stalled evaluation resumes
+(see [`started`](#started)). To send no
+report at all, run `--issue` with `CW_REPORT_SCRIPT` unset. The pre-hook then
+logs that reporting is unset and exits zero, and acme.sh still saves both hooks.
 
 Run one certificate through the failure-aware wrapper:
 
@@ -379,10 +381,12 @@ and send fingerprints on future runs to remove that ambiguity.
 
 ### A hook logs “cert-watch returned HTTP 400” and “invalid Host header”
 
-The instance runs with sign-in disabled (`CERT_WATCH_ALLOW_UNAUTH=1`). In that
-mode cert-watch accepts only `localhost`, a loopback address, or the host
-named in `CERT_WATCH_BASE_URL`. Set `CERT_WATCH_BASE_URL` to the address in
-`CW_BASE_URL`, or point `CW_BASE_URL` at that host.
+The instance runs without sign-in, for example with
+`CERT_WATCH_ALLOW_UNAUTH=1`. In that mode, every request except the
+`/healthz` and `/readyz` probes must carry a `Host` of `localhost`, a loopback
+address, or the host named in `CERT_WATCH_BASE_URL`. That includes renewal
+reports. Set `CERT_WATCH_BASE_URL` to the address in `CW_BASE_URL`, or point
+`CW_BASE_URL` at that host.
 
 ### The failure will not clear
 
