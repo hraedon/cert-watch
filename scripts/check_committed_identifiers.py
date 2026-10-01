@@ -608,6 +608,65 @@ def leaked_tracked_files(paths: list[Path], guarded: frozenset[str]) -> list[Pat
     return leaked
 
 
+def _git_or_none(args: list[str]) -> str | None:
+    """Return the stdout of a git command, or None when it fails (optional lookups)."""
+    try:
+        return _run_git(args)
+    except GateError:
+        return None
+
+
+def _absent_declaration_verdict() -> bool:
+    """Verdict for a repo whose declaration is ABSENT: False, unless it was removed.
+
+    Absence is the "never opted in" skip. But deleting a declaration that said
+    public does not make the remote private: it only disarmed the gate (the
+    missing-denylist refusal became a skip). So if the last declaration this
+    history recorded -- in HEAD, or just before the commit that deleted it --
+    was public, absence is an error. To leave the publication system, declare
+    "private-until-review" first and remove the file in a later commit.
+
+    Best effort on shallow clones: a deletion older than the fetched history is
+    invisible here, and then the absence skip applies as before.
+    """
+    prior: str | None = None
+    if _git_or_none(["git", "rev-parse", "--verify", "-q", "HEAD"]) is not None:
+        prior = _git_or_none(["git", "show", f"HEAD:{_DECLARATION_FILENAME}"])
+        if prior is None:
+            deleted_in = (
+                _git_or_none(
+                    [
+                        "git",
+                        "log",
+                        "-1",
+                        "--format=%H",
+                        "--diff-filter=D",
+                        "HEAD",
+                        "--",
+                        f":(top,literal){_DECLARATION_FILENAME}",
+                    ]
+                )
+                or ""
+            ).strip()
+            if deleted_in:
+                prior = _git_or_none(["git", "show", f"{deleted_in}^:{_DECLARATION_FILENAME}"])
+    if prior is None:
+        return False
+    try:
+        section = tomllib.loads(prior).get("publication")
+    except tomllib.TOMLDecodeError:
+        return False
+    declared = section.get("visibility") if isinstance(section, dict) else None
+    if isinstance(declared, str) and declared.strip().casefold() == "public":
+        raise GateError(
+            f"{_DECLARATION_FILENAME} is absent, but this history last declared "
+            'visibility="public"; removing the declaration does not make the remote '
+            "private, so the gate will not treat it as never opted in. Restore it, or "
+            'declare "private-until-review" before removing it.'
+        )
+    return False
+
+
 def _declares_public(*, staged: bool = False) -> bool:
     """True when this repo's publication.toml declares public visibility.
 
@@ -648,12 +707,33 @@ def _declares_public(*, staged: bool = False) -> bool:
 
     raw_text: str | None
     if staged:
-        try:
-            raw_text = _read_staged_blob(Path(_DECLARATION_FILENAME)).decode(
-                "utf-8", errors="replace",
+        # Only absence from the index is "nothing being committed declares
+        # visibility". `git show :0:` also fails on a conflicted entry (no stage
+        # 0) and a gitlink; swallowing that as False read a present-but-unreadable
+        # declaration as "not public". Ask the index what is there first.
+        listing = _run_git(
+            ["git", "ls-files", "--stage", "-z", "--", f":(top,literal){_DECLARATION_FILENAME}"]
+        )
+        entries = [e for e in listing.split("\0") if e]
+        if not entries:
+            return _absent_declaration_verdict()
+        meta = entries[0].split("\t", 1)[0].split()
+        if len(entries) != 1 or len(meta) != 3 or meta[2] != "0" or meta[0] not in (
+            "100644",
+            "100755",
+        ):
+            raise GateError(
+                f"{_DECLARATION_FILENAME} is staged as a conflicted or non-regular "
+                "entry; the gate cannot tell whether this repo is public, so it will "
+                "not pass."
             )
-        except GateError:
-            return False
+        try:
+            raw_text = _read_staged_blob(Path(_DECLARATION_FILENAME)).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise GateError(
+                f"the staged {_DECLARATION_FILENAME} is not valid UTF-8 ({exc}); the "
+                "gate cannot tell whether this repo is public, so it will not pass."
+            ) from exc
     else:
         path = repo_root / _DECLARATION_FILENAME
         # Only genuine absence is the "never opted in" skip. A path that exists
@@ -661,7 +741,7 @@ def _declares_public(*, staged: bool = False) -> bool:
         # not) used to take the same branch via `not path.is_file()`, so a
         # stray directory or link silently disarmed a public repo's gate.
         if not os.path.lexists(path):
-            return False
+            return _absent_declaration_verdict()
         if path.is_symlink() or not path.is_file():
             raise GateError(
                 f"{_DECLARATION_FILENAME} is present but is not a regular file; the "
