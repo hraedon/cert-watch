@@ -4,6 +4,16 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Browse counted every scanned leaf an endpoint held but showed only one row
+  per endpoint, so an endpoint left with two scanned leaves (an old alias
+  merge) made the Browse total, pager, grouped view and the Home counts that
+  link into Browse report more rows than the page listed. The inventory now
+  holds one row per endpoint, its newest scanned leaf (the same leaf renewal
+  reports and readiness read); a direct link to the other leaf still opens it
+  (#151).
+
 ## [1.2.0] - 2026-09-28
 
 Renewal automation can report back (#118). A least-privilege `renewal-report`

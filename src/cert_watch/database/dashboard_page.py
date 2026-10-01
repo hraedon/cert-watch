@@ -40,6 +40,14 @@ from cert_watch.status_model import (
 )
 from cert_watch.status_rule import effective_days_sql
 
+# The current (head) scanned leaf of the endpoint of certificate ``c``.
+_SCANNED_HEAD_ROWID_SQL = (
+    "SELECT head.rowid FROM certificates head"
+    " WHERE head.hostname = c.hostname AND head.port = c.port"
+    " AND head.is_leaf = 1 AND head.source = 'scanned'"
+    " ORDER BY head.created_at DESC, head.rowid DESC LIMIT 1"
+)
+
 
 def _history_where(
     alias: str,
@@ -331,8 +339,18 @@ def inventory_candidates_sql(
         """
         scanned_params: list[Any] = list(status_params)
         if entry_id:
+            # A direct lookup describes the certificate it names, head or not,
+            # so a detail link to a stale duplicate still resolves.
             scanned_sql += " AND c.id = ?"
             scanned_params.append(entry_id)
+        else:
+            # One row per endpoint (#151). An old alias merge can leave two
+            # scanned leaves on one endpoint; the row builder keys scanned rows
+            # by endpoint and shows one, so counting both made every total
+            # larger than the rows it rendered. Keep the endpoint's head -- the
+            # same deterministic choice renewal reports, readiness and the
+            # renewal webhook make (idx_certificates_endpoint_leaf_head).
+            scanned_sql += f" AND c.rowid = ({_SCANNED_HEAD_ROWID_SQL})"
         if entry_keys:
             leaf_keys = [key for kind, key in entry_keys if kind == "leaf"]
             if not leaf_keys:
