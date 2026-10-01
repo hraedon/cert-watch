@@ -317,11 +317,11 @@ acme.sh --issue -d www.example.com \
 
 acme.sh also runs the pre-hook for this first `--issue`, but it runs the renew
 hook only on later renewals. If `CW_REPORT_SCRIPT` is set, the issue therefore
-reports `started` and never sends a matching `succeeded`. The attempt is
-verified only if a scan finds a certificate other than the one served when it
-started before the lease (24 hours by default) lapses. If no such scan comes,
-the attempt is abandoned when the lease lapses and stalled evaluation resumes
-(see [`started`](#started)). To send no
+reports `started` and never sends a matching `succeeded`. The attempt can
+still be verified, by a scan that finds a certificate other than the one served
+when it started, but only while the attempt is open. Once cert-watch processes
+the lapsed lease (24 hours by default), the attempt is abandoned and stalled
+evaluation resumes (see [`started`](#started)). To send no
 report at all, run `--issue` with `CW_REPORT_SCRIPT` unset. The pre-hook then
 logs that reporting is unset and exits zero, and acme.sh still saves both hooks.
 
