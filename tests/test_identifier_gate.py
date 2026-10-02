@@ -760,6 +760,33 @@ def test_rev_range_accepts_the_multi_argument_new_branch_form(
     assert "could not complete" not in err
 
 
+def test_rev_range_redacts_every_new_publication_channel(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Range paths, blobs, messages, and identities must not echo the denylist."""
+    _track(repo, "README.md", "clean\n")
+    base = _commit(repo, "clean base")
+    _track(repo, "widgetcorp.txt", "widgetcorp\n")
+    env = os.environ.copy()
+    env.update(
+        GIT_AUTHOR_NAME="widgetcorp Author",
+        GIT_AUTHOR_EMAIL="author@widgetcorp.invalid",
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "--no-verify", "-m", "widgetcorp message"],
+        cwd=repo,
+        env=env,
+        check=True,
+    )
+    monkeypatch.setenv("CERT_WATCH_FORBIDDEN_IDENTIFIERS", "widgetcorp")
+
+    assert gate.main(["--rev-range", f"{base}..HEAD", "--redact-output"]) == 1
+    err = capsys.readouterr().err
+    assert "widgetcorp" not in err.casefold()
+    assert "denylist entr" in err
+    assert "<path sha256:" in err
+
+
 # --------------------------------------------------------------------------
 # Staged mode (pre-commit hook)
 # --------------------------------------------------------------------------
@@ -1205,8 +1232,12 @@ def test_workflow_fork_pr_fails_closed_without_secret_or_checkout() -> None:
     workflow = _identifier_gate_workflow()
     job = workflow["jobs"]["identifier-gate"]
     cases = [
-        ("push", None, {"checkout", "setup", "contract", "scan"}),
-        ("pull_request", "owner/cert-watch", {"checkout", "setup", "contract", "scan"}),
+        ("push", None, {"checkout", "setup", "contract", "scan", "range"}),
+        (
+            "pull_request",
+            "owner/cert-watch",
+            {"checkout", "setup", "contract", "scan", "range"},
+        ),
         ("pull_request", "contributor/fork", set()),
         ("pull_request_target", "owner/cert-watch", set()),
         ("pull_request_target", "contributor/fork", {"reject"}),
@@ -1220,6 +1251,8 @@ def test_workflow_fork_pr_fails_closed_without_secret_or_checkout() -> None:
             return "setup"
         if name == "Check for committed work-domain identifiers":
             return "scan"
+        if name == "Published-range identifier gate":
+            return "range"
         if name == "Gate contract (publication visibility is a closed set)":
             return "contract"
         uses = step.get("uses")
