@@ -7,7 +7,7 @@ out. [AGENTS.md](AGENTS.md) adds a few notes that only matter to coding agents.
 ## Setting up
 
 ```bash
-uv venv && uv pip install -e ".[dev,auth]"
+uv sync --frozen --extra dev --extra auth
 .venv/bin/pytest -q                       # unit tests, in parallel, about a minute
 .venv/bin/ruff check .
 .venv/bin/mypy src/cert_watch
