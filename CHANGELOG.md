@@ -24,6 +24,12 @@ All notable changes to cert-watch are documented in this file.
   leaving endpoint-only status axes empty. The expiring CSV report includes
   endpoints whose chain expires before the leaf, and reports the date and days
   remaining of the certificate that limits the chain's lifetime.
+- Expiry alerts, renewal decisions and digests, routing previews and reports,
+  and chain-cache refreshes now use the same current scanned leaf as inventory.
+  Duplicate leaves left by an old alias merge no longer produce stale notices
+  or renewal baselines. Detail links to a surviving superseded leaf redirect
+  to the current certificate on that endpoint; uploaded certificates and
+  explicit historical record reads retain their existing behavior (#156).
 
 ## [1.2.1] - 2026-10-04
 
