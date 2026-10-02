@@ -2,7 +2,25 @@
 
 from __future__ import annotations
 
+import time
 from unittest.mock import patch
+
+# Capture this during collection, before the autouse retry fixture runs.
+_STDLIB_SLEEP = time.sleep
+
+
+def test_retry_sleep_overrides_leave_other_threads_sleeping(monkeypatch):
+    """Skipping retry delays must preserve the process-wide scheduling primitive."""
+    from cert_watch import retry
+
+    assert time.sleep is _STDLIB_SLEEP
+    slept: list[float] = []
+    monkeypatch.setattr(retry.time, "sleep", slept.append)
+    monkeypatch.setattr(retry.random, "uniform", lambda _low, _high: 0.0)
+
+    assert list(retry.backoff_range(2, 1.0)) == [0, 1, 2]
+    assert slept == [1.0, 2.0]
+    assert time.sleep is _STDLIB_SLEEP
 
 
 def test_backoff_yields_attempt_numbers():
