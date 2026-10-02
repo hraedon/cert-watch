@@ -29,6 +29,8 @@ jobs:
           exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: github.event_name != 'pull_request_target'
+        with:
+          fetch-depth: 0  # gate walks history when publication.toml is absent; refuses shallow
       - name: Set up Python
         if: github.event_name != 'pull_request_target'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
