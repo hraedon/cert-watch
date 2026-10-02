@@ -58,6 +58,7 @@ def boot_server(
     host: str = "127.0.0.1",
     module: str = "cert_watch",
     port: int | None = None,
+    module_args: tuple[str, ...] = (),
 ) -> tuple[subprocess.Popen, str]:
     """Start a uvicorn subprocess and poll healthz until ready.
 
@@ -65,6 +66,7 @@ def boot_server(
     *proc* (typically in a fixture teardown). Output is retained in
     ``data_dir/server.log`` and included in startup failures. *module* is the
     ``python -m`` target; tests that need a patched launcher pass their own.
+    *module_args* precedes the host/port options (for example a uvicorn app target).
     Pass *port* when the environment has to name the URL before start-up.
     """
     port = port or _free_port()
@@ -78,7 +80,7 @@ def boot_server(
     log_path = data_dir / "server.log"
     with log_path.open("wb") as log_file:
         proc = subprocess.Popen(
-            [sys.executable, "-m", module, "--host", host, "--port", str(port)],
+            [sys.executable, "-m", module, *module_args, "--host", host, "--port", str(port)],
             env=env,
             stdout=log_file,
             stderr=subprocess.STDOUT,

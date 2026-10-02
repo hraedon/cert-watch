@@ -12,12 +12,7 @@ re-baselined with --update-snapshots; an accidental one fails the diff.
 
 from __future__ import annotations
 
-import os
-import socket
 import subprocess
-import sys
-import time
-import urllib.request
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -28,13 +23,8 @@ from playwright.sync_api import Page, expect
 
 from cert_watch.database.api_keys import SqliteApiKeyRepository
 from cert_watch.database.connection import _connect
+from tests.e2e._helpers import boot_server
 from tests.e2e._seed import seed_detail_estate
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 @pytest.fixture(scope="module")
@@ -42,30 +32,7 @@ def visual_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     """A dedicated, empty-state server so baselines are deterministic regardless
     of what the functional suite did to the shared session server."""
     data_dir: Path = tmp_path_factory.mktemp("cw-visual-data")
-    port = _free_port()
-    env = {
-        **os.environ,
-        "CERT_WATCH_DATA_DIR": str(data_dir),
-        "CERT_WATCH_PORT": str(port),
-        "CERT_WATCH_ALLOW_UNAUTH": "1",
-    }
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "cert_watch", "--host", "127.0.0.1", "--port", str(port)],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    base = f"http://127.0.0.1:{port}"
-    for _ in range(80):
-        try:
-            with urllib.request.urlopen(f"{base}/healthz", timeout=0.5) as r:
-                if r.status == 200:
-                    break
-        except Exception:  # noqa: BLE001 — startup polling tolerates transient HTTP failures
-            time.sleep(0.1)
-    else:
-        proc.kill()
-        raise RuntimeError("visual server did not become ready")
+    proc, base = boot_server(data_dir, env_extra={"CERT_WATCH_ALLOW_UNAUTH": "1"})
     try:
         yield base
     finally:
@@ -183,30 +150,7 @@ def populated_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     from _seed import seed_demo_certs
 
     data_dir: Path = tmp_path_factory.mktemp("cw-visual-populated")
-    port = _free_port()
-    env = {
-        **os.environ,
-        "CERT_WATCH_DATA_DIR": str(data_dir),
-        "CERT_WATCH_PORT": str(port),
-        "CERT_WATCH_ALLOW_UNAUTH": "1",
-    }
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "cert_watch", "--host", "127.0.0.1", "--port", str(port)],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    base = f"http://127.0.0.1:{port}"
-    for _ in range(80):
-        try:
-            with urllib.request.urlopen(f"{base}/healthz", timeout=0.5) as r:
-                if r.status == 200:
-                    break
-        except Exception:  # noqa: BLE001 — startup polling tolerates transient HTTP failures
-            time.sleep(0.1)
-    else:
-        proc.kill()
-        raise RuntimeError("populated visual server did not become ready")
+    proc, base = boot_server(data_dir, env_extra={"CERT_WATCH_ALLOW_UNAUTH": "1"})
     try:
         seed_demo_certs(data_dir)
         yield base
@@ -257,39 +201,10 @@ def renewal_visual_server(
             (now, f"api_key:{key.id}", host["id"]),
         )
         conn.commit()
-    port = _free_port()
-    env = {
-        **os.environ,
-        "CERT_WATCH_DATA_DIR": str(data_dir),
-        "CERT_WATCH_PORT": str(port),
-        "CERT_WATCH_ALLOW_UNAUTH": "1",
-    }
-    proc = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            "tests.e2e._detail_app:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-        ],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+    proc, base = boot_server(
+        data_dir, env_extra={"CERT_WATCH_ALLOW_UNAUTH": "1"},
+        module="uvicorn", module_args=("tests.e2e._detail_app:app",),
     )
-    base = f"http://127.0.0.1:{port}"
-    for _ in range(80):
-        try:
-            with urllib.request.urlopen(f"{base}/healthz", timeout=0.5) as response:
-                if response.status == 200:
-                    break
-        except Exception:  # noqa: BLE001 - startup polling is transient
-            time.sleep(0.1)
-    else:
-        proc.kill()
-        raise RuntimeError("renewal visual server did not become ready")
     try:
         yield base, ids["current"]
     finally:
