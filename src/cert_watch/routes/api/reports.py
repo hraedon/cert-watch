@@ -22,6 +22,7 @@ from cert_watch.routes.api._shared import (
     status_api_row,
 )
 from cert_watch.status_model import AxisSettings, overall_state
+from cert_watch.status_rule import effective_not_after
 from cert_watch.tags import parse_tags
 
 logger = logging.getLogger("cert_watch.routes.api.reports")
@@ -136,6 +137,10 @@ def api_export_certificates_csv(
                     _csv_safe(chain["not_after"]),
                     _csv_safe(chain["days_remaining"]),
                     _csv_safe(chain["urgency"]),
+                    "",  # chain_valid is a leaf-chain result
+                    "",  # condition belongs to the complete leaf-chain row
+                    "",  # monitoring, renewal and delivery describe the endpoint
+                    "",
                     "",
                 ]
             )
@@ -242,7 +247,11 @@ def api_report_expiring_csv(
     _auth: str = Depends(require_auth),
     days: int = 30,
 ) -> PlainTextResponse:
-    """Certificates expiring within *days* days as CSV."""
+    """Certificates whose leaf or chain expires within *days* days as CSV.
+
+    The exported date and day count describe the limiting certificate, matching
+    the effective expiry used by Browse and the compliance report.
+    """
     days = max(1, min(days, 365))
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
@@ -255,7 +264,7 @@ def api_report_expiring_csv(
     expiring = [
         r
         for r in rows
-        if isinstance(r.get("days_remaining"), (int, float)) and r["days_remaining"] <= days
+        if isinstance(r.get("effective_days"), (int, float)) and r["effective_days"] <= days
     ]
     output = io.StringIO()
     writer = csv.writer(output)
@@ -273,14 +282,17 @@ def api_report_expiring_csv(
         ]
     )
     for r in expiring:
+        not_after = effective_not_after(
+            r["not_after"], (chain["not_after"] for chain in r.get("chain", []))
+        )
         writer.writerow(
             [
                 _csv_safe(r.get("host", "")),
                 _csv_safe(r.get("port", "")),
                 _csv_safe(r.get("subject", "")),
                 _csv_safe(r.get("issuer", "")),
-                _csv_safe(r.get("not_after", "")),
-                _csv_safe(r.get("days_remaining", "")),
+                _csv_safe(not_after),
+                _csv_safe(r["effective_days"]),
                 _csv_safe(overall_state(r)),
                 _csv_safe(r.get("owner_name", "")),
                 _csv_safe(r.get("tags", "")),
