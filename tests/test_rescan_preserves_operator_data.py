@@ -510,10 +510,13 @@ def _dup_estate(tmp_path):
     live = parse_certificate(_make_cert(_HOST, days_valid=10, not_before_days_ago=355).der)
     x = seed_scanned(db, _HOST, 443, live)
     SqliteCertificateRepository(db).set_tags(x, "team-a")
+    # X's alert was raised while X was current. The newer Y becomes the head,
+    # so current-leaf evaluation no longer creates X's historical alert for us.
+    evaluate_all_certs(db, SqliteAlertRepository(db))
     other = parse_certificate(_make_cert(_HOST, days_valid=2, not_before_days_ago=363).der)
     y = SqliteCertificateRepository(db, source="scanned", hostname=_HOST, port=443).add(other)
     SqliteCertificateRepository(db).set_tags(y, "team-b")
-    evaluate_all_certs(db, SqliteAlertRepository(db))  # X -> 14-day alert, Y -> 3-day alert
+    evaluate_all_certs(db, SqliteAlertRepository(db))  # Y -> 3-day alert; X's alert remains
     return db, x, y, live
 
 

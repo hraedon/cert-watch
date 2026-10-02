@@ -10,6 +10,7 @@ from cert_watch.alerting.keys import certificate_alert_key
 from cert_watch.alerting.routing import resolve_routing
 from cert_watch.database import Alert, AlertRepository, AlertStore, get_write_lock
 from cert_watch.database.connection import _connect, begin_immediate
+from cert_watch.database.dashboard_helpers import scanned_head_rowid_sql
 
 
 @dataclass(frozen=True)
@@ -69,18 +70,13 @@ def evaluate_renewal_report_alerts(
     """Open and close attempt-scoped renewal failure/deployment alerts."""
     with _connect(db_path) as conn:
         rows = conn.execute(
-            """SELECT a.attempt_id,a.state,a.received_at,a.failure_attempt_id,
+            f"""SELECT a.attempt_id,a.state,a.received_at,a.failure_attempt_id,
                       a.failure_reported_at,a.failure_cleared_at,
                       a.verification_reason,h.hostname,h.port,
                       c.id AS cert_id,c.subject,c.fingerprint_sha256
                FROM renewal_attempts a
                JOIN hosts h ON h.id=a.host_id
-               JOIN certificates c ON c.rowid=(
-                   SELECT leaf.rowid FROM certificates leaf
-                   WHERE leaf.hostname=h.hostname AND leaf.port=h.port
-                     AND leaf.is_leaf=1 AND leaf.source='scanned'
-                   ORDER BY leaf.created_at DESC,leaf.rowid DESC LIMIT 1
-               )
+               JOIN certificates c ON c.rowid=({scanned_head_rowid_sql('h')})
                WHERE (a.is_current=1 AND a.state='not_deployed') OR (
                      a.failure_reported_at IS NOT NULL
                      AND a.failure_cleared_at IS NULL

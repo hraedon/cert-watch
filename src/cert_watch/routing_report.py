@@ -20,6 +20,7 @@ from typing import Any
 from cert_watch.alerting import routing
 from cert_watch.alerting.transports.smtp import _validate_email
 from cert_watch.database.connection import _connect, _thread_cache
+from cert_watch.database.dashboard_helpers import current_leaf_sql
 
 
 class RoutingReportError(ValueError):
@@ -29,7 +30,10 @@ class RoutingReportError(ValueError):
 # Explicit source-column allowlist: do not copy tables with credentials, API
 # keys, sessions or encrypted settings. Repository-only fields are filled below.
 _ROUTING_COLUMNS = {
-    "certificates": ("id", "subject", "hostname", "port", "tags", "is_leaf"),
+    "certificates": (
+        "id", "subject", "hostname", "port", "tags", "is_leaf",
+        "source", "created_at", "replaces_cert_id",
+    ),
     "hosts": ("hostname", "port", "tags", "owner_email", "threshold_days"),
     "alert_groups": ("id", "name", "recipients", "match_tags", "threshold_days"),
     "alert_group_certs": ("cert_id", "group_id"),
@@ -39,6 +43,7 @@ _ROUTING_COLUMNS = {
 _INTEGER_COLUMNS = {"port", "is_leaf", "threshold_days"}
 _NULLABLE_COLUMNS = {
     ("certificates", "hostname"), ("certificates", "port"),
+    ("certificates", "replaces_cert_id"),
     ("hosts", "threshold_days"), ("alert_groups", "threshold_days"),
     ("roles", "alert_group_id"), ("users", "role_id"),
 }
@@ -113,7 +118,9 @@ def _copy_routing_rows(source: Path, scratch: Path) -> str:
                 fields = (*columns, *defaults)
                 # All identifiers come from the fixed allowlist, never DB contents.
                 outgoing.execute(f"CREATE TABLE {table} ({', '.join(fields)})")
-                records = incoming.execute(f"SELECT {', '.join(columns)} FROM {table}")
+                # Keep the relative row order used by the current-leaf tie breaker.
+                order = " ORDER BY rowid" if table == "certificates" else ""
+                records = incoming.execute(f"SELECT {', '.join(columns)} FROM {table}{order}")
                 placeholders = ", ".join("?" for _ in fields)
                 for row in records:
                     if any(
@@ -132,7 +139,7 @@ def _copy_routing_rows(source: Path, scratch: Path) -> str:
 def _inspect_routing(scratch: Path) -> dict[str, Any]:
     with _connect(scratch) as conn:
         leaves = conn.execute(
-            "SELECT id, hostname, port, subject FROM certificates WHERE is_leaf = 1 "
+            f"SELECT id, hostname, port, subject FROM certificates c WHERE {current_leaf_sql('c')} "
             "ORDER BY COALESCE(hostname, ''), COALESCE(port, 0), subject, id"
         ).fetchall()
         group_rows = conn.execute("SELECT id, name FROM alert_groups ORDER BY name, id").fetchall()

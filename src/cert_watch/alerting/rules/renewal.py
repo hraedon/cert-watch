@@ -10,6 +10,7 @@ from cert_watch.alerting.keys import certificate_alert_key
 from cert_watch.alerting.messages import _format_renewal_message
 from cert_watch.alerting.routing import _load_host_owner_maps
 from cert_watch.database import Alert, AlertRepository
+from cert_watch.database.dashboard_helpers import current_leaf_sql
 from cert_watch.database.renewal_attempts import endpoint_stall_suppression_exists_sql
 
 
@@ -19,15 +20,16 @@ def renewal_window_sql(alias: str = "c") -> str:
     Binds ``?`` window days, ``?`` now (``_sql_now``), ``?`` window days, then
     that same ``now`` for the attempt lease. The one
     predicate Home's attention queue and the renewal notification share: the
-    leaf's own days are within the window (not expired), no successor
-    certificate replaces it (a row naming itself doesn't count), and its host
-    has no live stall-suppressing lease.
+    current leaf's own days are within the window (not expired) and its host
+    has no live stall-suppressing lease. Uploaded leaves additionally retain
+    their explicit successor suppression (a row naming itself doesn't count).
     """
     return (
-        f"(? > 0 AND cw_effective_days({alias}.not_after, NULL, ?) BETWEEN 0 AND ?"
-        f" AND NOT EXISTS (SELECT 1 FROM certificates succ"
+        f"(? > 0 AND {current_leaf_sql(alias)}"
+        f" AND cw_effective_days({alias}.not_after, NULL, ?) BETWEEN 0 AND ?"
+        f" AND ({alias}.source = 'scanned' OR NOT EXISTS (SELECT 1 FROM certificates succ"
         # A row naming itself is not replaced by anything (#115 review).
-        f" WHERE succ.replaces_cert_id = {alias}.id AND succ.id != {alias}.id)"
+        f" WHERE succ.replaces_cert_id = {alias}.id AND succ.id != {alias}.id))"
         f" AND NOT {endpoint_stall_suppression_exists_sql(alias, '?')})"
     )
 

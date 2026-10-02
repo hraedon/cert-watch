@@ -454,6 +454,7 @@ def test_explicit_recent_predecessor_is_baseline_and_verifies_at_acceptance(esta
     )
 
 
+@freeze_time(NOW)
 def test_explicit_stale_predecessor_is_not_used_as_baseline(estate):
     db, _host_id, _cert_id, baseline, settings = estate
     successor = parse_certificate(_make_cert(HOST, days_valid=90).der)

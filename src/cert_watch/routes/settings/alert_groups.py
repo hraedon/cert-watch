@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from cert_watch.audit import resolve_actor, resolve_source_ip
 from cert_watch.auth.guards import admin_page_guard
 from cert_watch.database import SqliteAlertGroupRepository
+from cert_watch.database.dashboard_helpers import current_leaf_sql
 from cert_watch.routes._deps import (
     IdParam,
     _db_path,
@@ -235,7 +236,7 @@ def _match_preview(
     join = (
         "FROM certificates c "
         "LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port "
-        "WHERE c.is_leaf = 1"
+        f"WHERE {current_leaf_sql('c')}"
     )
     with _connect(db_path) as conn:
         count = conn.execute(

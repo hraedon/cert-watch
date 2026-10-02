@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from cert_watch.database.connection import _connect, parse_san_dns_names
+from cert_watch.database.dashboard_helpers import current_leaf_sql
 from cert_watch.http_client import ssrf_safe_urlopen
 from cert_watch.renewal_analytics import RenewalOverdueSignal
 
@@ -44,14 +45,11 @@ def _resolve_cert_details(
 ) -> dict[str, Any]:
     with _connect(db_path) as conn:
         row = conn.execute(
-            """SELECT id, subject AS subject_cn, san_dns_names AS san_names,
+            f"""SELECT id, subject AS subject_cn, san_dns_names AS san_names,
                       issuer AS issuer_cn, not_after
-               FROM certificates
-               WHERE id = (
-                   SELECT id FROM certificates
-                   WHERE hostname = ? AND port = ? AND is_leaf = 1 AND source = 'scanned'
-                   ORDER BY created_at DESC, rowid DESC LIMIT 1
-               ) AND fingerprint_sha256 = ?""",
+               FROM certificates c
+               WHERE c.hostname = ? AND c.port = ? AND c.source = 'scanned'
+                 AND {current_leaf_sql('c')} AND c.fingerprint_sha256 = ?""",
             (hostname, port, fingerprint),
         ).fetchone()
     if row is None:

@@ -12,6 +12,7 @@ from cert_watch.alerting.digest.engine import DigestTarget
 from cert_watch.alerting.model import AlertConfig, OutboundMessage
 from cert_watch.alerting.transports.smtp import _validate_email
 from cert_watch.database import _connect, _parse_iso
+from cert_watch.database.dashboard_helpers import current_leaf_sql
 
 logger = logging.getLogger("cert_watch.alerting.digest")
 
@@ -77,7 +78,7 @@ class ExpiryDigestKind:
                 "h.owner_email, h.owner_name "
                 "FROM certificates c "
                 "LEFT JOIN hosts h ON c.hostname = h.hostname AND c.port = h.port "
-                "WHERE c.is_leaf = 1 ORDER BY c.not_after"
+                f"WHERE {current_leaf_sql('c')} ORDER BY c.not_after"
             ).fetchall()
 
         expiring: list[dict[str, Any]] = []
