@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from cert_watch.database.connection import _connect, _iso, begin_immediate
+from cert_watch.database.connection import _connect, _iso, _parse_iso, begin_immediate
 from cert_watch.database.schema import init_schema
 
 if TYPE_CHECKING:
@@ -298,6 +298,22 @@ class AlertStore:
                 (*keys, cutoff),
             ).fetchone()
         return recent is None
+
+    def next_delivery_at(self) -> datetime | None:
+        """Return the next persisted retry or lease recovery deadline.
+
+        Pending rows without a deadline keep their existing first-delivery
+        cadence. Sending rows need a lease expiry, matching ``claim``; terminal
+        rows cannot wake delivery. This read-only hint never claims work.
+        """
+        with _connect(self.db_path) as conn:
+            row = conn.execute(
+                """SELECT MIN(CASE WHEN status = 'pending'
+                                    THEN next_attempt_at
+                                    ELSE lease_expires_at END)
+                   FROM alerts WHERE status IN ('pending', 'sending')"""
+            ).fetchone()
+        return _parse_iso(row[0]) if row is not None and row[0] is not None else None
 
     def claim(
         self,

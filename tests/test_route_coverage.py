@@ -50,8 +50,15 @@ def test_readyz_with_scan_history(tmp_path, reload_app):
 
 
 def test_readyz_reports_but_does_not_degrade_for_alert_delivery_backlog(
-    tmp_path, reload_app
+    tmp_path, reload_app, monkeypatch
 ):
+    # Exercise the read-only probe with a live scheduler thread, but hold its
+    # timer until shutdown so recovery cannot change the seeded queue. Lease
+    # recovery itself is covered by test_scheduler_alert_delivery.py.
+    monkeypatch.setattr(
+        "cert_watch.scheduler.SystemClock.wait",
+        lambda self, event, timeout: event.wait(),
+    )
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import Alert, AlertStore, SqliteAlertRepository, init_schema
