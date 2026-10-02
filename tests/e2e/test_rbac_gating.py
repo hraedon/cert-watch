@@ -10,12 +10,7 @@ full IdP-login path is covered by the opt-in real-LDAP test.
 from __future__ import annotations
 
 import json
-import os
-import socket
 import subprocess
-import sys
-import time
-import urllib.request
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -29,6 +24,7 @@ from cert_watch.auth.session import create_session
 from cert_watch.database.api_keys import SqliteApiKeyRepository
 from cert_watch.database.connection import _connect
 from cert_watch.security import SecurityContext
+from tests.e2e._helpers import boot_server
 from tests.e2e._seed import seed_detail_estate
 
 _AUTH_SECRET = "e2e-rbac-pinned-secret-0123456789abcdef"
@@ -46,12 +42,6 @@ _ROLE_MAP = {
 _SEC = SecurityContext(signing_key=_AUTH_SECRET, csrf_secret="e2e-rbac-csrf")
 _RENEWAL_CERT_ID = ""
 _RENEWAL_KEY = ""
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 @pytest.fixture(scope="module")
@@ -98,36 +88,14 @@ def rbac_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
             (now, f"api_key:{key.id}", attempt_id, host["id"]),
         )
         conn.commit()
-    port = _free_port()
     env = {
-        **os.environ,
-        "CERT_WATCH_DATA_DIR": str(data_dir),
-        "CERT_WATCH_HOST": "127.0.0.1",
-        "CERT_WATCH_PORT": str(port),
         "CERT_WATCH_AUTH_SECRET": _AUTH_SECRET,
         "CERT_WATCH_ROLE_MAP": json.dumps(_ROLE_MAP),
         "CERT_WATCH_LOCAL_ADMIN_USER": "admin",
         "CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH": _scrypt_hash("rbac-admin-pw-1"),
         "CERT_WATCH_COOKIE_SECURE": "0",
     }
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "cert_watch", "--host", "127.0.0.1", "--port", str(port)],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    base = f"http://127.0.0.1:{port}"
-    for _ in range(80):
-        try:
-            with urllib.request.urlopen(f"{base}/healthz", timeout=0.5) as r:
-                if r.status == 200:
-                    break
-        except Exception:  # noqa: BLE001 — startup polling tolerates transient HTTP failures
-            time.sleep(0.1)
-    else:
-        proc.kill()
-        out = proc.stdout.read().decode() if proc.stdout else ""
-        raise RuntimeError(f"rbac server did not become ready:\n{out}")
+    proc, base = boot_server(data_dir, env_extra=env)
     try:
         yield base
     finally:
