@@ -34,8 +34,12 @@ ENV PATH="/opt/venv/bin:$PATH" \
 
 # Debian security patches newer than the pinned base digest — the trivy
 # release gate fails on fixed-status HIGH/CRITICAL CVEs (e.g. libssl) faster
-# than upstream rebuilds python:slim.
-RUN apt-get update \
+# than upstream rebuilds python:slim. APT_REFRESH changes daily (release.yml),
+# so the gha layer cache cannot keep serving a stale upgrade layer: it did,
+# and every release from 2026-10-01 failed the gate on an already-fixed libssl.
+ARG APT_REFRESH=unset
+RUN echo "apt refresh: ${APT_REFRESH}" \
+    && apt-get update \
     && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/*
 
