@@ -53,8 +53,7 @@ NOW = datetime(2026, 9, 28, 12, tzinfo=UTC)
 HOST = "verify.example.test"
 
 
-@pytest.fixture
-def estate(tmp_path):
+def _make_estate(tmp_path):
     db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)
     repo = SqliteHostRepository(db)
@@ -63,6 +62,11 @@ def estate(tmp_path):
     cert_id = seed_scanned(db, HOST, 443, leaf)
     settings = Settings(db_path=db, data_dir=tmp_path)
     return db, host_id, cert_id, leaf.fingerprint_sha256, settings
+
+
+@pytest.fixture
+def estate(tmp_path):
+    return _make_estate(tmp_path)
 
 
 def _attempt(
@@ -454,16 +458,18 @@ def test_explicit_recent_predecessor_is_baseline_and_verifies_at_acceptance(esta
     )
 
 
-def test_explicit_stale_predecessor_is_not_used_as_baseline(estate):
-    db, _host_id, _cert_id, baseline, settings = estate
-    successor = parse_certificate(_make_cert(HOST, days_valid=90).der)
+def test_explicit_stale_predecessor_is_not_used_as_baseline(tmp_path):
+    # resolve_target's 7-day predecessor window reads the wall clock. Build the
+    # certificates and resolve the target at the fixed report time so their
+    # validity agrees with NOW, or the test breaks a week after NOW.
+    with freeze_time(NOW):
+        db, _host_id, _cert_id, baseline, settings = _make_estate(tmp_path)
+        successor = parse_certificate(_make_cert(HOST, days_valid=90).der)
     store_scanned(ScannedEntry(host=HOST, port=443, leaf=successor, chain=[]), db)
     _set_lineage_observed_at(db, NOW - timedelta(days=3))
     auth = AuthContext.renewal_report_key(
         "key", principal_id="key", binding="all", bound_tags=()
     )
-    # resolve_target's 7-day predecessor window reads the wall clock; pin it to
-    # the fixed report time, or the test breaks a week after NOW.
     with freeze_time(NOW):
         target = resolve_target(db, auth, cert_fingerprint=baseline)
     result, _ = create_report(
