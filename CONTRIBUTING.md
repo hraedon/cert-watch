@@ -120,6 +120,11 @@ Each of these bugs shipped once, past a green suite:
 - **Skipped is invisible.** Check the skip count as well as the failures.
   Docker-, LDAP- and Playwright-dependent tests skip quietly when their
   dependency is missing.
+- **Fixed dates need a fixed wall clock.** When a test uses a fixed `NOW` but
+  calls code that reads the clock, wrap only that call in `freeze_time(NOW)`
+  and keep generated certificate validity aligned with `NOW`. The
+  `test-future-clock` CI job catches regressions; reproduce locally with
+  `faketime -f "@2036-10-03 12:00:00" .venv/bin/pytest -q --no-cov -n0 <test>`.
 - **Say what you didn't verify.** A pull request that couldn't exercise
   something, such as a real directory, a real Windows host or a real mail
   relay, says so.

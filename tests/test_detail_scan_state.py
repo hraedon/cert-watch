@@ -6,7 +6,7 @@ and never showed the error; Scan now on the page also sent the user Home.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -38,11 +38,16 @@ def _failing_estate(tmp_path, leaf_der):
     db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)
     host_id = SqliteHostRepository(db).add(_HOST, 443)
-    cert_id = seed_scanned(db, _HOST, 443, parse_certificate(leaf_der))
+    cert = parse_certificate(leaf_der)
+    cert_id = seed_scanned(db, _HOST, 443, cert)
+    failure_at = datetime.now(UTC).replace(second=0, microsecond=0)
     record_scan_history(
         db,
         ScanHistory(
-            hostname=_HOST, port=443, status="success", scanned_at=datetime(2026, 9, 1, tzinfo=UTC)
+            hostname=_HOST,
+            port=443,
+            status="success",
+            scanned_at=failure_at - timedelta(days=1),
         ),
     )
     record_scan_history(
@@ -52,15 +57,17 @@ def _failing_estate(tmp_path, leaf_der):
             port=443,
             status="failure",
             error_message=_EOF,
-            scanned_at=datetime(2026, 9, 24, 7, 29, tzinfo=UTC),
+            scanned_at=failure_at,
         ),
     )
-    return db, host_id, cert_id
+    return db, host_id, cert_id, failure_at
 
 
 def test_detail_shows_the_current_scan_failure(tmp_path, reload_app, self_signed_leaf):
-    _db, _host_id, cert_id = _failing_estate(tmp_path, self_signed_leaf.der)
+    _db, _host_id, cert_id, failure_at = _failing_estate(tmp_path, self_signed_leaf.der)
     app_mod = reload_app()
+    # App startup purges scan history against the wall clock, so the helper
+    # derives its scan dates from that clock instead of using aging constants.
     with TestClient(app_mod.app) as client:
         page = client.get(f"/certificates/{cert_id}").text
         browse = client.get("/browse?grouped=0").text
@@ -69,7 +76,7 @@ def test_detail_shows_the_current_scan_failure(tmp_path, reload_app, self_signed
 
     assert 'data-testid="cert-scan-failed-status"' in page
     assert 'data-testid="scan-failure-panel"' in page
-    assert "2026-09-24 07:29 UTC" in page
+    assert failure_at.strftime("%Y-%m-%d %H:%M UTC") in page
     # Plain-language cause and next step, with the raw text kept beside them.
     assert "closed the connection during the TLS handshake" in page
     assert "Next step:" in page
@@ -114,7 +121,7 @@ def _stub_scan(monkeypatch, status, error=None):
 def test_scan_now_from_detail_returns_to_detail(
     tmp_path, reload_app, monkeypatch, self_signed_leaf, status, error, expected_query
 ):
-    _db, host_id, _cert_id = _failing_estate(tmp_path, self_signed_leaf.der)
+    _db, host_id, _cert_id, _failure_at = _failing_estate(tmp_path, self_signed_leaf.der)
     _stub_scan(monkeypatch, status, error)
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
@@ -128,7 +135,7 @@ def test_scan_now_from_detail_returns_to_detail(
 def test_scan_now_from_home_still_returns_home(
     tmp_path, reload_app, monkeypatch, self_signed_leaf
 ):
-    _db, host_id, _cert_id = _failing_estate(tmp_path, self_signed_leaf.der)
+    _db, host_id, _cert_id, _failure_at = _failing_estate(tmp_path, self_signed_leaf.der)
     _stub_scan(monkeypatch, "scan_error", _EOF)
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
@@ -146,7 +153,7 @@ def test_scan_now_from_home_still_returns_home(
 def test_scan_now_round_trip_lands_on_the_current_certificate(
     tmp_path, reload_app, monkeypatch, self_signed_leaf
 ):
-    _db, host_id, cert_id = _failing_estate(tmp_path, self_signed_leaf.der)
+    _db, host_id, cert_id, _failure_at = _failing_estate(tmp_path, self_signed_leaf.der)
     _stub_scan(monkeypatch, "success")
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
@@ -158,7 +165,7 @@ def test_scan_now_round_trip_lands_on_the_current_certificate(
 
 
 def test_flash_messages_render_on_the_detail_page(tmp_path, reload_app, self_signed_leaf):
-    _db, _host_id, cert_id = _failing_estate(tmp_path, self_signed_leaf.der)
+    _db, _host_id, cert_id, _failure_at = _failing_estate(tmp_path, self_signed_leaf.der)
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         page = client.get(f"/certificates/{cert_id}?error=invalid+tag").text

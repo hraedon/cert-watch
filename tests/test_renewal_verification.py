@@ -462,10 +462,14 @@ def test_explicit_stale_predecessor_is_not_used_as_baseline(estate):
     auth = AuthContext.renewal_report_key(
         "key", principal_id="key", binding="all", bound_tags=()
     )
+    # resolve_target's 7-day predecessor window reads the wall clock; pin it to
+    # the fixed report time, or the test breaks a week after NOW.
+    with freeze_time(NOW):
+        target = resolve_target(db, auth, cert_fingerprint=baseline)
     result, _ = create_report(
         db,
         settings,
-        resolve_target(db, auth, cert_fingerprint=baseline),
+        target,
         RenewalReportInput("succeeded", None, "tool", None, None, None),
         auth=auth,
         actor="api_key:key",
