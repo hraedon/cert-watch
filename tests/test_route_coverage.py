@@ -1214,7 +1214,6 @@ def test_certificate_detail_host_info_custom_method(reload_app, tmp_path):
 def test_certificate_detail_with_drift_events(reload_app, tmp_path):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
-    from datetime import UTC, datetime, timedelta
 
     from cert_watch.certificate_model import Certificate
     from cert_watch.database import SqliteHostRepository, init_schema, replace_scanned
@@ -1244,11 +1243,21 @@ def test_certificate_detail_with_drift_events(reload_app, tmp_path):
     # the comparison fires. Explicit timestamps keep the DESC ordering deterministic.
     from cert_watch.database import record_cert_history
 
-    record_cert_history(db, "drift.example.com", 443, cert1, scanned_at="2026-01-01T00:00:00+00:00")
-    record_cert_history(db, "drift.example.com", 443, cert2, scanned_at="2026-02-01T00:00:00+00:00")
+    # App startup purges against the wall clock, so keep these snapshots
+    # relative to that clock rather than letting fixed dates age past retention.
+    record_cert_history(
+        db,
+        "drift.example.com",
+        443,
+        cert1,
+        scanned_at=(now - timedelta(days=1)).isoformat(),
+    )
+    record_cert_history(db, "drift.example.com", 443, cert2, scanned_at=now.isoformat())
     with TestClient(app_mod.app) as client:
-        r = client.get(f"/certificates/{_stored_cert_id(db, 'drift.example.com')}",
-                        follow_redirects=False)
+        r = client.get(
+            f"/certificates/{_stored_cert_id(db, 'drift.example.com')}",
+            follow_redirects=False,
+        )
     assert r.status_code == 200
     # The issuer change across the two scans must surface as a drift event.
     assert "Configuration drift" in r.text

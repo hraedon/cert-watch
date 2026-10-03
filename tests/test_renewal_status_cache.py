@@ -12,6 +12,7 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from freezegun import freeze_time
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import (
@@ -226,7 +227,9 @@ def test_history_writers_refresh_basis_and_host_delete_removes_cache(tmp_path):
     assert tuple(cached) == ("likely-automated", 3, 3, "fp-2")
 
     # Purging two old periods recomputes rather than leaving their classification.
-    assert purge_old_history(db, retention_days=100) == 2
+    # The purge cutoff reads the wall clock; pin it to the fixed history dates.
+    with freeze_time(NOW):
+        assert purge_old_history(db, retention_days=100) == 2
     with _connect(db) as conn:
         cached = conn.execute(
             """SELECT classification, deployment_count, basis_history_count

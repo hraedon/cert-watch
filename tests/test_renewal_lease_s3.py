@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from freezegun import freeze_time
 
 from cert_watch.alerting.rules.expiry import evaluate_all_certs
 from cert_watch.alerting.rules.renewal import evaluate_renewal_window
@@ -32,7 +33,12 @@ NOW = datetime(2026, 9, 27, 12, tzinfo=UTC)
 HOST = "lease.example.test"
 
 
-def _seed_stalled(tmp_path: Path, name: str = "lease.sqlite3") -> tuple[Path, str]:
+def _seed_stalled(
+    tmp_path: Path,
+    name: str = "lease.sqlite3",
+    *,
+    now: datetime | None = None,
+) -> tuple[Path, str]:
     db = tmp_path / name
     init_schema(db)
     host_id = SqliteHostRepository(db).add(HOST, 443)
@@ -40,7 +46,7 @@ def _seed_stalled(tmp_path: Path, name: str = "lease.sqlite3") -> tuple[Path, st
         subject=f"CN={HOST}",
         issuer="CN=Test CA",
         not_before=NOW - timedelta(days=60),
-        not_after=datetime.now(UTC) + timedelta(days=10),
+        not_after=(now or datetime.now(UTC)) + timedelta(days=10),
         fingerprint_sha256="baseline-fingerprint",
     )
     seed_certificate(db, cert, cert_id="lease-cert", hostname=HOST, port=443)
@@ -206,25 +212,23 @@ def test_edit_form_highlights_invalid_rendered_status(tmp_path: Path, reload_app
 )
 def test_renewal_stalled_characterises_every_attempt_state(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     state: str | None,
     lease: datetime | None,
     suppresses: bool,
     is_suppressed: bool,
 ) -> None:
-    db, host_id = _seed_stalled(tmp_path, f"{state or 'none'}.sqlite3")
+    db, host_id = _seed_stalled(tmp_path, f"{state or 'none'}.sqlite3", now=NOW)
     if state is not None:
         _attempt(db, host_id, state, lease=lease, suppresses=suppresses)
-    monkeypatch.setattr(
-        "cert_watch.alerting.rules.renewal.datetime",
-        type("Clock", (), {"now": staticmethod(lambda tz=None: NOW)}),
-    )
     alerts = SqliteAlertRepository(db)
-    expiry = evaluate_all_certs(db, alerts)
-    assert [(item.cert_id, item.alert_type) for item in expiry] == [
-        ("lease-cert", "expiry_warning")
-    ]
-    created = evaluate_renewal_window(db, alerts, 30)
+    # Both alert rules read the wall clock; pin it to the fixed lease and
+    # certificate dates so their windows do not move as the calendar advances.
+    with freeze_time(NOW):
+        expiry = evaluate_all_certs(db, alerts)
+        assert [(item.cert_id, item.alert_type) for item in expiry] == [
+            ("lease-cert", "expiry_warning")
+        ]
+        created = evaluate_renewal_window(db, alerts, 30)
     assert (created == []) is is_suppressed
 
 

@@ -87,6 +87,28 @@ jobs:
           .venv/bin/pytest -q --no-cov -p no:cacheprovider
           --ignore=tests/e2e --ignore=tests/integration
 
+  test-future-clock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Patina verifies the recorded content-model review against git history.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.14"
+      - run: uv venv
+      - run: uv sync --frozen --extra dev --extra auth
+      - name: Install libfaketime
+        run: sudo apt-get install -y faketime
+      - name: pytest (future clock)
+        # Catch tests that pin a fixed date while product code reads the wall clock.
+        run: |
+          FUTURE=$(date -u -d '+400 days' '+%Y-%m-%d %H:%M:%S')
+          echo "Future clock: $FUTURE"
+          faketime -f "@$FUTURE" .venv/bin/pytest -q --no-cov \
+            -p no:cacheprovider --ignore=tests/e2e --ignore=tests/integration .
+
   ldap-integration:
     runs-on: ubuntu-latest
     steps:
