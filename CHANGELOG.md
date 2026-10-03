@@ -6,6 +6,10 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Release images failed the Trivy gate from 2026-10-01 on a libssl CVE that
+  Debian had already fixed: the build cache kept reusing an `apt-get upgrade`
+  layer from before the fix. That layer is now refreshed daily, so released
+  images carry current Debian security updates.
 - Browse counted every scanned leaf an endpoint held but showed only one row
   per endpoint. An endpoint left with two scanned leaves by an old alias merge
   therefore made the Browse total, pager, grouped and calendar views, and the
