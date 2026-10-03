@@ -22,6 +22,7 @@ from cert_watch.alerting.routing import (
 )
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import Alert, AlertRepository
+from cert_watch.database.dashboard_helpers import current_leaf_sql
 
 
 def effective_thresholds(
@@ -189,10 +190,11 @@ def evaluate_all_certs(
         leaves = conn.execute(
             "SELECT id, subject, issuer, not_before, not_after, "
             "san_dns_names, fingerprint_sha256, hostname, port "
-            "FROM certificates AS current WHERE is_leaf = 1 "
-            "AND NOT EXISTS (SELECT 1 FROM certificates AS successor "
+            f"FROM certificates AS current WHERE {current_leaf_sql('current')} "
+            "AND (current.source = 'scanned' OR NOT EXISTS "
+            "(SELECT 1 FROM certificates AS successor "
             "WHERE successor.replaces_cert_id = current.id "
-            "AND successor.id != current.id)"
+            "AND successor.id != current.id))"
         ).fetchall()
 
     # Resolve the complete immutable route once for the batch. The snapshot

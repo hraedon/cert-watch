@@ -73,6 +73,25 @@ def detail_estate_server(
     """A scanned estate covering every Detail A status branch."""
     data_dir: Path = tmp_path_factory.mktemp("cw-detail-data")
     ids = seed_detail_estate(data_dir)
+    # Reconstruct the surviving duplicate left by an old alias merge (#156).
+    # Timestamp order deliberately disagrees with the explicit successor.
+    from cert_watch.certificate_model import parse_certificate
+    from cert_watch.database.connection import _connect
+    from tests._helpers import seed_certificate
+    from tests.conftest import _make_cert
+
+    db = data_dir / "cert-watch.sqlite3"
+    ids["superseded"] = seed_certificate(
+        db,
+        parse_certificate(_make_cert("current.detail.test", days_valid=3).der),
+        source="scanned", hostname="current.detail.test", port=443,
+    )
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE certificates SET replaces_cert_id=? WHERE id=?",
+            (ids["superseded"], ids["current"]),
+        )
+        conn.commit()
     port = _free_port()
     env = {
         **os.environ,

@@ -9,6 +9,7 @@ from typing import Any
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database.connection import _connect, _row_to_cert, _sql_now
+from cert_watch.database.dashboard_helpers import current_leaf_sql
 from cert_watch.database.dashboard_rows import _build_dashboard_rows
 from cert_watch.database.dashboard_unified import _build_unified_from_dash
 from cert_watch.database.posture import get_posture_for_cert
@@ -73,7 +74,7 @@ def get_stored_certificate_detail_records(
 
 @dataclass(frozen=True)
 class CurrentCertificateRef:
-    """Where an id that no longer names a certificate row now points."""
+    """Where a host id or superseded certificate id now points."""
 
     cert_id: str
     # True when the id named an earlier certificate for the endpoint (a
@@ -83,8 +84,8 @@ class CurrentCertificateRef:
 
 def _current_leaf_for_endpoint(conn: Any, hostname: str, port: int) -> str | None:
     row = conn.execute(
-        "SELECT id FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1 "
-        "ORDER BY created_at DESC LIMIT 1",
+        "SELECT id FROM certificates c WHERE hostname = ? AND port = ? "
+        f"AND source = 'scanned' AND {current_leaf_sql('c')}",
         (hostname, port),
     ).fetchone()
     return str(row["id"]) if row is not None else None
@@ -93,25 +94,39 @@ def _current_leaf_for_endpoint(conn: Any, hostname: str, port: int) -> str | Non
 def resolve_current_certificate(
     db_path: str | Path, stale_id: str
 ) -> CurrentCertificateRef | None:
-    """Map an id with no certificate row to the certificate to show instead.
+    """Map a host or superseded id to the current certificate to show instead.
 
     1. A host id (the stable address of an endpoint) opens the endpoint's
        current certificate.
-    2. A certificate id that renewals replaced opens the certificate they
+    2. An existing non-head scanned leaf opens its endpoint's current leaf.
+    3. A certificate id that renewals replaced opens the certificate they
        lead to, found by :func:`~cert_watch.database.cert_lineage.navigation_hint`
-       -- the same resolver the mutation routes use for their "renewed,
-       nothing was changed" answer, so the two never disagree. It follows
+       -- the same lineage resolver the mutation routes use for their "renewed,
+       nothing was changed" answer. It follows
        lineage only from the id's own issuance event, on that endpoint, one
-       unambiguous step at a time; anything else resolves to nothing.
+       unambiguous step at a time; anything else resolves to nothing. If the
+       surviving scanned row is a duplicate, normalize to its endpoint's head.
 
-    An id whose certificate was deleted (not renewed), or whose events have
-    aged out of the event log, is not resolved. Performs no scope check: the
+    An id whose certificate was deleted (not renewed), or whose retained
+    lineage cannot resolve unambiguously, is not resolved. Performs no scope check: the
     caller must authorize the returned certificate.
     """
     from cert_watch.database.cert_lineage import navigation_hint
 
     init_schema(db_path)
     with _connect(db_path) as conn:
+        existing = conn.execute(
+            "SELECT hostname, port, source, is_leaf FROM certificates WHERE id = ?",
+            (stale_id,),
+        ).fetchone()
+        if existing is not None:
+            if existing["source"] == "scanned" and existing["is_leaf"]:
+                current = _current_leaf_for_endpoint(
+                    conn, existing["hostname"], existing["port"]
+                )
+                if current is not None and current != stale_id:
+                    return CurrentCertificateRef(current, superseded=True)
+            return None
         host = conn.execute(
             "SELECT hostname, port FROM hosts WHERE id = ?", (stale_id,)
         ).fetchone()
@@ -119,6 +134,13 @@ def resolve_current_certificate(
             current = _current_leaf_for_endpoint(conn, host["hostname"], host["port"])
             return CurrentCertificateRef(current, superseded=False) if current else None
         head = navigation_hint(conn, stale_id)
+        if head is not None:
+            endpoint = conn.execute(
+                "SELECT hostname, port FROM certificates "
+                "WHERE id = ? AND source = 'scanned' AND is_leaf = 1", (head,),
+            ).fetchone()
+            if endpoint is not None:
+                head = _current_leaf_for_endpoint(conn, endpoint["hostname"], endpoint["port"])
     return CurrentCertificateRef(head, superseded=True) if head is not None else None
 
 

@@ -68,6 +68,15 @@ at once can't both migrate. Before any migration runs, the database is backed
 up. `tests/test_schema_migration_invariants.py` compares a fresh schema with
 one upgraded from real historical versions.
 
+Operational readers share `database/dashboard_helpers.py`'s current-leaf
+selection. For scanned certificates, each hostname and port has one head:
+prefer a leaf no other leaf on that endpoint replaces, then newest creation
+time and rowid. A lineage cycle falls back to newest. Uploaded leaves remain
+individual records. Inventory, alerts, renewal baselines, digests, routing
+previews and chain-cache refreshes all use this population. Detail pages
+redirect surviving non-head scanned IDs to the head after checking its scope;
+explicit historical record reads and stored alert-routing snapshots stay exact.
+
 ## Configuration
 
 `config/field_specs.py` declares every setting once: environment names,
