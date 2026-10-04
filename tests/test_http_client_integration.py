@@ -7,6 +7,7 @@ local threaded HTTP/HTTPS servers (no mocks, no external network).
 from __future__ import annotations
 
 import json
+import os
 import re
 import socket
 import ssl
@@ -234,6 +235,17 @@ def test_redirect_allowed_within_loopback_transport(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+# The future-clock CI job shifts only Python's wall clock (time-machine). These
+# tests mint a certificate from that clock and then let OpenSSL, which reads
+# the real clock, verify it in a live handshake, so the certificate is "not yet
+# valid". The clock mismatch is an artifact of the job, not a product date bug.
+_OPENSSL_CLOCK_SPLIT = pytest.mark.skipif(
+    bool(os.environ.get("CERT_WATCH_TEST_CLOCK_OFFSET_DAYS")),
+    reason="OpenSSL verifies against the real clock; the future-clock job shifts only Python's",
+)
+
+
+@_OPENSSL_CLOCK_SPLIT
 def test_https_with_hostname_pinning_and_sni(tmp_path, monkeypatch):
     """HTTPS connects to the pinned IP with the original hostname as SNI."""
 
@@ -268,6 +280,7 @@ def test_https_with_hostname_pinning_and_sni(tmp_path, monkeypatch):
             assert b"HOST:test.example.com" in resp.read()
 
 
+@_OPENSSL_CLOCK_SPLIT
 def test_https_non_standard_port_host_header(tmp_path, monkeypatch):
     """Non-standard HTTPS port is preserved in the Host header."""
 

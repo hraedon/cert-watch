@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import socket
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -19,6 +20,26 @@ from cryptography.hazmat.primitives.serialization import (
     pkcs12,
 )
 from cryptography.x509.oid import NameOID
+
+# Future-clock canary (the CI job `test-future-clock`): move the wall clock
+# forward for the whole session so a test that pins a fixed date while product
+# code reads "now" fails. This runs at conftest import, before any fixture or
+# module-level test code, in every xdist worker. time-machine shifts only the
+# wall clock (time.time, datetime.now, date.today); time.monotonic stays real,
+# so timed waits and thread joins still expire. libfaketime, used before, faked
+# the monotonic clock too, which hung timed waits under Python 3.14 (or, with
+# FAKETIME_DONT_FAKE_MONOTONIC, segfaulted workers).
+_CLOCK_OFFSET_DAYS = os.environ.get("CERT_WATCH_TEST_CLOCK_OFFSET_DAYS")
+if _CLOCK_OFFSET_DAYS:
+    import datetime as _dt
+
+    import time_machine
+
+    _FUTURE_CLOCK = time_machine.travel(
+        _dt.datetime.now(_dt.UTC) + _dt.timedelta(days=int(_CLOCK_OFFSET_DAYS)),
+        tick=True,
+    )
+    _FUTURE_CLOCK.start()
 
 
 class FakeTransport:
