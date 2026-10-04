@@ -23,6 +23,13 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
+## Upgrading from 1.2.0 to 1.2.1
+
+A drop-in upgrade: no database migrations, no new or changed settings, no API
+changes. Upgrade the usual way for your hosting model and confirm `/readyz`
+returns 200. If you run the container image, 1.2.1 also picks up Debian's fixed
+OpenSSL (CVE-2026-75804, CVE-2026-84782).
+
 ## Upgrading from 1.1.1 to 1.2.0
 
 1.2.0 adds durable renewal reports, scan-backed deployment verification,
