@@ -35,6 +35,8 @@ dev = [
     "mypy>=2.1,<3",
     "djlint>=1.39,<1.40",
     "freezegun>=1.5",
+    # The future-clock CI job (tests/conftest.py, CERT_WATCH_TEST_CLOCK_OFFSET_DAYS).
+    "time-machine>=2.16",
     # Plan 050: real TLS/AUTH SMTP receivers in the hermetic routing tests.
     "aiosmtpd>=1.4.6",
 ]
