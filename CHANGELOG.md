@@ -4,6 +4,13 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Documentation
+
+- `docs/handover.md`: a start-here page for someone inheriting a running
+  installation, with a site sheet to fill in outside the repository, the rules
+  that are easy to break, a routine checklist, and the upgrade and rollback
+  path.
+
 ### Fixed
 
 - Browse counted every scanned leaf an endpoint held but showed only one row
