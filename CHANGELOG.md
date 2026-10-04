@@ -4,6 +4,14 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-04
+
+A maintenance release with no migrations and no configuration changes. Release
+images now carry current Debian security updates again (they had been built on
+an OpenSSL with known CVEs since 2026-10-01). Browse's counts and pagination
+now agree with the rows it lists, and there's a new start-here page for whoever
+inherits a running installation.
+
 ### Documentation
 
 - `docs/handover.md`: a start-here page for someone inheriting a running
