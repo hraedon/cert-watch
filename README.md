@@ -69,6 +69,7 @@ production.
 | [Alerting](docs/alerting.md) | How alerts are raised, routed, delivered and retried |
 | [Reporting renewals from automation](docs/renewal-reports.md) | Renewal-report keys, API outcomes, verification, and tested Certbot/acme.sh hooks |
 | [Operations](docs/operations.md) | Monitoring, backups, retention, secrets, troubleshooting |
+| [Taking over an installation](docs/handover.md) | Start here if you inherited a running cert-watch: site sheet, rules that are easy to break, routine, upgrading |
 | [Upgrading](UPGRADING.md) | What changed between versions, and what to do about it |
 | [Security](SECURITY.md) and [threat model](docs/threat-model.md) | Reporting a vulnerability; what cert-watch defends against |
 | [Architecture](docs/architecture.md) | How the code is organised, for contributors |
