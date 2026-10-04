@@ -92,8 +92,10 @@ jobs:
     # The full suite takes ~5 minutes under faketime. Three runs since
     # 2026-10-03 hung at ~97% until GitHub's 6-hour limit (same image and
     # libfaketime as the passing runs; it doesn't reproduce locally), which
-    # also blocks `release`. Fail fast instead.
-    timeout-minutes: 20
+    # also blocks `release`. Fail fast instead. Serial (-n0 -v) until the hang
+    # is found: xdist workers' stderr never reaches this log, so a parallel
+    # run can't name the stuck test or show faulthandler's dump.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -114,7 +116,7 @@ jobs:
           # faulthandler_timeout dumps every thread's stack when one test runs
           # past 120s, so a hang names the test and where it is blocked.
           faketime -f "@$FUTURE" .venv/bin/pytest -q --no-cov \
-            -p no:cacheprovider -o faulthandler_timeout=120 \
+            -p no:cacheprovider -n0 -v -o faulthandler_timeout=120 \
             --ignore=tests/e2e --ignore=tests/integration .
 
   ldap-integration:
