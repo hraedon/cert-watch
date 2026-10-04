@@ -103,6 +103,11 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # One value for both builds, so the push build reuses the scanned layers.
+      - name: Daily apt refresh key
+        id: apt
+        run: echo "day=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
@@ -124,6 +129,7 @@ jobs:
           build-args: |
             GIT_TAG=${{ steps.tag.outputs.version_tag }}
             GIT_COMMIT=${{ steps.tag.outputs.sha }}
+            APT_REFRESH=${{ steps.apt.outputs.day }}
           tags: cert-watch:scan-${{ steps.tag.outputs.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -161,6 +167,7 @@ jobs:
           build-args: |
             GIT_TAG=${{ steps.tag.outputs.version_tag }}
             GIT_COMMIT=${{ steps.tag.outputs.sha }}
+            APT_REFRESH=${{ steps.apt.outputs.day }}
           tags: ${{ steps.tag.outputs.image_tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
