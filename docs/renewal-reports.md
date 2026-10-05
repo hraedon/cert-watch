@@ -367,6 +367,27 @@ Behavior and flags were checked against the official
 and the exported hook variables and status 2 behavior against the maintained
 [`acme.sh` source](https://github.com/acmesh-official/acme.sh/blob/master/acme.sh).
 
+## Windows: Azure Key Vault through Azure Arc
+
+[`windows/Sync-AkvCertificate.ps1`](examples/renewal-reports/windows/Sync-AkvCertificate.ps1)
+is a template for Windows hosts that take their certificate from Azure Key
+Vault. It authenticates with the Azure Arc machine identity, so no Az modules
+or stored Azure credentials are needed. The cert-watch key can live in the same
+vault as a secret. Each scheduled run compares the vault's current version
+with the installed certificate. When they differ and the vault certificate is
+newer, the script reports `started`, runs your deployment step, confirms that
+the new certificate is in the store with a private key, and then reports
+`succeeded` with its fingerprint. A failure reports `failed`.
+
+The script reports nothing when the certificate is unchanged. A report
+describes a renewal attempt, not a heartbeat.
+
+The deployment step, `Invoke-CertificateUpdate`, is a stub: importing the PFX
+and rebinding IIS, RDP or a service differs on every host. The script's help
+(`Get-Help .\Sync-AkvCertificate.ps1 -Full`) covers the parameters, the Key
+Vault roles, the exit codes, the state file and scheduled-task registration.
+`Sync-AkvCertificate.Tests.ps1` holds Pester 5 tests for it.
+
 ## Troubleshooting
 
 ### My renewal shows “Deployment not confirmed”
