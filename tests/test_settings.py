@@ -309,13 +309,21 @@ def test_save_alert_config_ignores_template_for_dedicated_kind(reload_app, kind)
     ],
 )
 def test_configuring_delivery_wakes_no_channel_deferrals(
-    reload_app, tmp_path, path, data,
+    reload_app, tmp_path, path, data, monkeypatch,
 ):
     from datetime import UTC, datetime
 
     from cert_watch.alerting import Dispatcher
     from cert_watch.database import Alert, SqliteAlertRepository, init_schema
 
+    # The seeded deferral is already due, which wakes the scheduler (#168). A
+    # no-channel cycle that finishes after the save's clear writes a fresh
+    # deferral back (seen on CI under the future clock). This test is about
+    # the save, so hold the scheduler's timer until shutdown.
+    monkeypatch.setattr(
+        "cert_watch.scheduler.SystemClock.wait",
+        lambda self, event, timeout: event.wait(),
+    )
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)
