@@ -59,12 +59,14 @@ jobs:
           .venv/bin/pytest -q --no-cov -p no:cacheprovider \
             tests/test_module_coverage_floors.py
 
-      - name: Alert routing receipts (TLS SMTP and HTTP)
-        # Root-level integration modules are excluded by the default marker
-        # and by the separate tests/integration job. Run them explicitly.
+      - name: Integration tests (alert receipts, scan, SSRF sockets)
+        # Every integration-marked test outside tests/e2e and tests/integration
+        # (those have their own jobs). Selected by directory, not by file name,
+        # so a new module cannot fall out of CI (WI-149); test_ci_test_owners.py
+        # holds the inventory.
         run: >-
-          .venv/bin/pytest -m integration -q --no-cov -n0
-          tests/test_alert_targets.py tests/test_alert_routing_matrix.py
+          .venv/bin/pytest -m integration -q --no-cov -n0 tests
+          --ignore=tests/e2e --ignore=tests/integration --ignore=tests/deploy
 
   test-runtime-python:
     # The container image runs Python 3.14 while the job above runs 3.13 (the

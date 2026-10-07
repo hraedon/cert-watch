@@ -296,3 +296,62 @@ def test_ldap_probe_reports_a_malformed_user_filter(reload_app, monkeypatch):
     body = r.json()
     assert body["ok"] is False
     assert "User search filter" in body["error"]
+
+
+# ---------- the problem is visible in the UI, not only the log (1.2.3) ----------
+
+
+def _ldap_app(reload_app, user_filter):
+    return reload_app(
+        AUTH_PROVIDER="ldap",
+        LDAP_SERVER="ldaps://dc.example.com",
+        LDAP_BASE_DN="DC=example,DC=com",
+        LDAP_USER_FILTER=user_filter,
+        CERT_WATCH_LOCAL_ADMIN_USER="admin",
+        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("local-pw", n=2**4, r=1, p=1),
+        CERT_WATCH_COOKIE_SECURE="0",
+    )
+
+
+def _admin_health(client):
+    r = client.post("/login", data={"username": "admin", "password": "local-pw"},
+                    follow_redirects=False)
+    assert r.status_code == 303 and "error" not in r.headers["location"]
+    return client.get("/api/health").json()
+
+
+def test_health_names_a_broken_directory_configuration(reload_app, monkeypatch):
+    _no_network(monkeypatch)
+    app_mod = _ldap_app(reload_app, SAVED_BAD_FILTER)
+    with TestClient(app_mod.app, base_url="http://localhost") as client:
+        login = client.post("/login", data={"username": "jdoe", "password": "pw"},
+                            follow_redirects=False)
+        assert "misconfigured" in login.headers["location"]
+        health = _admin_health(client)
+        ready = client.get("/readyz")
+    assert SAVED_BAD_FILTER in health["auth_config_error"]
+    assert health["overall"] == "warning"
+    # Readiness must not pull the app from a load balancer: the fix needs it up.
+    assert ready.status_code == 200
+
+
+def test_health_is_quiet_for_a_working_directory_configuration(reload_app, monkeypatch):
+    _no_network(monkeypatch)
+    app_mod = _ldap_app(reload_app, "(sAMAccountName={username})")
+    with TestClient(app_mod.app, base_url="http://localhost") as client:
+        health = _admin_health(client)
+    assert health["auth_config_error"] is None
+
+
+def test_health_reports_refused_plaintext_ldap(reload_app, monkeypatch):
+    _no_network(monkeypatch)
+    monkeypatch.delenv("CERT_WATCH_LDAP_ALLOW_INSECURE", raising=False)
+    app_mod = reload_app(
+        AUTH_PROVIDER="ldap", LDAP_SERVER="ldap://dc.example.com",
+        LDAP_BASE_DN="DC=example,DC=com", CERT_WATCH_LOCAL_ADMIN_USER="admin",
+        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("local-pw", n=2**4, r=1, p=1),
+        CERT_WATCH_COOKIE_SECURE="0",
+    )
+    with TestClient(app_mod.app, base_url="http://localhost") as client:
+        health = _admin_health(client)
+    assert "Insecure LDAP simple bind refused" in health["auth_config_error"]

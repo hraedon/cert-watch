@@ -21,3 +21,28 @@ def test_health_banner_shows_on_dashboard(page: Page, cert_watch_server: str) ->
 
     # Should have the ok tone class
     expect(banner).to_have_class("cw-health")  # ok state carries no tone class
+
+
+def test_health_banner_names_a_broken_directory_configuration(
+    page: Page, cert_watch_server: str,
+) -> None:
+    """A directory misconfiguration reaches the banner, not only the server log."""
+    import json
+
+    reason = "the LDAP user search filter '(uid=(username))' must contain {username}"
+    page.route(
+        "**/api/health",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({
+                "overall": "warning", "scheduler_running": True,
+                "failed_alerts_24h": 0, "undelivered_alerts": 0,
+                "endpoints_without_successful_scan": 0, "auth_config_error": reason,
+            }),
+        ),
+    )
+    page.goto(f"{cert_watch_server}/browse")
+    text = page.locator("#cw-health-text")
+    expect(text).to_have_text(f"Directory sign-in is misconfigured: {reason}")
+    expect(page.locator("#cw-health")).to_have_class("cw-health t-warn")

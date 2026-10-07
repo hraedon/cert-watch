@@ -150,11 +150,22 @@ def test_loopback_ipv6_literal_blocked_with_real_server():
             ssrf_safe_urlopen(url)
 
 
+def _names_a_loopback_ip(message: str) -> bool:
+    """Whether a refusal names the loopback address it resolved.
+
+    ``localhost`` resolves to ``::1`` first on some hosts (GitHub's runners)
+    and to ``127.0.0.1`` on others; either is the block working.
+    """
+    found = re.search(r"blocked resolved IP: (\S+)", message)
+    return found is not None and ipaddress.ip_address(found.group(1)).is_loopback
+
+
 def test_loopback_hostname_resolved_blocked():
     """``localhost`` resolves to loopback through the real resolver; the
     request is blocked before any TCP handshake."""
-    with pytest.raises(SSRFBlockedError, match=re.escape("127.0.0.1")):
+    with pytest.raises(SSRFBlockedError) as blocked:
         ssrf_safe_urlopen("http://localhost:12345/")
+    assert _names_a_loopback_ip(str(blocked.value)), str(blocked.value)
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +305,7 @@ def test_validate_webhook_url_blocks_loopback_hostname():
     rejects the resulting loopback IP."""
     err = validate_webhook_url("http://localhost:8080/webhook")
     assert err is not None
-    assert "127.0.0.1" in err
+    assert _names_a_loopback_ip(err), err
 
 
 def test_validate_webhook_url_allows_rfc1918_with_subnet():

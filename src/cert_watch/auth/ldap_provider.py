@@ -148,7 +148,7 @@ class LDAPAuthProvider(AuthProvider):
         # Checked once here so a bad filter is reported when the provider is
         # built (startup, or saving Settings → Sign-in), not only as failed
         # sign-ins. Never raised: the local account must stay usable to fix it.
-        self.config_error = self._filter_config_error()
+        self._filter_error = self._filter_config_error()
         if self.config_error:
             logger.error("LDAP sign-in will fail until this is fixed: %s", self.config_error)
         endpoints = [value.strip() for value in server_url.split(",") if value.strip()]
@@ -167,6 +167,12 @@ class LDAPAuthProvider(AuthProvider):
                 "LDAP auth requires the 'ldap3' package. "
                 "Install it with: pip install cert-watch[auth-ldap]"
             ) from None
+
+    @property
+    def config_error(self) -> str | None:
+        return insecure_ldap_error(
+            self.server_url, start_tls=self.start_tls, allow_insecure=self.allow_insecure,
+        ) or self._filter_error
 
     def _filter_config_error(self) -> str | None:
         user_error = user_filter_error(self.user_search_filter)
@@ -282,8 +288,8 @@ class LDAPAuthProvider(AuthProvider):
         if insecure_error:
             # Shown as-is (pre-1.0 hardening): it names the setting to change.
             return AuthResult(success=False, error=insecure_error, unavailable=True)
-        if self.config_error:
-            logger.error("LDAP sign-in refused: %s", self.config_error)
+        if self._filter_error:
+            logger.error("LDAP sign-in refused: %s", self._filter_error)
             return AuthResult(success=False, error=LDAP_MISCONFIGURED, unavailable=True)
         try:
             import ldap3

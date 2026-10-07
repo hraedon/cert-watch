@@ -262,6 +262,10 @@ class _CompositeProvider(AuthProvider):
         return self._primary.provider_label
 
     @property
+    def config_error(self) -> str | None:
+        return self._primary.config_error
+
+    @property
     def supports_form_login(self) -> bool:
         return True
 

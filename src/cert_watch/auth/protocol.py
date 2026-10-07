@@ -56,6 +56,15 @@ class AuthProvider(ABC):
         """Whether a local break-glass admin is configured."""
         return False
 
+    @property
+    def config_error(self) -> str | None:
+        """Why this provider cannot sign anyone in as configured, else None.
+
+        ``/api/health`` reports it to administrators, so the problem shows in
+        the UI and not only in the server log. Never contains a secret.
+        """
+        return None
+
 
 class NoAuthProvider(AuthProvider):
     """Default: no authentication required. All requests pass through."""

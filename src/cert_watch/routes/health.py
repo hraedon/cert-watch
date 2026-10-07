@@ -352,6 +352,9 @@ def build_api_health_response(request: Request) -> JSONResponse:
     checks["break_glass_enabled"] = (
         getattr(auth, "is_break_glass_enabled", False)
     ) if auth else False
+    # Directory sign-in that cannot work locks out every directory user while
+    # the app itself looks healthy; the reason used to reach only the log.
+    checks["auth_config_error"] = getattr(auth, "config_error", None) if auth else None
 
     # Overall color
     overall = "ok"
@@ -368,6 +371,7 @@ def build_api_health_response(request: Request) -> JSONResponse:
         or _count(checks, "undelivered_alerts") > 0
         or _count(checks, "endpoints_without_successful_scan") > 0
         or checks.get("last_scan_status") in ("failure", "partial")
+        or checks["auth_config_error"]
     ):
         overall = "warning"
 

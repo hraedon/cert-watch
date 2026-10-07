@@ -277,6 +277,9 @@
       if (data.undelivered_alerts > 0) {
         parts.push(data.undelivered_alerts + ' alert' + (data.undelivered_alerts > 1 ? 's' : '') + ' still undelivered');
       }
+      if (data.auth_config_error) {
+        parts.push('Directory sign-in is misconfigured: ' + data.auth_config_error);
+      }
       if (data.overall === 'ok') parts = ['Monitoring pipeline healthy'];
       stripText.textContent = parts.join(' · ') || (data.overall === 'critical'
         ? 'Monitoring pipeline has a problem; ask an administrator'
