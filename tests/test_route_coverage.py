@@ -456,7 +456,17 @@ def test_api_health_counts_undelivered_when_only_a_webhook_is_configured(reload_
     assert data["undelivered_alerts"] == 1
 
 
-def test_api_health_counts_a_sending_alert_with_an_expired_lease(reload_app, tmp_path):
+def test_api_health_counts_a_sending_alert_with_an_expired_lease(
+    reload_app, tmp_path, monkeypatch,
+):
+    # An expired lease is a scheduler wake deadline (#168). If the scheduler
+    # thread's first pass runs after the insert (a slow CI runner), it recovers
+    # the row before /api/health reads it. Hold its timer until shutdown, as
+    # the readyz backlog test does.
+    monkeypatch.setattr(
+        "cert_watch.scheduler.SystemClock.wait",
+        lambda self, event, timeout: event.wait(),
+    )
     app_mod = reload_app(SMTP_HOST="relay.example.invalid")
     db = str(tmp_path / "cert-watch.sqlite3")
     with TestClient(app_mod.app) as client:
