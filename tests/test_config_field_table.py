@@ -126,3 +126,22 @@ def test_settings_repr_redacts_every_sensitive_field(tmp_path):
         assert canary not in rendered, field_name
         assert f"{field_name}=" not in rendered, field_name
     assert str(settings) == rendered
+
+
+def test_csrf_secret_file_is_the_csrf_key_not_a_derived_one(tmp_path, monkeypatch):
+    """The IIS web.config points CERT_WATCH_CSRF_SECRET_FILE at secrets\\csrf_secret.
+
+    WI-147: before the field table (f2833d3) that file was ignored and the CSRF
+    key was derived from the auth secret, so an operator rotating the file
+    changed nothing. Pin that the file really is the key.
+    """
+    from cert_watch.app import _resolve_security
+
+    monkeypatch.delenv("CERT_WATCH_CSRF_SECRET", raising=False)
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", "auth-secret-for-test")
+    secret_file = tmp_path / "csrf_secret"
+    secret_file.write_text("csrf-from-file\n")
+    monkeypatch.setenv("CERT_WATCH_CSRF_SECRET_FILE", str(secret_file))
+
+    assert _resolve_security(Settings.from_env()).csrf_secret == "csrf-from-file"
