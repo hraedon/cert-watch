@@ -1,5 +1,19 @@
 # API reference
 
+## CSV expiry reports
+
+`GET /api/reports/expiring.csv?days=30` lists certificates whose leaf or stored
+chain expires within the requested window, including already expired chains.
+The `not_after` and `days_remaining` columns describe the earliest expiry in
+that chain; `subject` and `issuer` still identify the leaf. The window defaults
+to 30 days and is bounded to 1–365 days. Rows without a certificate are omitted,
+and the caller's inventory scope applies.
+
+`GET /api/export/certificates.csv` includes separate leaf and chain rows under
+one twelve-column header. Chain rows leave `chain_valid`, `condition`,
+`monitoring`, `renewal`, and `delivery` empty because those fields describe the
+complete leaf-chain result or endpoint.
+
 ## Inventory renewal filter
 
 Inventory endpoints that accept the public `renewal` filter use one shared

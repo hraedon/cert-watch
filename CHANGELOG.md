@@ -4,6 +4,17 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Scheduled alert delivery now wakes for pending retries and expired delivery
+  leases, even when no host scan is due. The persisted retry deadline no longer
+  waits for the next scan cycle; an instance without configured delivery
+  channels retains its hourly deferral.
+- Certificate CSV exports now write all twelve columns for chain certificates,
+  leaving endpoint-only status axes empty. The expiring CSV report includes
+  endpoints whose chain expires before the leaf, and reports the date and days
+  remaining of the certificate that limits the chain's lifetime.
+
 ## [1.2.1] - 2026-10-04
 
 A maintenance release with no migrations and no configuration changes. Release

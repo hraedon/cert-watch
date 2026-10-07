@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -333,6 +334,17 @@ def _seconds_until_next_rule_pass(
     return max(0.0, (due - current).total_seconds())
 
 
+def _seconds_until_next_alert_delivery(
+    db_path: str | Path, *, now: datetime | None = None,
+) -> float:
+    """Wake delivery for persisted retries even when no host scan is due."""
+    from cert_watch.database import AlertStore
+
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    due = AlertStore(db_path, initialize=False).next_delivery_at()
+    return max(0.0, (due - current).total_seconds()) if due is not None else float("inf")
+
+
 class Clock(Protocol):
     """Time source used by the scheduler loop and digest budget."""
 
@@ -497,22 +509,38 @@ class Scheduler:
                         daily_deadline = _next_daily_time(current_hour, current_minute, now)
                         daily_schedule = (current_hour, current_minute)
                     cycle_wait = max(0.0, (daily_deadline - now).total_seconds())
-                    try:
-                        cycle_wait = min(
-                            cycle_wait,
-                            _seconds_until_next_scan(
+                    for name, seconds_until in (
+                        (
+                            "host scan",
+                            partial(
+                                _seconds_until_next_scan,
                                 self.context.settings.db_path,
                                 current_hour,
                                 current_minute,
                                 now=now,
                             ),
-                            _seconds_until_next_rule_pass(
+                        ),
+                        (
+                            "renewal rule",
+                            partial(
+                                _seconds_until_next_rule_pass,
                                 self.context.settings.db_path,
                                 now=now,
                             ),
-                        )
-                    except Exception:
-                        logger.exception("could not calculate host scan cadence")
+                        ),
+                        (
+                            "alert delivery",
+                            partial(
+                                _seconds_until_next_alert_delivery,
+                                self.context.settings.db_path,
+                                now=now,
+                            ),
+                        ),
+                    ):
+                        try:
+                            cycle_wait = min(cycle_wait, seconds_until())
+                        except Exception:
+                            logger.exception("could not calculate %s deadline", name)
                     cycle_wait = max(
                         cycle_wait, next_cycle_allowed - self.clock.monotonic(),
                     )

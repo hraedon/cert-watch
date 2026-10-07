@@ -64,6 +64,22 @@ def expiry_urgency(days: int | None) -> str:
     return "healthy"
 
 
+def effective_not_after(
+    leaf_not_after: str | datetime,
+    chain_not_afters: Iterable[str | datetime],
+) -> str | datetime:
+    """Return the original expiry value of the earliest leaf or chain certificate.
+
+    Compare instants rather than their text or rounded day counts, so offsets
+    and certificates expiring on the same day still select the right date.
+    With no chain, the leaf's own expiry remains authoritative.
+    """
+    return min(
+        [leaf_not_after, *chain_not_afters],
+        key=lambda value: _as_datetime(value).astimezone(UTC),
+    )
+
+
 def effective_days(
     leaf_not_after: str | datetime,
     chain_not_afters: Iterable[str | datetime],

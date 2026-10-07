@@ -14,28 +14,37 @@ services/                     one function per operation: validate, authorize, t
 alerting/                     alert rules, routing, dispatch, transports, digests
 scan*.py, cert_chain.py,      acquiring certificates and judging them
 posture.py, policy*.py
-database/, migrations/        all SQL; schema history
+database/, migrations/        repositories, shared SQL helpers; schema history
 config/                       settings: one table, one loader, one runtime snapshot
 auth/, security/              identity, sessions, guards, CSRF, rate limiting, headers
 ```
 
 Calls go downward: routes call presenters and services; services call the
-domain modules and `database/`; nothing below `routes/` imports FastAPI or
-Starlette. `tests/test_alerting_layering.py` enforces the direction for the
-alerting package. Elsewhere it is a convention that reviewers check.
+domain modules and `database/`. `tests/test_alerting_layering.py` enforces the
+direction for the alerting package. Elsewhere it is a convention that reviewers
+check.
+
+Services and presenters have no direct FastAPI or Starlette imports. Framework
+adapters also live in `app.py`, `middleware.py`, `auth/guards.py`,
+`auth/request_context.py` and `security/`; `audit.py` and `filters.py` use
+framework types for request and template helpers.
 
 ### Routes are adapters
 
 Every page and endpoint does four things: authenticate and authorise through
 exactly one guard from `auth/guards.py`, turn the request into typed inputs,
 call one service (for a change) or build one presenter (for a page), and turn
-the result into a response. The HTML route and the JSON route for the same
-operation call the same service. `UI-INVENTORY.md` lists those pairs, and
-`tests/test_ui_inventory_contract.py` proves both reach the service.
+the result into a response. The executable write-contract table in
+`UI-INVENTORY.md` lists HTML/JSON adapter pairs with one service owner;
+`tests/test_ui_inventory_contract.py` proves both reach that service.
 
-Because the JSON API covers every operation the UI performs
-(`tests/test_api_completeness.py`), it is a complete seam: a different front
-end could be built on it without touching anything below `routes/`.
+The JSON API covers the operational mutations enumerated by
+`tests/test_api_completeness.py`, including those executable write contracts.
+That test explicitly excludes browser/session workflows and control-plane
+operations: login, logout and setup; manual alert flushing; authentication and
+LDAP role mappings, LDAP probing and CA pinning; SMTP configuration and testing;
+alert and event forwarding configuration; password changes and user/role
+administration. These operations retain their browser routes.
 
 ### Services own the rules
 
@@ -56,10 +65,12 @@ estate.
 
 ## The data
 
-`database/` holds all SQL. Most of it is plain functions over a connection;
-`alert_store.py` owns the alert lifecycle. Connections are cached per thread,
-and a process-wide re-entrant lock serialises writes. SQLite in WAL mode lets
-readers carry on during a write.
+`database/` provides repositories and shared SQL helpers; `alert_store.py` owns
+the alert lifecycle. SQL also remains in services such as `renewal_reports.py`,
+`host_edit.py` and `alert_state.py`, and in runtime modules including `scan.py`,
+`scheduler.py` and `audit.py`. Connections are cached per thread, and a
+process-wide re-entrant lock serialises writes. SQLite in WAL mode lets readers
+carry on during a write.
 
 The schema is defined only by the numbered migrations in `migrations/`,
 starting from the 0001 baseline. Each migration and its version row commit
@@ -114,11 +125,14 @@ redirect for outbound HTTP.
 
 ## The scheduler
 
-A single thread runs the daily cycle: scan what is due, evaluate alert rules,
+A single thread runs cycles on the daily schedule and when scans, renewal
+checks or persisted delivery retries are due: scan, evaluate alert rules,
 deliver, send digests, purge by retention. Each phase is isolated, so one
 failure doesn't stop the rest. The cycle holds a lock that the manual *flush*
-action also respects. Alert claims make double delivery impossible even
-without it. Shutdown cancels queued work rather than draining it.
+action also respects. Alert leases prevent concurrent workers from claiming
+the same delivery while its lease is valid. Delivery is still at least once:
+a crash after a receiver accepts a message but before its receipt is stored
+can cause a retry. Shutdown cancels queued work rather than draining it.
 
 ## Security boundaries
 
