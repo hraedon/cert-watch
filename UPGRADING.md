@@ -27,7 +27,7 @@ with the CSV import; history is not carried over that way.
 
 A drop-in upgrade: no database migrations, no new settings, no API changes.
 Upgrade the usual way for your hosting model and confirm `/readyz` returns 200.
-Three things may look different:
+Five things may look different:
 
 - **Directory sign-in with a broken search filter.** If the LDAP user search
   filter cannot work, cert-watch logs an error naming it at startup, and sign-in
@@ -40,6 +40,13 @@ Three things may look different:
   From each host's next scan they show no CAA finding and drop out of that
   ratio. This covers IP addresses, single-label and `.local`-style names, and
   names whose CAA lookup your resolver cannot answer.
+- **Alert retries run on their own schedule.** A delivery that failed is
+  retried when its backoff expires, instead of at the next host scan, so a
+  recovered mail relay or webhook receives the backlog sooner.
+- **One current certificate per endpoint everywhere.** If an old alias merge
+  left an endpoint with two scanned certificates, alerts, renewal decisions,
+  digests and routing previews now use the same one inventory shows. A link to
+  the other one redirects to the current certificate.
 - **A new `serial_number` posture warning** on any certificate with a zero or
   negative serial. It does not change the grade. Plan to replace such a
   certificate: a future `cryptography` release will refuse to parse it.
