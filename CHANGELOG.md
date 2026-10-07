@@ -4,6 +4,14 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-10-07
+
+A maintenance release with no migrations and no configuration changes. A
+directory sign-in that cannot work as configured now shows in the health strip
+and in `/api/health`, not only in the server log. Fifteen integration tests
+that no CI job ran are now selected, and an inventory test stops that from
+happening again.
+
 ### Added
 
 - `/api/health` reports `auth_config_error` to administrators: why directory
@@ -19,7 +27,10 @@ All notable changes to cert-watch are documented in this file.
   sockets) ran in no CI job, because the CI step named its files explicitly.
   CI now selects integration tests by directory, and
   `tests/test_ci_test_owners.py` fails when an opt-in test module has no
-  runner (WI-149).
+  runner (WI-149). Their first CI run found two that had gone stale: they
+  expected `localhost` to be refused as `127.0.0.1`, but GitHub's runners
+  resolve `::1` first. The guard blocked it correctly; the tests now accept
+  either loopback address.
 - The browser-suite fixtures for role gating and visual comparison wrote server
   output to pipes nobody read, which could stall requests on Windows. They now
   use the shared server helper and keep the output in `server.log`.
