@@ -23,6 +23,15 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
+## Upgrading from 1.2.2 to 1.2.3
+
+A drop-in upgrade: no database migrations, no new settings, no API removals.
+Upgrade the usual way for your hosting model and confirm `/readyz` returns 200.
+`/api/health` gains `auth_config_error` for administrators. When directory
+sign-in cannot work as configured, the health strip turns amber and says why;
+`/readyz` is unaffected. If you poll `/api/health` from monitoring, an amber
+`overall` can now also mean a directory misconfiguration.
+
 ## Upgrading from 1.2.1 to 1.2.2
 
 A drop-in upgrade: no database migrations, no new settings, no API changes.
