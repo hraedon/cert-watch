@@ -162,13 +162,13 @@ settings that can also be saved from the web interface.
 | `LDAP_BASE_DN` | — | yes | Base DN for the user search. |
 | `LDAP_BIND_DN` | — | yes | DN of the service account used for the search. |
 | `LDAP_BIND_PASSWORD` (also `_FILE`) | — | yes | Password of the search service account. |
-| `LDAP_USER_FILTER` | `(sAMAccountName={username})` | yes | Search filter; `{username}` is replaced with the escaped user name. |
+| `LDAP_USER_FILTER` | `(sAMAccountName={username})` | yes | Search filter; `{username}` is replaced with the escaped user name. It must contain `{username}` and parse as an LDAP filter, or directory sign-in is refused as misconfigured. |
 | `LDAP_START_TLS` | `0` | yes | `1` upgrades `ldap://` connections with StartTLS. |
 | `LDAP_CA_CERT` (also `_FILE`) | — | yes | CA certificate (PEM, or a path to one) for verifying the directory's TLS certificate. |
 | `LDAP_REQUIRED_GROUPS` | — | yes | Comma-separated group DNs; users outside all of them can't sign in. Nested membership counts. |
 | `LDAP_CONNECT_TIMEOUT` | `5` | yes | Seconds to wait for each directory server. Range 1–300. |
 | `CERT_WATCH_LDAP_ALLOW_INSECURE` | `0` |  | `1` permits a simple bind over plain `ldap://` without StartTLS, sending directory passwords in cleartext. Off by default; a migration escape hatch only. |
-| `LDAP_GROUP_FILTER` | — | yes | Filter for the group membership check, with `{group}` as the group DN. The default uses Active Directory's nested-membership rule; use `member={group}` for other directories. |
+| `LDAP_GROUP_FILTER` | — | yes | Filter for the group membership check, with `{group}` as the group DN; outer parentheses are optional. The default uses Active Directory's nested-membership rule; use `member={group}` for other directories. |
 
 ### Sign-in: OAuth / OIDC
 

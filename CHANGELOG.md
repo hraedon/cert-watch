@@ -30,6 +30,39 @@ All notable changes to cert-watch are documented in this file.
   or renewal baselines. Detail links to a surviving superseded leaf redirect
   to the current certificate on that endpoint; uploaded certificates and
   explicit historical record reads retain their existing behavior (#156).
+- A malformed LDAP user search filter made every directory sign-in fail with
+  "invalid credentials". Releases before 1.0 ignored the filter saved under
+  Settings → Sign-in, so upgrading applied a saved filter that had never been
+  used; one with `(username)` in place of `{username}` failed in ldap3 as
+  "malformed filter". cert-watch now checks the user filter (and
+  `LDAP_GROUP_FILTER` when `LDAP_REQUIRED_GROUPS` is set) when it builds the
+  provider and logs an error naming the filter, refuses to save a filter that
+  cannot work, and reports it from **Test connection**. Sign-in now says that
+  directory sign-in is misconfigured, without contacting the directory, and the
+  local account still works. A user filter without its outer parentheses, and
+  a group filter with them, now work as written.
+- Sign-in hid every directory configuration failure behind the local account's
+  "invalid credentials", including the refusal of plaintext `ldap://`. Each
+  such failure now shows its own message. Directory answers that depend
+  on the username stay hidden, so the message reveals nothing about which
+  accounts exist.
+- A CAA lookup that failed (for example, an internal resolver answering
+  SERVFAIL for a top-level domain) was recorded as "No CAA records found". The
+  posture finding asserted an absence nobody had observed, and the compliance
+  report counted the host as missing CAA. A failed lookup is now unknown: no
+  CAA finding, and the host is left out of the CAA ratio. IP addresses,
+  single-label names and special-use names (`.local`, `.internal`,
+  `.home.arpa`, `.test` and the like) are no longer looked up at all, because
+  CAA cannot apply to them. The lookup-failure warning now names the host being
+  checked.
+- Removed a stray empty file named `assert` from the repository root.
+
+### Added
+
+- A `serial_number` posture finding (warning, not graded) for a certificate
+  whose serial number is zero or negative. RFC 5280 forbids this. The
+  `cryptography` library warns about it without naming the certificate, and a
+  future release will refuse to parse it.
 
 ## [1.2.1] - 2026-10-04
 

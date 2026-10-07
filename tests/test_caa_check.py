@@ -308,3 +308,84 @@ def test_compliance_report_caa_metric_not_collected_when_empty(tmp_path):
     caa_metric = next(m for m in report.compliance_metrics if m.label == "CAA present for domain")
     assert caa_metric.collected is False
     assert caa_metric.display == "Not collected"
+
+
+# ---------- names CAA cannot govern (no lookup, unknown result) ----------
+
+
+import pytest  # noqa: E402
+
+from cert_watch.caa_check import caa_not_applicable  # noqa: E402
+
+
+@pytest.mark.parametrize(("name", "reason"), [
+    ("10.1.2.3", "IP addresses"),
+    ("2001:db8::1", "IP addresses"),
+    ("[2001:db8::1]", "IP addresses"),
+    ("fileserver", "single-label"),
+    ("dc01.corp.local", ".local"),
+    ("DC01.CORP.LOCAL.", ".local"),
+    ("printer.home.arpa", ".home.arpa"),
+    ("app.internal", ".internal"),
+    ("www.example", ".example"),
+])
+def test_caa_not_applicable(name, reason):
+    assert reason in (caa_not_applicable(name) or "")
+
+
+@pytest.mark.parametrize("name", ["example.com", "www.notlocal.com", "local.example.org"])
+def test_caa_applies_to_public_names(name):
+    assert caa_not_applicable(name) is None
+
+
+def test_check_caa_skips_the_lookup_for_special_use_names(monkeypatch):
+    import dns.resolver
+
+    def _refuse(domain, rdtype):
+        raise AssertionError(f"unexpected CAA query for {domain}")
+
+    monkeypatch.setattr(dns.resolver, "resolve", _refuse)
+    result = check_caa("dc01.corp.local")
+    assert result.records == []
+    assert ".local" in result.error
+
+
+def test_check_caa_failure_log_names_the_host_being_checked(monkeypatch, caplog):
+    import dns.resolver
+
+    def _servfail(domain, rdtype):
+        if domain == "com":
+            raise dns.resolver.NoNameservers("SERVFAIL")
+        raise dns.resolver.NoAnswer()
+
+    monkeypatch.setattr(dns.resolver, "resolve", _servfail)
+    check_caa("www.example.com")
+    assert any("checking www.example.com" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize(("result", "expected"), [
+    (CAAResult("h.example.com", [], True, True, error="DNS lookup failed: SERVFAIL"), None),
+    (CAAResult("h.corp.local", [], True, True, error="CAA does not apply"), None),
+    (CAAResult("h.example.com", [], True, True), False),
+    (CAAResult("h.example.com", ['issue "ca.example"'], True, True), True),
+])
+def test_scan_records_an_unanswered_caa_lookup_as_unknown(
+    monkeypatch, tmp_path, result, expected,
+):
+    """A failed lookup is not "no CAA records": False is a confirmed absence that
+    the posture finding and the compliance CAA ratio both count."""
+    from cert_watch.certificate_model import parse_certificate
+    from cert_watch.database.schema import init_schema
+    from cert_watch.scan import ScannedEntry, _evaluate_and_store_posture
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    stored = {}
+    monkeypatch.setattr("cert_watch.caa_check.check_caa", lambda _host: result)
+    monkeypatch.setattr(
+        "cert_watch.database.store_scan_posture", lambda *a, **kw: stored.update(kw),
+    )
+    leaf = parse_certificate(_caa_valid_cert_der())
+    _evaluate_and_store_posture(db, "cert-id", ScannedEntry(host=result.domain, port=443,
+                                                            leaf=leaf, chain=[]))
+    assert stored["caa_present"] is expected

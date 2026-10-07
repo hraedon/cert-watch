@@ -561,7 +561,10 @@ def _evaluate_posture(
         from cert_watch.caa_check import check_caa
         try:
             caa_result = check_caa(entry.host)
-            caa_present = bool(caa_result.records) and not caa_result.error
+            # A failed or inapplicable lookup is unknown, not "no CAA": the
+            # posture finding and the compliance CAA ratio both read False
+            # as a confirmed absence.
+            caa_present = None if caa_result.error else bool(caa_result.records)
             caa_records = caa_result.records
         except (OSError, ValueError):
             caa_present = None
