@@ -82,6 +82,7 @@ failed, and red when the scheduler or the database is down:
 | `failed_alerts_24h` | Alerts not delivered whose delivery failed in the last 24 hours: gave up in that time (counted from when they gave up, attempt or not), or still retrying after a refused or failed attempt (an HTTP 500 from the webhook, say) |
 | `undelivered_alerts` | Alerts still pending a day after creation, or stuck in a sending lease; only when SMTP or a webhook is configured |
 | `endpoints_without_successful_scan` | Endpoints in your scope that have never been scanned successfully (Home's "without a successful scan" chip) |
+| `auth_config_error` | Not a count: why directory sign-in cannot work as configured (an LDAP search filter that cannot parse, or plaintext `ldap://` without `LDAP_START_TLS`), else `null`. Sign in with the local account and fix it under Settings → Sign-in. `/readyz` deliberately ignores it, so a load balancer keeps the app reachable for the fix |
 
 Its timestamps are UTC, like the rest of the UI.
 
