@@ -4,6 +4,18 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-10-07
+
+A maintenance release with no migrations and no configuration changes.
+Directory sign-in now reports a broken LDAP search filter instead of failing
+every login as "invalid credentials". An upgrade from 0.9.x could hit this,
+because 1.0 began applying a filter saved under Settings that 0.9.x ignored.
+Alerts and renewal decisions now use the same current certificate as inventory
+(#156), and alert retries no longer wait for the next host scan. CSV exports
+are complete for chain certificates. A CAA lookup that fails is reported as
+unknown instead of "no CAA records". There is also a Windows template for
+syncing certificates from Azure Key Vault through Azure Arc.
+
 ### Documentation
 
 - `docs/examples/renewal-reports/windows/Sync-AkvCertificate.ps1`: a Windows
