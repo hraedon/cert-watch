@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from cert_watch.database.connection import _connect, _iso, _row_to_cert, get_write_lock
+from cert_watch.database.dashboard_helpers import current_leaf_sql
 
 logger = logging.getLogger("cert_watch.database.chain_status_cache")
 
@@ -194,7 +195,7 @@ def _compute(
 
 
 def refresh_chain_status(db_path: str | Path) -> int:
-    """Recompute and publish the cached status of every leaf whose basis moved.
+    """Recompute and publish current leaves whose chain basis moved.
 
     Returns how many statuses were published. Reads never depend on this
     succeeding: a row it could not publish stays ``unverified``.
@@ -209,7 +210,7 @@ def refresh_chain_status(db_path: str | Path) -> int:
             stale = [
                 row[0]
                 for row in conn.execute(
-                    "SELECT c.id FROM certificates c WHERE c.is_leaf = 1"
+                    f"SELECT c.id FROM certificates c WHERE {current_leaf_sql('c')}"
                     f" AND c.chain_status_basis IS NOT {basis_sql('c')}",
                     (trust,),
                 )
@@ -229,7 +230,8 @@ def refresh_chain_status(db_path: str | Path) -> int:
                         continue  # anchors changed while computing: start again
                     cursor = conn.executemany(
                         "UPDATE certificates SET chain_status = ?, chain_status_basis = ?"
-                        f" WHERE id = ? AND {basis_sql('certificates')} = ?",
+                        f" WHERE id = ? AND {basis_sql('certificates')} = ?"
+                        f" AND {current_leaf_sql('certificates')}",
                         [(status, basis, leaf_id, trust, basis)
                          for status, basis, leaf_id in updates],
                     )

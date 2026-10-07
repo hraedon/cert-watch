@@ -126,23 +126,22 @@ def _render_certificate_detail(
         sched_min=settings.sched_min,
         axis_settings=AxisSettings.from_settings(settings),
     )
-    if data is None or isinstance(data, PendingHostDetailData):
-        moved = _redirect_to_current_certificate(request, db, cert_id)
-        if moved is not None:
-            if edit_values is not None:
-                current = resolve_current_certificate(db, cert_id)
-                if current is not None and not scope_read_denied(
-                    request, db, cert_id=current.cert_id
-                ):
-                    return _render_certificate_detail(
-                        request,
-                        current.cert_id,
-                        edit_values=edit_values,
-                        edit_errors=edit_errors,
-                        edit_error=edit_error,
-                        status_code=status_code,
-                    )
-            return moved
+    moved = _redirect_to_current_certificate(request, db, cert_id)
+    if moved is not None:
+        if edit_values is not None:
+            current = resolve_current_certificate(db, cert_id)
+            if current is not None and not scope_read_denied(
+                request, db, cert_id=current.cert_id
+            ):
+                return _render_certificate_detail(
+                    request,
+                    current.cert_id,
+                    edit_values=edit_values,
+                    edit_errors=edit_errors,
+                    edit_error=edit_error,
+                    status_code=status_code,
+                )
+        return moved
     if data is None:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     denied = (

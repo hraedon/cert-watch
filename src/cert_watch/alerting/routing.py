@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from cert_watch.database.connection import _sql_now
+from cert_watch.database.dashboard_helpers import current_leaf_sql
 from cert_watch.database.renewal_attempts import live_attempt_exists_sql
 
 logger = logging.getLogger("cert_watch.alerts")
@@ -173,7 +174,7 @@ def find_orphan_certs(db_path: str | Path) -> list[dict[str, Any]]:
 
     with _connect(db_path) as conn:
         leaves = conn.execute(
-            "SELECT id, subject, hostname, port FROM certificates WHERE is_leaf = 1"
+            f"SELECT id, subject, hostname, port FROM certificates c WHERE {current_leaf_sql('c')}"
         ).fetchall()
 
     orphans: list[dict[str, Any]] = []
@@ -252,11 +253,13 @@ def _resolve_group_config(
         if not groups:
             return {}, {}
 
+        # Whole-estate readers use the inventory population. Explicit IDs also
+        # support historical alert routes and must retain their exact rows.
         cert_tags_rows = active_conn.execute(
-            """SELECT c.id, c.tags, h.tags AS host_tags
+            f"""SELECT c.id, c.tags, h.tags AS host_tags
                FROM certificates c
                LEFT JOIN hosts h ON c.hostname = h.hostname AND c.port = h.port
-               WHERE c.is_leaf = 1"""
+               WHERE {current_leaf_sql('c') if cert_ids is None else 'c.is_leaf = 1'}"""
             + cert_filter,
             params,
         ).fetchall()
@@ -501,7 +504,7 @@ def resolve_pending_host_routing(
 def resolve_all_group_recipients(
     db_path: str | Path,
 ) -> dict[str, list[str]]:
-    """Return {cert_id: [recipients]} for all leaf certs in one pass.
+    """Return {cert_id: [recipients]} for all current leaf certs in one pass.
 
     Uses three targeted SQL queries instead of per-cert N+1 resolution.
     Results are identical to calling resolve_group_recipients() per cert.

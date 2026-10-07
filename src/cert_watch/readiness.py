@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from cert_watch.database.connection import _connect, _parse_iso
-from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
+from cert_watch.database.dashboard_helpers import _add_effective_tag_filter, scanned_head_rowid_sql
 from cert_watch.database.schema import init_schema
 from cert_watch.renewal_analytics import HostRenewalAnalytics, compute_fleet_analytics
 
@@ -71,16 +71,11 @@ def _current_endpoints(
     A current leaf's validity and trust must come from that same certificate,
     not another port, historical deployment, or uploaded certificate.
     """
-    sql = """SELECT h.hostname, h.port, c.not_before, c.not_after,
+    sql = f"""SELECT h.hostname, h.port, c.not_before, c.not_after,
                 (SELECT sp.chain_status FROM scan_posture sp WHERE sp.cert_id = c.id
                  ORDER BY sp.scanned_at DESC, sp.rowid DESC LIMIT 1) AS chain_status
              FROM hosts h
-             LEFT JOIN certificates c ON c.id = (
-                 SELECT current.id FROM certificates current
-                 WHERE current.hostname = h.hostname AND current.port = h.port
-                   AND current.is_leaf = 1 AND current.source = 'scanned'
-                 ORDER BY current.created_at DESC, current.rowid DESC LIMIT 1
-             )
+             LEFT JOIN certificates c ON c.rowid = ({scanned_head_rowid_sql('h')})
              WHERE 1 = 1"""
     sql, params = _add_effective_tag_filter(
         sql, [], scope_tags, col_cert=None, col_host="h.tags",

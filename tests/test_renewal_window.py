@@ -39,8 +39,8 @@ def _seed(db):
         db, cid="renewed-new", days_valid=300, hostname="r.example.com",
         replaces="renewed-old",
     )
-    _insert_cert(db, cid="far", days_valid=100)  # outside window
-    _insert_cert(db, cid="expired", days_valid=-5)  # expired -> expiry owns it
+    _insert_cert(db, cid="far", days_valid=100, hostname="far.example.com")  # outside window
+    _insert_cert(db, cid="expired", days_valid=-5, hostname="expired.example.com")  # expiry owns it
 
 
 def test_only_stalled_cert_alerts(tmp_path):

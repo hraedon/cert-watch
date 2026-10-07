@@ -13,6 +13,7 @@ from cert_watch.alerting.digest.engine import DigestTarget
 from cert_watch.alerting.model import AlertConfig, OutboundMessage
 from cert_watch.alerting.transports.smtp import _validate_email
 from cert_watch.database.connection import _connect, _parse_iso
+from cert_watch.database.dashboard_helpers import current_leaf_sql
 from cert_watch.database.schema import init_schema
 
 logger = logging.getLogger("cert_watch.alerting.digest")
@@ -155,9 +156,9 @@ def build_renewal_digest(
                 current_expiry[endpoint] = None
                 continue
             row = conn.execute(
-                """SELECT not_after FROM certificates
-                   WHERE hostname = ? AND port = ? AND is_leaf = 1 AND source = 'scanned'
-                   ORDER BY created_at DESC, rowid DESC LIMIT 1""",
+                f"""SELECT not_after FROM certificates c
+                    WHERE hostname = ? AND port = ? AND source = 'scanned'
+                      AND {current_leaf_sql('c')}""",
                 (hostname, port),
             ).fetchone()
             current_expiry[endpoint] = row["not_after"] if row is not None else None

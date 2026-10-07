@@ -20,6 +20,22 @@ CASES = {
 }
 
 
+def test_superseded_duplicate_link_and_preview_use_current_leaf(
+    page: Page, detail_estate_server: tuple[str, dict[str, str]],
+) -> None:
+    base, ids = detail_estate_server
+    page.goto(f"{base}/certificates/{ids['superseded']}?endpoint_saved=1")
+    expect(page).to_have_url(
+        f"{base}/certificates/{ids['current']}?endpoint_saved=1&superseded=1"
+    )
+    expect(page.get_by_test_id("detail-state-axes")).to_contain_text("59")
+    expect(page.get_by_role("status").filter(has_text="earlier certificate")).to_be_visible()
+    page.goto(f"{base}/settings/alert-groups/preview?match_tags=detail-team")
+    # Six monitored leaves carry the tag; the never-scanned host has no leaf,
+    # and the old duplicate must not add a seventh certificate.
+    expect(page.get_by_test_id("ag-preview-result")).to_contain_text("6 certs match")
+
+
 @pytest.mark.parametrize("case", CASES)
 def test_detail_a_renders_each_real_state_without_mobile_overflow(
     page: Page,

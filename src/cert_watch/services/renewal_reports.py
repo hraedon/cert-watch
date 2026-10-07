@@ -23,6 +23,7 @@ from cert_watch.auth.scope import (
 from cert_watch.config import Settings
 from cert_watch.database import get_write_lock
 from cert_watch.database.connection import _connect, begin_immediate
+from cert_watch.database.dashboard_helpers import scanned_head_rowid_sql
 from cert_watch.database.renewal_attempts import renewal_attempt_is_live
 from cert_watch.tags import parse_tags
 
@@ -119,12 +120,7 @@ def resolve_target(
     clause, binding_params = _binding_clause(auth)
     # An old alias merge can leave two scanned leaves on one endpoint. Match
     # the same deterministic head used by dashboard/readiness and cert_ops.
-    leaf_join = """LEFT JOIN certificates c ON c.rowid=(
-        SELECT head.rowid FROM certificates head
-        WHERE head.hostname=h.hostname AND head.port=h.port
-          AND head.is_leaf=1 AND head.source='scanned'
-        ORDER BY head.created_at DESC, head.rowid DESC LIMIT 1
-    )"""
+    leaf_join = f"LEFT JOIN certificates c ON c.rowid=({scanned_head_rowid_sql('h')})"
     with _connect(db_path) as conn:
         if hostname is not None and port is not None:
             rows = conn.execute(
@@ -148,12 +144,7 @@ def resolve_target(
                                       ORDER BY ch.scanned_at DESC LIMIT 1)
                            END AS baseline_not_after
                     FROM hosts h
-                    JOIN certificates c ON c.rowid=(
-                        SELECT head.rowid FROM certificates head
-                        WHERE head.hostname=h.hostname AND head.port=h.port
-                          AND head.is_leaf=1 AND head.source='scanned'
-                        ORDER BY head.created_at DESC, head.rowid DESC LIMIT 1
-                    )
+                    JOIN certificates c ON c.rowid=({scanned_head_rowid_sql('h')})
                     WHERE {clause} AND (
                         lower(c.fingerprint_sha256)=? OR EXISTS (
                             SELECT 1 FROM certificate_lineage cl
@@ -595,13 +586,8 @@ def clear_renewal_failure(
 
 def _current_leaf(conn: sqlite3.Connection, host_id: str) -> tuple[str | None, str | None]:
     row = conn.execute(
-        """SELECT c.fingerprint_sha256,c.not_after FROM hosts h
-           LEFT JOIN certificates c ON c.rowid=(
-               SELECT head.rowid FROM certificates head
-               WHERE head.hostname=h.hostname AND head.port=h.port
-                 AND head.is_leaf=1 AND head.source='scanned'
-               ORDER BY head.created_at DESC, head.rowid DESC LIMIT 1
-           )
+        f"""SELECT c.fingerprint_sha256,c.not_after FROM hosts h
+           LEFT JOIN certificates c ON c.rowid=({scanned_head_rowid_sql('h')})
            WHERE h.id=?""",
         (host_id,),
     ).fetchone()
@@ -1457,12 +1443,7 @@ def resolve_history_target(
             f"""SELECT h.id,h.hostname,h.port,h.tags,c.tags AS cert_tags,
                        c.fingerprint_sha256 AS baseline_fingerprint,
                        c.not_after AS baseline_not_after
-                FROM hosts h LEFT JOIN certificates c ON c.rowid=(
-                    SELECT head.rowid FROM certificates head
-                    WHERE head.hostname=h.hostname AND head.port=h.port
-                      AND head.is_leaf=1 AND head.source='scanned'
-                    ORDER BY head.created_at DESC, head.rowid DESC LIMIT 1
-                )
+                FROM hosts h LEFT JOIN certificates c ON c.rowid=({scanned_head_rowid_sql('h')})
                 WHERE h.hostname=? AND h.port=? AND ({clause}) LIMIT 1""",
             [hostname, port, *params],
         ).fetchone()
