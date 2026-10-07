@@ -4,6 +4,16 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Documentation
+
+- `docs/examples/renewal-reports/windows/Sync-AkvCertificate.ps1`: a Windows
+  template that syncs a machine certificate from Azure Key Vault using the
+  Azure Arc machine identity and reports renewals. It tracks the installed
+  certificate by thumbprint and by CN plus DNS SANs, and refuses an older
+  certificate or a changed identity unless told otherwise. The deployment step
+  is a stub you define. Pester tests run under Windows PowerShell 5.1 and
+  PowerShell 7.
+
 ### Fixed
 
 - Scheduled alert delivery now wakes for pending retries and expired delivery
