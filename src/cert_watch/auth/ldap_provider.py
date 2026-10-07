@@ -25,6 +25,91 @@ def insecure_ldap_error(
     return None
 
 
+# Shown at the sign-in page when the directory cannot be asked at all. It
+# names no configuration detail; the server log carries the reason.
+LDAP_MISCONFIGURED = (
+    "Directory sign-in is misconfigured. An administrator can sign in with the "
+    "local account and correct Settings → Sign-in; the server log has the details."
+)
+
+
+def _outer_pair_wraps_all(value: str) -> bool:
+    """Whether *value*'s first ``(`` closes at its last character.
+
+    Literal parentheses in an LDAP filter value are escaped (``\\28``/``\\29``,
+    RFC 4515), so unescaped ones are always structure and depth counting is
+    exact. ``(a)(b)`` starts and ends with parentheses but is two filters.
+    """
+    if not (value.startswith("(") and value.endswith(")")):
+        return False
+    depth = 0
+    for index, char in enumerate(value):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return index == len(value) - 1
+    return False
+
+
+def normalize_user_filter(template: str) -> str:
+    """Add the outer parentheses RFC 4515 requires when they are missing."""
+    template = template.strip()
+    if template and not _outer_pair_wraps_all(template):
+        return f"({template})"
+    return template
+
+
+def normalize_group_filter(template: str) -> str:
+    """Drop one outer pair: each group fragment is wrapped when it is built."""
+    template = template.strip()
+    if _outer_pair_wraps_all(template):
+        return template[1:-1].strip()
+    return template
+
+
+def _filter_syntax_error(search_filter: str) -> str | None:
+    try:
+        from ldap3.core.exceptions import LDAPInvalidFilterError
+        from ldap3.operation.search import parse_filter
+    except ImportError:
+        return None  # the provider refuses to start without ldap3 anyway
+    try:
+        # The arguments a default ldap3.Connection passes to the same parser.
+        parse_filter(
+            search_filter, None, auto_escape=True, auto_encode=True,
+            validator=None, check_names=False,
+        )
+    except LDAPInvalidFilterError as exc:
+        return str(exc)
+    return None
+
+
+def user_filter_error(template: str) -> str | None:
+    """Why *template* cannot work as the LDAP user search filter, or None."""
+    template = normalize_user_filter(template)
+    if "{username}" not in template:
+        return "must contain {username}, which is replaced by the name typed at sign-in"
+    syntax = _filter_syntax_error(template.replace("{username}", "user"))
+    if syntax:
+        return f"is not a valid LDAP filter ({syntax})"
+    return None
+
+
+def group_filter_error(template: str) -> str | None:
+    """Why *template* cannot work as the LDAP group filter, or None."""
+    template = normalize_group_filter(template)
+    if not template:
+        return None  # the built-in nested-membership rule
+    if "{group}" not in template:
+        return "must contain {group}, which is replaced by each required group's DN"
+    syntax = _filter_syntax_error("(" + template.replace("{group}", "CN=group") + ")")
+    if syntax:
+        return f"is not a valid LDAP filter ({syntax})"
+    return None
+
+
 class LDAPAuthProvider(AuthProvider):
     """LDAP/AD authentication via ldap3.
 
@@ -53,13 +138,19 @@ class LDAPAuthProvider(AuthProvider):
         self.base_dn = base_dn
         self.bind_dn = bind_dn
         self.bind_password = bind_password
-        self.user_search_filter = user_search_filter
+        self.user_search_filter = normalize_user_filter(user_search_filter)
         self.start_tls = start_tls
         self.allow_insecure = allow_insecure
         self.ca_cert = ca_cert
         self.required_groups = required_groups or []
         self.connect_timeout = connect_timeout
-        self.group_filter = group_filter
+        self.group_filter = normalize_group_filter(group_filter)
+        # Checked once here so a bad filter is reported when the provider is
+        # built (startup, or saving Settings → Sign-in), not only as failed
+        # sign-ins. Never raised: the local account must stay usable to fix it.
+        self.config_error = self._filter_config_error()
+        if self.config_error:
+            logger.error("LDAP sign-in will fail until this is fixed: %s", self.config_error)
         endpoints = [value.strip() for value in server_url.split(",") if value.strip()]
         has_plain_endpoint = any(
             not endpoint.lower().startswith("ldaps://") for endpoint in endpoints
@@ -76,6 +167,23 @@ class LDAPAuthProvider(AuthProvider):
                 "LDAP auth requires the 'ldap3' package. "
                 "Install it with: pip install cert-watch[auth-ldap]"
             ) from None
+
+    def _filter_config_error(self) -> str | None:
+        user_error = user_filter_error(self.user_search_filter)
+        if user_error:
+            return (
+                f"the LDAP user search filter {self.user_search_filter!r} {user_error}. "
+                "Set it under Settings → Sign-in or with LDAP_USER_FILTER, e.g. "
+                "(sAMAccountName={username})."
+            )
+        if self.required_groups:
+            group_error = group_filter_error(self.group_filter)
+            if group_error:
+                return (
+                    f"LDAP_GROUP_FILTER {self.group_filter!r} {group_error}, "
+                    "e.g. member={group}."
+                )
+        return None
 
     def _build_tls(self) -> tuple[Any, list[Any]]:
         """Build ldap3.Tls and server list from config.
@@ -172,7 +280,11 @@ class LDAPAuthProvider(AuthProvider):
             allow_insecure=self.allow_insecure,
         )
         if insecure_error:
-            return AuthResult(success=False, error=insecure_error)
+            # Shown as-is (pre-1.0 hardening): it names the setting to change.
+            return AuthResult(success=False, error=insecure_error, unavailable=True)
+        if self.config_error:
+            logger.error("LDAP sign-in refused: %s", self.config_error)
+            return AuthResult(success=False, error=LDAP_MISCONFIGURED, unavailable=True)
         try:
             import ldap3
         except ImportError:
@@ -260,6 +372,9 @@ class LDAPAuthProvider(AuthProvider):
             )
         except ldap3.core.exceptions.LDAPBindError:
             return AuthResult(success=False, error="invalid credentials")
+        except ldap3.core.exceptions.LDAPInvalidFilterError as exc:
+            logger.error("LDAP sign-in refused: the search filter is invalid: %s", exc)
+            return AuthResult(success=False, error=LDAP_MISCONFIGURED, unavailable=True)
         except (ldap3.core.exceptions.LDAPException, OSError) as exc:
             logger.warning("LDAP auth error: %s", exc)
             return AuthResult(success=False, error="authentication failed")

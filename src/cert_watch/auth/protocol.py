@@ -19,6 +19,10 @@ class AuthResult:
     # Set only by LocalAdminProvider: "user" (users-table account) or
     # "break-glass" (env/kv local admin). Decides how the session is authorized.
     local_account: str = ""
+    # The provider could not evaluate the credentials because of its own
+    # configuration. The error is the same for every username, so it is safe to
+    # show at sign-in, and LocalAdminProvider must not mask it.
+    unavailable: bool = False
 
 
 class AuthProvider(ABC):

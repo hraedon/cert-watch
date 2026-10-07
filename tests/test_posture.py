@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import get_posture_for_cert, init_schema, store_scan_posture
 from cert_watch.posture import Finding, evaluate_posture
@@ -396,6 +398,7 @@ class TestPostureEvaluation:
         der = _ca_signed_cert_der()
         cert = _cert_from_der(der)
         fake_cert = MagicMock()
+        fake_cert.serial_number = 1
         fake_cert.public_key.side_effect = UnsupportedAlgorithm(
             "unsupported public key",
         )
@@ -1223,3 +1226,52 @@ def test_check_revocation_endpoints_finds_blocked_ocsp():
     reachable, msg = _check_endpoint_reachable("http://192.168.1.1/ocsp", method="HEAD")
     assert reachable is False
     assert "blocked by SSRF policy" in msg
+
+
+def _der_with_serial(serial_byte: int) -> bytes:
+    """A real certificate whose one-byte serial is rewritten in place.
+
+    cryptography refuses to *build* a non-positive serial but still parses one
+    (with a deprecation warning), which is what scanning such a host produces.
+    """
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "legacy.example.com")])
+    now = datetime.now(UTC)
+    der = (
+        x509.CertificateBuilder().subject_name(name).issuer_name(name)
+        .public_key(key.public_key()).serial_number(1)
+        .not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=90))
+        .sign(key, hashes.SHA256()).public_bytes(serialization.Encoding.DER)
+    )
+    version_then_serial = b"\xa0\x03\x02\x01\x02\x02\x01\x01"
+    assert der.count(version_then_serial) == 1
+    return der.replace(version_then_serial, version_then_serial[:-1] + bytes([serial_byte]))
+
+
+@pytest.mark.filterwarnings("ignore:Parsed a serial number")
+@pytest.mark.parametrize(("serial_byte", "flagged"), [(0x00, True), (0xFF, True), (0x01, False)])
+def test_non_positive_serial_is_a_named_finding_without_changing_the_grade(
+    serial_byte, flagged,
+):
+    now = datetime.now(UTC)
+    cert = Certificate(
+        subject="legacy.example.com", issuer="legacy.example.com",
+        not_before=now - timedelta(days=1), not_after=now + timedelta(days=90),
+        san_dns_names=[], fingerprint_sha256="b" * 64, raw_der=_der_with_serial(serial_byte),
+    )
+    result = evaluate_posture(cert=cert)
+    serial = [f for f in result.findings if f.check == "serial_number"]
+    assert bool(serial) is flagged
+    if flagged:
+        assert serial[0].status == "warn" and "RFC 5280" in serial[0].message
+    baseline = evaluate_posture(cert=Certificate(
+        subject=cert.subject, issuer=cert.issuer, not_before=cert.not_before,
+        not_after=cert.not_after, san_dns_names=[], fingerprint_sha256="c" * 64,
+        raw_der=_der_with_serial(0x01),
+    ))
+    assert result.grade == baseline.grade

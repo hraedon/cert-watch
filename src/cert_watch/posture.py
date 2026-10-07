@@ -478,6 +478,17 @@ def evaluate_posture(
             findings=[Finding(check="parse", status="fail", message="Cannot parse certificate")],
         )
 
+    # cryptography only warns about this today (without naming the
+    # certificate); a future release will refuse to parse it. Not graded.
+    if x509_cert.serial_number <= 0:
+        findings.append(Finding(
+            check="serial_number", status="warn",
+            message=(
+                "Serial number is zero or negative, which RFC 5280 forbids; future "
+                "releases of the cryptography library will refuse to parse it"
+            ),
+        ))
+
     try:
         key = x509_cert.public_key()
         if isinstance(key, rsa.RSAPublicKey):

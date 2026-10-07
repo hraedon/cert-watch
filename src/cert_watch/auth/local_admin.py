@@ -240,7 +240,12 @@ class _CompositeProvider(AuthProvider):
         # the remote one (LDAP log shows each attempted username) is inherent
         # to any composite-provider design that tries primary as a fallback.
         primary_result = self._primary.authenticate(username, password)
-        return primary_result if primary_result.success else result
+        if primary_result.success or primary_result.unavailable:
+            # An unavailable provider answers identically for every username,
+            # so surfacing it leaks nothing; masking it as "invalid
+            # credentials" sends operators hunting for a password problem.
+            return primary_result
+        return result
 
     def start_oauth_flow(self, redirect_uri: str) -> AuthResult:
         return self._primary.start_oauth_flow(redirect_uri)

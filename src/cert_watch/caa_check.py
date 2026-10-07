@@ -11,6 +11,7 @@ scan resolver rather than a bug.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
 from dataclasses import dataclass
@@ -26,6 +27,36 @@ _DOMAIN_RE = re.compile(
     r"\.[a-zA-Z]{2,}$"
 )
 _MAX_DOMAIN_LEN = 253
+
+# Names no public CA can issue for, so no CAA record can govern them: RFC 6761
+# (test, localhost, invalid, example), RFC 6762 (local), RFC 7686 (onion),
+# RFC 8375 (home.arpa), RFC 9476 (alt) and ICANN's private-use internal.
+_SPECIAL_USE_SUFFIXES = (
+    "local", "localhost", "test", "invalid", "example", "onion", "alt", "internal",
+    "home.arpa",
+)
+
+
+def caa_not_applicable(name: str) -> str | None:
+    """Why CAA cannot apply to *name*, or None when it is worth looking up.
+
+    RFC 8659 defines CAA for domain names only. An IP address, a single-label
+    name or a special-use name has no public issuance to restrict, and walking
+    it up to its "TLD" only asks resolvers questions they often SERVFAIL.
+    """
+    name = name.rstrip(".").lower()
+    try:
+        ipaddress.ip_address(name.strip("[]"))
+    except ValueError:
+        pass
+    else:
+        return "CAA does not apply to IP addresses"
+    if "." not in name:
+        return "CAA does not apply to single-label names"
+    for suffix in _SPECIAL_USE_SUFFIXES:
+        if name == suffix or name.endswith("." + suffix):
+            return f"CAA does not apply to special-use names (.{suffix})"
+    return None
 
 
 @dataclass
@@ -53,7 +84,7 @@ def _query_caa_records(domain: str) -> list[str] | str:
         except dns.resolver.NoAnswer:
             continue
         except (OSError, dns.exception.DNSException) as exc:  # DNS lookup
-            logger.warning("CAA lookup failed for %s: %s", check_domain, exc)
+            logger.warning("CAA lookup failed for %s (checking %s): %s", check_domain, domain, exc)
             return f"DNS lookup failed: {exc}"
     return []
 
@@ -67,8 +98,11 @@ def check_caa(domain: str) -> CAAResult:
     - issuewild_allowed: same logic for issuewild
 
     If no CAA records exist, issuance is implicitly allowed per RFC 8659.
+    ``error`` is set when the answer is unknown: the lookup failed, or CAA
+    cannot apply to the name (:func:`caa_not_applicable`) and none was made.
     """
-    raw = _query_caa_records(domain)
+    not_applicable = caa_not_applicable(domain)
+    raw = not_applicable if not_applicable else _query_caa_records(domain)
     if isinstance(raw, str):
         return CAAResult(
             domain=domain,

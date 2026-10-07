@@ -7,12 +7,13 @@ import ipaddress
 import json
 import ssl
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from cert_watch.auth.guards import admin_write_guard
-from cert_watch.auth.ldap_provider import insecure_ldap_error
+from cert_watch.auth.ldap_provider import insecure_ldap_error, user_filter_error
 from cert_watch.database import get_write_lock, kv_set, kv_set_secret
 from cert_watch.routes._deps import _db_path, _get_settings
 from cert_watch.routes.settings.ca_probe import _is_cert_verify_error
@@ -32,6 +33,13 @@ router = APIRouter()
 async def save_auth_config(
     request: Request, _auth: str = Depends(settings_tab_form("auth")),
 ) -> RedirectResponse:
+    filter_error = _form_user_filter_error(await request.form())
+    if filter_error:
+        # Refuse the whole save: a stored filter that cannot parse locks every
+        # directory user out at their next sign-in.
+        return RedirectResponse(
+            url=f"/settings?tab=auth&error={quote(filter_error)}", status_code=303,
+        )
     resp = await _save_config_section(request, _AUTH_KEYS, "auth", encrypt=True, rebuild=True)
     if resp.status_code == 303 and ("saved=1" in str(resp.headers.get("location", ""))):
         try:
@@ -47,6 +55,15 @@ async def save_auth_config(
                 status_code=303,
             )
     return resp
+
+
+def _form_user_filter_error(form: Any) -> str | None:
+    raw = form.get("ldap_user_filter", "")
+    template = raw.strip() if isinstance(raw, str) else ""
+    if not template:
+        return None  # blank saves fall back to the default filter
+    reason = user_filter_error(template)
+    return f"User search filter {reason}" if reason else None
 
 
 @router.post("/settings/ldap-role-map")
@@ -359,6 +376,9 @@ async def test_ldap_connection(
     if isinstance(parsed, JSONResponse):
         return parsed
 
+    filter_error = _form_user_filter_error(form)
+    if filter_error:
+        return JSONResponse({"ok": False, "error": filter_error})
     server = parsed[0]
     settings = _get_settings(request)
     insecure_error = insecure_ldap_error(

@@ -23,6 +23,27 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
+## Upgrading from 1.2.1 to 1.2.2
+
+A drop-in upgrade: no database migrations, no new settings, no API changes.
+Upgrade the usual way for your hosting model and confirm `/readyz` returns 200.
+Three things may look different:
+
+- **Directory sign-in with a broken search filter.** If the LDAP user search
+  filter cannot work, cert-watch logs an error naming it at startup, and sign-in
+  says *Directory sign-in is misconfigured* instead of *invalid credentials*.
+  Sign in with the local account and correct it under Settings → Sign-in. The
+  usual Active Directory filter is `(sAMAccountName={username})`. Settings
+  refuses to save a filter that cannot work.
+- **CAA on hosts whose lookup fails or cannot apply.** These were reported as
+  "No CAA records found" and counted against the compliance report's CAA ratio.
+  From each host's next scan they show no CAA finding and drop out of that
+  ratio. This covers IP addresses, single-label and `.local`-style names, and
+  names whose CAA lookup your resolver cannot answer.
+- **A new `serial_number` posture warning** on any certificate with a zero or
+  negative serial. It does not change the grade. Plan to replace such a
+  certificate: a future `cryptography` release will refuse to parse it.
+
 ## Upgrading from 1.2.0 to 1.2.1
 
 A drop-in upgrade: no database migrations, no new or changed settings, no API
@@ -561,7 +582,10 @@ items can lock someone out or change who gets alerted.
       [access-control.md](docs/access-control.md#1-role-mapping-recommended).
 - [ ] **Review three saved settings** that earlier releases saved but
       ignored, because they now apply: the OAuth scope, the LDAP user filter,
-      and the alert webhook kind. Where an environment variable and a saved
+      and the alert webhook kind. Open each settings page and check the saved
+      value, not the placeholder. A user filter must contain `{username}`
+      in braces, e.g. `(sAMAccountName={username})`. Before 1.2.2 a broken one
+      made every directory sign-in fail as "invalid credentials". Where an environment variable and a saved
       value both set `SMTP_PORT`, `LDAP_CONNECT_TIMEOUT` or
       `ALERT_DIGEST_ONLY`, the environment variable now wins.
 - [ ] **Prometheus:** set `CERT_WATCH_METRICS_TOKEN` and scrape with it.
