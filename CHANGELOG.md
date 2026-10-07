@@ -4,6 +4,32 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `/api/health` reports `auth_config_error` to administrators: why directory
+  sign-in cannot work as configured (an LDAP search filter that cannot parse,
+  or plaintext `ldap://` without STARTTLS). The health strip shows it, and the
+  overall status turns amber. 1.2.2 logged this only to the server log, which
+  an operator signed in with the local account rarely sees. `/readyz` ignores
+  it on purpose, so a load balancer keeps the app reachable for the fix.
+
+### Fixed
+
+- Fifteen integration tests (real-`openssl` scans and the SSRF guard over real
+  sockets) ran in no CI job, because the CI step named its files explicitly.
+  CI now selects integration tests by directory, and
+  `tests/test_ci_test_owners.py` fails when an opt-in test module has no
+  runner (WI-149).
+- The browser-suite fixtures for role gating and visual comparison wrote server
+  output to pipes nobody read, which could stall requests on Windows. They now
+  use the shared server helper and keep the output in `server.log`.
+
+### Documentation
+
+- The IIS `web.config` sets `CERT_WATCH_CSRF_SECRET_FILE`, and since 1.0 the
+  application reads that file as the CSRF key. Earlier releases ignored it
+  (WI-147). A test now pins this.
+
 ## [1.2.2] - 2026-10-07
 
 A maintenance release with no migrations and no configuration changes.

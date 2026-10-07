@@ -22,8 +22,14 @@ Other suites run on request:
 ```bash
 uv pip install -e ".[e2e]" && .venv/bin/playwright install chromium
 .venv/bin/pytest -m e2e tests/e2e -q --no-cov -n0      # browser tests
-.venv/bin/pytest -m integration -q                     # needs a real openssl binary
+.venv/bin/pytest -m integration -q --no-cov -n0 tests \
+  --ignore=tests/e2e --ignore=tests/integration --ignore=tests/deploy   # real sockets, openssl
 ```
+
+Every module marked `integration` or `deploy` must have a runner listed in
+`tests/test_ci_test_owners.py`. A new integration module under `tests/e2e/`
+needs an entry there and a workflow step; anywhere else under `tests/`, CI
+selects it by directory.
 
 Run the browser suite locally after any change to templates, CSS or page
 routes. The default run leaves it out.
@@ -38,6 +44,8 @@ Every pull request runs:
 - the browser suite, including visual comparison against committed
   screenshots;
 - LDAP tests against a real directory container;
+- integration tests over real sockets: alert delivery receipts (TLS SMTP and
+  HTTP), scans against a real `openssl s_server`, and the SSRF guard;
 - deployment smoke tests for the container, Kubernetes, the Linux entrypoint
   and Windows (install script, IIS prerequisites, the Event Log sink);
 - the identifier gate, which keeps work-domain identifiers out of this public
