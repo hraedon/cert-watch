@@ -924,7 +924,6 @@ details.cw-editor[open] .when-open { display: inline; }
   grid-column: 1 / -1; grid-template-columns: subgrid; column-gap: 16px;
 }
 .cw-home-table .cw-home-row-detail { grid-column: 2 / -1; }
-.cw-home-row--line { grid-template-columns: max-content minmax(0, 1fr) auto; column-gap: 16px; }
 .cw-home-row--issuer .cw-home-row-detail { grid-column: 1 / -1; }
 .cw-home-state {
   display: inline-flex; align-items: center; gap: 7px; width: fit-content;
@@ -994,8 +993,8 @@ details.cw-editor[open] .when-open { display: inline; }
   .cw-home-head { padding-inline: 14px; }
   /* Phones: state, name and detail stack; owner stays top right. */
   .cw-home-table { grid-template-columns: minmax(0, 1fr) auto; }
-  .cw-home-table > .cw-home-row, .cw-home-row--line { grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; }
-  .cw-home-table .cw-home-state, .cw-home-row--line .cw-home-state { grid-column: 1; }
+  .cw-home-table > .cw-home-row { grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; }
+  .cw-home-table .cw-home-state { grid-column: 1; }
   .cw-home-table .cw-home-side { grid-column: 2; grid-row: 1; }
   .cw-home-table .cw-home-name, .cw-home-table .cw-home-row-detail { grid-column: 1 / -1; }
   .cw-home-row--line .cw-home-detail { grid-column: 1 / -1; }

@@ -70,7 +70,7 @@
         <h2>Delivery &amp; routing</h2>
         {{ delivery_counts() }}
       </div>
-      <ul class="cw-home-rows">
+      <ul class="cw-home-rows cw-home-table">
         {% for line in delivery_lines %}
         <li class="cw-home-row cw-home-row--line" data-testid="home-delivery-line">
           <span class="cw-home-state {{ line.tone }}"><span class="cw-home-dot{% if not line.tone %} hollow{% endif %}"></span>{{ line.label }}</span>
