@@ -4,6 +4,19 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Home is denser and splits certificate risk from certificate hygiene. Healthy
+  monitoring and delivery share a two-line status strip and open into full
+  blocks only when they have problems. Certificate risk and a new Certificate
+  hygiene card sit side by side. Hygiene holds the chain and trust problems,
+  grouped by the fix they need so each piece of guidance prints once, in
+  neutral colour. Risk rows put state, name and owner on one line. A risk row
+  whose chain is also unverified shows a broken-chain icon linking to that
+  issuer's certificates, in place of the "chain also unverified" text. Renewal
+  rows move their timestamp to the detail line ("Reported …"/"Raised …"), and
+  the "deployment not confirmed" count is lower-cased like its siblings.
+
 ## [1.2.3] - 2026-10-07
 
 A maintenance release with no migrations and no configuration changes. A

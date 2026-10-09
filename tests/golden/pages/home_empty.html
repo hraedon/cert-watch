@@ -91,7 +91,52 @@ Browse inventory</a>
     · 0 monitored endpoints
   </p>
 
-  <div class="cw-home-grid" data-testid="home-blocks">
+
+
+
+
+
+  <div class="cw-home-blocks" data-testid="home-blocks">
+
+
+
+
+
+    <div class="cw-home-strip-status" data-testid="home-status-strip">
+
+      <section class="cw-home-cell" data-testid="monitoring-gaps-block">
+        <div class="cw-home-cell-head"><h2>Monitoring</h2>
+        <div class="cw-home-counts">
+          <a href="/browse?monitoring=failing&amp;grouped=0" data-testid="home-monitoring-count-failing"><b class="">0</b> failing</a>
+          <a href="/browse?monitoring=never_scanned&amp;grouped=0" data-testid="home-monitoring-count-never"><b class="">0</b> never scanned</a>
+          <a href="/browse?monitoring=current&amp;grouped=0" data-testid="home-monitoring-count-current"><b>0</b> of 0 current</a>
+        </div>
+  </div>
+        <div class="cw-home-cell-meta">
+          <span>No monitored endpoints yet. Uploaded files are not monitored.</span>
+          <span>No scans yet</span><span>Next daily run 2026-09-23 06:00 UTC</span><a class="cw-link" href="/scan-history">Scan history</a>
+        </div>
+      </section>
+
+
+      <section class="cw-home-cell" data-testid="delivery-routing-block">
+        <div class="cw-home-cell-head"><h2>Delivery &amp; routing</h2>
+        <div class="cw-home-counts">
+          <a href="/browse?delivery=failing&amp;grouped=0" data-testid="home-delivery-count-failing"><b class="">0</b> can’t be delivered</a>
+          <a href="/browse?delivery=unrouted&amp;grouped=0" data-testid="home-delivery-count-unrouted"><b>0</b> unrouted</a>
+        </div>
+  </div>
+        <div class="cw-home-cell-meta">
+
+          <span data-testid="home-delivery-line" title="Add a monitored endpoint or uploaded certificate to begin.">No alerts to route yet</span>
+
+        </div>
+      </section>
+
+    </div>
+
+
+  <div class="cw-home-split">
     <section class="cw-home-block" data-testid="certificate-risk-block">
       <div class="cw-home-head">
         <h2>Certificate risk</h2>
@@ -100,7 +145,7 @@ Browse inventory</a>
           <a href="/browse?condition=le7&amp;grouped=0" data-testid="home-condition-count-le7"><b class="">0</b> ≤7 days</a>
           <a href="/browse?condition=8to30&amp;grouped=0" data-testid="home-condition-count-8to30"><b class="">0</b> 8–30 days</a>
           <a href="/browse?renewal=failed&amp;grouped=0" data-testid="home-renewal-count-failed"><b class="">0</b> renewal failed</a>
-          <a href="/browse?renewal=not_deployed&amp;grouped=0" data-testid="home-renewal-count-not-deployed"><b class="">0</b> Deployment not confirmed</a>
+          <a href="/browse?renewal=not_deployed&amp;grouped=0" data-testid="home-renewal-count-not-deployed"><b class="">0</b> deployment not confirmed</a>
           <a href="/browse?condition=ok&amp;grouped=0" data-testid="home-condition-count-ok"><b>0</b> OK</a>
         </div>
       </div>
@@ -125,51 +170,18 @@ Add certificates</a>
 </div>
 
 
-
-
     </section>
 
-    <section class="cw-home-block" data-testid="monitoring-gaps-block">
+    <section class="cw-home-block" data-testid="certificate-hygiene-block">
       <div class="cw-home-head">
-        <h2>Monitoring gaps</h2>
-        <div class="cw-home-counts">
-          <a href="/browse?monitoring=failing&amp;grouped=0" data-testid="home-monitoring-count-failing"><b class="">0</b> failing</a>
-          <a href="/browse?monitoring=never_scanned&amp;grouped=0" data-testid="home-monitoring-count-never"><b class="">0</b> never scanned</a>
-          <a href="/browse?monitoring=current&amp;grouped=0" data-testid="home-monitoring-count-current"><b>0</b> of 0 current</a>
-        </div>
+        <h2>Certificate hygiene</h2>
+
       </div>
 
+        <p class="cw-home-calm">Chain and trust problems will appear here once certificates are added.</p>
 
-        <p class="cw-home-calm">No monitored endpoints yet. Uploaded files are not monitored.</p>
-
-
-      <footer class="cw-home-foot">
-        <span>No scans yet</span>
-        <span>Next daily run 2026-09-23 06:00 UTC</span>
-        <a class="cw-link" href="/scan-history">Scan history</a>
-      </footer>
     </section>
-
-    <section class="cw-home-block" data-testid="delivery-routing-block">
-      <div class="cw-home-head">
-        <h2>Delivery &amp; routing</h2>
-        <div class="cw-home-counts">
-          <a href="/browse?delivery=failing&amp;grouped=0" data-testid="home-delivery-count-failing"><b class="">0</b> can’t be delivered</a>
-          <a href="/browse?delivery=unrouted&amp;grouped=0" data-testid="home-delivery-count-unrouted"><b>0</b> unrouted</a>
-        </div>
-      </div>
-      <ul class="cw-home-rows">
-
-        <li class="cw-home-row cw-home-row--stack" data-testid="home-delivery-line">
-          <div class="cw-home-row-main">
-            <span class="cw-home-state "><span class="cw-home-dot hollow"></span>No alerts to route yet</span>
-            <span class="cw-home-detail">Add a monitored endpoint or uploaded certificate to begin.</span>
-          </div>
-
-        </li>
-
-      </ul>
-    </section>
+  </div>
   </div>
 
   <section class="cw-home-horizon" data-testid="horizon-panel">

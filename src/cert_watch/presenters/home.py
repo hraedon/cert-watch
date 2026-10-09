@@ -29,6 +29,8 @@ class HomeRiskRow:
     tone: str
     owner_name: str
     difference: str
+    chain_url: str | None = None
+    chain_label: str = ""
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,17 @@ class HomeChainGroup:
     browse_url: str
     guidance: str
     examples: tuple[str, ...]
+    fix: str = "missing"
+
+
+@dataclass(frozen=True)
+class HomeChainFix:
+    """Issuers that need the same fix, so its guidance prints once."""
+
+    fix: str
+    label: str
+    guidance: str
+    groups: tuple[HomeChainGroup, ...]
 
 
 @dataclass(frozen=True)
@@ -90,6 +103,7 @@ class HomeView:
     risk_rows: tuple[HomeRiskRow, ...]
     monitoring_rows: tuple[HomeMonitoringRow, ...]
     chain_groups: tuple[HomeChainGroup, ...]
+    chain_fixes: tuple[HomeChainFix, ...]
     chain_problem_total: int
     chain_issuer_total: int
     delivery_lines: tuple[DeliveryLine, ...]
@@ -109,6 +123,7 @@ class HomeView:
             "risk_rows": list(self.risk_rows),
             "monitoring_rows": list(self.monitoring_rows),
             "chain_groups": list(self.chain_groups),
+            "chain_fixes": list(self.chain_fixes),
             "chain_problem_total": self.chain_problem_total,
             "chain_issuer_total": self.chain_issuer_total,
             "delivery_lines": list(self.delivery_lines),
@@ -169,9 +184,27 @@ def _risk_difference(row: dict[str, Any]) -> str:
             details.append("Renewal in progress (operator report)")
         elif renewal == "stalled" and method:
             details.append(f"{method} configured — no new certificate yet")
-    if str(row.get("chain_status") or "") in _TRUST_PROBLEMS:
-        details.append("chain also unverified")
     return " · ".join(details)
+
+
+def _chain_browse_url(raw_issuer: str) -> str:
+    query: dict[str, str | int] = {"chain_problem": "1"}
+    if raw_issuer:
+        query["issuer"] = raw_issuer
+    query["grouped"] = 0
+    return "/browse?" + urlencode(query)
+
+
+def _risk_chain(row: dict[str, Any]) -> tuple[str | None, str]:
+    """Return the hygiene cross-reference for a risk row with an unverified chain."""
+    if str(row.get("chain_status") or "") not in _TRUST_PROBLEMS:
+        return None, ""
+    raw_issuer = str(row.get("issuer") or "")
+    issuer = issuer_cn(raw_issuer)
+    label = "Chain can\u2019t be verified"
+    if issuer:
+        label += f" \u2014 view certificates issued by {issuer}"
+    return _chain_browse_url(raw_issuer), label
 
 
 def _condition_label(days: int | None) -> str:
@@ -208,11 +241,11 @@ def _risk_rows(raw_rows: dict[str, list[dict[str, Any]]]) -> tuple[HomeRiskRow, 
             failed = renewal == "failed"
             condition_label = "Renewal failed" if failed else "Deployment not confirmed"
             when = row.get("renewal_failure_reported_at" if failed else "renewal_raised_at")
-            condition_label = f"{condition_label} · {_format_datetime(when)}"
-            difference = ""
+            difference = f"{'Reported' if failed else 'Raised'} {_format_datetime(when)}"
         else:
             condition_label = _condition_label(row.get("effective_days"))
             difference = _risk_difference(row)
+        chain_url, chain_label = _risk_chain(row)
         return HomeRiskRow(
             detail_url=f"/certificates/{row['id']}",
             name=_endpoint_name(row),
@@ -225,6 +258,8 @@ def _risk_rows(raw_rows: dict[str, list[dict[str, Any]]]) -> tuple[HomeRiskRow, 
             ),
             owner_name=str(row.get("owner_name") or ""),
             difference=difference,
+            chain_url=chain_url,
+            chain_label=chain_label,
         )
 
     return tuple(
@@ -301,12 +336,14 @@ def _chain_groups(raw: list[dict[str, Any]]) -> tuple[HomeChainGroup, ...]:
     for group in raw:
         raw_issuer = str(group.get("issuer") or "")
         statuses = set(str(group.get("statuses") or "").split(","))
-        if "self-signed" in statuses:
-            guidance = "Add this issuer in Trust anchors, or replace the self-signed certificate."
-        elif "invalid" in statuses:
-            guidance = "Replace the invalid chain, then scan again."
-        else:
-            guidance = "Serve the intermediate with the leaf, or add a private CA in Trust anchors."
+        fix = (
+            "self_signed"
+            if "self-signed" in statuses
+            else "invalid"
+            if "invalid" in statuses
+            else "missing"
+        )
+        guidance = _CHAIN_FIXES[fix][1]
         examples: list[str] = []
         for index in (1, 2):
             hostname = str(group.get(f"example_{index}_hostname") or "")
@@ -320,13 +357,40 @@ def _chain_groups(raw: list[dict[str, Any]]) -> tuple[HomeChainGroup, ...]:
             HomeChainGroup(
                 issuer=issuer_cn(raw_issuer) or "Unknown issuer",
                 count=int(group.get("count") or 0),
-                browse_url="/browse?"
-                + urlencode({"chain_problem": "1", "issuer": raw_issuer, "grouped": 0}),
+                browse_url=_chain_browse_url(raw_issuer),
                 guidance=guidance,
                 examples=tuple(examples),
+                fix=fix,
             )
         )
     return tuple(sorted(result, key=lambda group: (-group.count, group.issuer.casefold())))
+
+
+# Fix kind -> (heading, guidance), in display order.
+_CHAIN_FIXES: dict[str, tuple[str, str]] = {
+    "invalid": ("Invalid chain", "Replace the invalid chain, then scan again."),
+    "missing": (
+        "Missing intermediate or private CA",
+        "Serve the intermediate with the leaf, or add a private CA in Trust anchors.",
+    ),
+    "self_signed": (
+        "Self-signed",
+        "Add this issuer in Trust anchors, or replace the self-signed certificate.",
+    ),
+}
+
+
+def _chain_fixes(groups: tuple[HomeChainGroup, ...]) -> tuple[HomeChainFix, ...]:
+    return tuple(
+        HomeChainFix(
+            fix=fix,
+            label=label,
+            guidance=guidance,
+            groups=tuple(group for group in groups if group.fix == fix),
+        )
+        for fix, (label, guidance) in _CHAIN_FIXES.items()
+        if any(group.fix == fix for group in groups)
+    )
 
 
 def _delivery_lines(
@@ -496,13 +560,15 @@ def present_home(
     chain_issuer_total = (
         int(raw_chain_groups[0].get("total_issuers") or 0) if raw_chain_groups else 0
     )
+    chain_groups = _chain_groups(raw_chain_groups)
     return HomeView(
         axis_stats=axis_stats,
         tracked_total=int(home_data.get("tracked_total") or 0),
         monitored_total=sum(int(monitoring[state]) for state in monitoring),
         risk_rows=_risk_rows(home_data.get("rows") or {}),
         monitoring_rows=_monitoring_rows(home_data.get("rows") or {}),
-        chain_groups=_chain_groups(raw_chain_groups),
+        chain_groups=chain_groups,
+        chain_fixes=_chain_fixes(chain_groups),
         chain_problem_total=chain_problem_total,
         chain_issuer_total=chain_issuer_total,
         delivery_lines=_delivery_lines(

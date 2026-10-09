@@ -864,15 +864,18 @@ details.cw-editor[open] .when-open { display: inline; }
   .cw-att-row .cw-rowact { opacity: 1; }
 }
 
-/* ---------- Home A: three operational blocks ---------- */
+/* ---------- Home: status strip, risk | hygiene, horizon ---------- */
 .cw-home-scope {
   margin: -8px 0 var(--space-4); color: var(--text-2); font-size: var(--cw-fs-xs);
 }
-.cw-home-grid {
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+.cw-home-blocks { display: grid; gap: var(--space-3); }
+/* Risk and hygiene sit side by side as separate cards; hygiene is neutral
+   (no status colour), so the urgent card owns the colour on the page. */
+.cw-home-split {
+  display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
   gap: var(--space-3); align-items: start;
 }
-.cw-home-block, .cw-home-horizon {
+.cw-home-block, .cw-home-horizon, .cw-home-strip-status {
   min-width: 0; background: var(--panel); border: 1px solid var(--border);
   border-radius: var(--radius-lg); overflow: hidden;
 }
@@ -881,7 +884,7 @@ details.cw-editor[open] .when-open { display: inline; }
   display: flex; align-items: baseline; justify-content: space-between;
   gap: 8px 14px; flex-wrap: wrap; padding: 14px 16px 11px;
 }
-.cw-home-head h2 {
+.cw-home-head h2, .cw-home-cell h2 {
   margin: 0; font-size: var(--cw-fs-md); font-weight: 600;
 }
 .cw-home-counts {
@@ -897,14 +900,32 @@ details.cw-editor[open] .when-open { display: inline; }
   color: var(--text); font-size: var(--cw-fs-sm); font-variant-numeric: tabular-nums;
 }
 .cw-home-counts b.t-crit, .cw-home-counts b.t-warn { color: var(--cw-tone); }
+
+/* Healthy monitoring and delivery: one strip, two cells. */
+.cw-home-strip-status { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+.cw-home-cell { min-width: 0; display: grid; gap: 5px; padding: 11px 16px; }
+.cw-home-cell + .cw-home-cell { border-left: 1px solid var(--border); }
+.cw-home-cell h2 { font-size: var(--cw-fs-sm); }
+.cw-home-cell-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+.cw-home-cell-meta {
+  display: flex; flex-wrap: wrap; gap: 2px 14px; color: var(--text-2); font-size: var(--cw-fs-xs);
+}
+
 .cw-home-rows { list-style: none; margin: 0; padding: 0; }
 .cw-home-row {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px;
-  align-items: baseline; padding: 10px 16px; border-top: 1px solid var(--border);
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px;
+  align-items: baseline; padding: 8px 16px; border-top: 1px solid var(--border);
 }
 .cw-home-row:hover { background: var(--row-hover); }
-.cw-home-row-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.cw-home-row--stack { align-items: start; }
+/* State | name | owner, with an optional detail line under the name. The
+   rows share one set of columns so the state labels line up. */
+.cw-home-table { display: grid; grid-template-columns: max-content minmax(0, 1fr) auto; }
+.cw-home-table > .cw-home-row {
+  grid-column: 1 / -1; grid-template-columns: subgrid; column-gap: 16px;
+}
+.cw-home-table .cw-home-row-detail { grid-column: 2 / -1; }
+.cw-home-row--line { grid-template-columns: max-content minmax(0, 1fr) auto; column-gap: 16px; }
+.cw-home-row--issuer .cw-home-row-detail { grid-column: 1 / -1; }
 .cw-home-state {
   display: inline-flex; align-items: center; gap: 7px; width: fit-content;
   color: var(--text); font-size: var(--cw-fs-xs); font-weight: 600;
@@ -916,19 +937,28 @@ details.cw-editor[open] .when-open { display: inline; }
 .cw-home-dot.hollow { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-3); }
 .cw-home-when { color: var(--text-2); font-weight: 400; }
 .cw-home-time { color: inherit; font: inherit; }
-.cw-home-id { width: fit-content; text-decoration: none; overflow-wrap: anywhere; }
+.cw-home-name { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.cw-home-id { min-width: 0; text-decoration: none; overflow-wrap: anywhere; }
 .cw-home-id:hover {
   text-decoration: underline; text-decoration-color: var(--border-2);
   text-underline-offset: 3px;
 }
+.cw-home-chain { display: inline-flex; align-self: center; flex: 0 0 auto; color: var(--text-2); }
+.cw-home-chain:hover { color: var(--text); }
 .cw-home-detail, .cw-home-side {
   color: var(--text-2); font-size: var(--cw-fs-xs); line-height: 1.45;
 }
 .cw-home-side { text-align: right; }
 .cw-home-calm { margin: 0; padding: 12px 16px 16px; color: var(--text-2); font-size: var(--cw-fs-sm); }
-.cw-home-subhead {
-  padding: 11px 16px 6px; border-top: 1px solid var(--border);
-  color: var(--text-2); font-size: var(--cw-fs-xs); font-weight: 600;
+.cw-home-hygiene-sub { margin: -6px 0 0; padding: 0 16px 10px; color: var(--text-2); font-size: var(--cw-fs-xs); }
+.cw-home-fix {
+  padding: 9px 16px 7px; border-top: 1px solid var(--border);
+  color: var(--text-2); font-size: var(--cw-fs-xs);
+}
+.cw-home-fix b { color: var(--text); font-weight: 600; }
+.cw-home-more {
+  margin: 0; padding: 9px 16px; border-top: 1px solid var(--border);
+  color: var(--text-2); font-size: var(--cw-fs-xs);
 }
 .cw-home-foot {
   display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 10px 16px;
@@ -954,10 +984,21 @@ details.cw-editor[open] .when-open { display: inline; }
 .cw-home-bar rect { fill: var(--cw-tone, var(--border-2)); opacity: .85; }
 .cw-home-bar.empty rect { fill: var(--border); }
 
+@media (max-width: 1100px) {
+  .cw-home-split { grid-template-columns: minmax(0, 1fr); }
+}
 @media (max-width: 700px) {
-  .cw-home-grid { grid-template-columns: 1fr; }
+  .cw-home-strip-status { grid-auto-flow: row; }
+  .cw-home-cell + .cw-home-cell { border-left: 0; border-top: 1px solid var(--border); }
   .cw-home-row { padding: 10px 14px; }
   .cw-home-head { padding-inline: 14px; }
+  /* Phones: state, name and detail stack; owner stays top right. */
+  .cw-home-table { grid-template-columns: minmax(0, 1fr) auto; }
+  .cw-home-table > .cw-home-row, .cw-home-row--line { grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; }
+  .cw-home-table .cw-home-state, .cw-home-row--line .cw-home-state { grid-column: 1; }
+  .cw-home-table .cw-home-side { grid-column: 2; grid-row: 1; }
+  .cw-home-table .cw-home-name, .cw-home-table .cw-home-row-detail { grid-column: 1 / -1; }
+  .cw-home-row--line .cw-home-detail { grid-column: 1 / -1; }
   .cw-home-horizon-body { padding-inline: 10px; }
   .cw-home-strip { gap: 3px; min-width: 0; }
   .cw-home-bar-label { font-size: var(--cw-fs-xs); }
