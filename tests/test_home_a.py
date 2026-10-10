@@ -6,6 +6,7 @@ import re
 from html import unescape
 from urllib.parse import parse_qs, urlparse
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tests.test_four_axis_status import _seed
@@ -192,10 +193,10 @@ def test_home_renewal_outcomes_follow_expiry_rows_and_link_exact_population(
         assert rows.index(renewal_rows[0]) >= sum(
             row.condition in {"expired", "le7", "8to30"} for row in rows
         )
-        assert renewal_rows[0].condition_label == ("Renewal failed · 2026-09-28 12:00 UTC")
-        assert renewal_rows[1].condition_label == (
-            "Deployment not confirmed · 2026-09-28 12:00 UTC"
-        )
+        assert renewal_rows[0].condition_label == "Renewal failed"
+        assert renewal_rows[0].difference == "Reported 2026-09-28 12:00 UTC"
+        assert renewal_rows[1].condition_label == "Deployment not confirmed"
+        assert renewal_rows[1].difference == "Raised 2026-09-28 12:00 UTC"
         for testid in (
             "home-renewal-count-failed",
             "home-renewal-count-not-deployed",
@@ -419,3 +420,72 @@ def test_home_risk_block_survives_a_caller_without_the_renewal_axis(tmp_path) ->
     home = stats.pop("_home")
     assert stats["condition"]["expired"] == 1
     assert "risk:expired" in home["rows"]
+
+
+def _strip(html: str) -> str:
+    match = re.search(
+        r'<div class="cw-home-strip-status" data-testid="home-status-strip">(.*?)\n    </div>',
+        html,
+        flags=re.DOTALL,
+    )
+    return match.group(1) if match else ""
+
+
+def test_home_strip_holds_only_healthy_monitoring_and_delivery(reload_app, monkeypatch) -> None:
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", lambda self: None)
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.stop", lambda self: None)
+    with TestClient(reload_app().app) as client:
+        html = client.get("/").text
+    strip = _strip(html)
+    assert 'data-testid="monitoring-gaps-block"' in strip
+    assert 'data-testid="delivery-routing-block"' in strip
+    assert html.count('data-testid="monitoring-gaps-block"') == 1
+    assert html.count('data-testid="delivery-routing-block"') == 1
+    assert 'data-testid="certificate-hygiene-block"' in html
+
+
+@pytest.mark.parametrize(
+    ("monitoring_open", "delivery_open"),
+    [(True, True), (True, False), (False, True)],
+    ids=["both-open", "monitoring-open", "delivery-open"],
+)
+def test_home_problem_blocks_open_out_of_the_strip(
+    reload_app, tmp_path, monkeypatch, monitoring_open, delivery_open
+) -> None:
+    _seed(tmp_path, "cert-watch.sqlite3")
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", lambda self: None)
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.stop", lambda self: None)
+    # The seed has both monitoring and delivery problems; quiet one of them
+    # so the strip renders with the other opened out of it.
+    from cert_watch.presenters import home as home_presenter
+
+    if not monitoring_open:
+        monkeypatch.setattr(home_presenter, "_monitoring_rows", lambda _rows: ())
+    if not delivery_open:
+        quiet = home_presenter.DeliveryLine(
+            label="All configured channels are delivering", detail="", tone="",
+            action_url=None, action_label="", admin_only=False,
+        )
+        monkeypatch.setattr(home_presenter, "_delivery_lines", lambda **_: (quiet,))
+    with TestClient(reload_app().app) as client:
+        response = client.get("/")
+        html = response.text
+        assert bool(response.context["monitoring_rows"]) is monitoring_open
+        assert any(line.tone for line in response.context["delivery_lines"]) is delivery_open
+        strip = _strip(html)
+        both_open = monitoring_open and delivery_open
+        assert ('data-testid="home-status-strip"' in html) is not both_open
+        assert ('data-testid="monitoring-gaps-block"' in strip) is not monitoring_open
+        assert ('data-testid="delivery-routing-block"' in strip) is not delivery_open
+        assert html.count('data-testid="monitoring-gaps-block"') == 1
+        assert html.count('data-testid="delivery-routing-block"') == 1
+        if monitoring_open:
+            assert html.count('data-testid="home-monitoring-row"') == len(
+                response.context["monitoring_rows"]
+            )
+
+        chain_rows = [row for row in response.context["risk_rows"] if row.chain_url]
+        assert html.count('data-testid="home-risk-chain"') == len(chain_rows)
+        for row in chain_rows:
+            assert _row_count(client, row.chain_url) >= 1, row.chain_url
+        assert html.count('data-testid="home-chain-row"') == len(response.context["chain_groups"])

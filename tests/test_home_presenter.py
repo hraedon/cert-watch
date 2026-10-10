@@ -31,6 +31,7 @@ def test_home_presenter_derives_three_blocks_and_twelve_week_strip() -> None:
                     "renewal": "manual",
                     "renewal_method": "manual",
                     "chain_status": "incomplete",
+                    "issuer": "CN=Zeta Test CA",
                 }],
                 "monitoring:failing": [{
                     "id": "cert-1",
@@ -98,7 +99,13 @@ def test_home_presenter_derives_three_blocks_and_twelve_week_strip() -> None:
     )
 
     assert view.risk_rows[0].condition_label == "4 days left"
-    assert view.risk_rows[0].difference == "Manual renewal · chain also unverified"
+    assert view.risk_rows[0].difference == "Manual renewal"
+    assert view.risk_rows[0].chain_url == (
+        "/browse?chain_problem=1&issuer=CN%3DZeta+Test+CA&grouped=0"
+    )
+    assert view.risk_rows[0].chain_label == (
+        "Chain can\u2019t be verified \u2014 view certificates issued by Zeta Test CA"
+    )
     assert view.monitoring_rows[0].state_label == "Failing"
     assert "accepting connections" in view.monitoring_rows[0].cause.lower()
     assert view.monitoring_rows[0].when_label == "since 2026-09-22 06:00 UTC"
@@ -130,6 +137,10 @@ def test_home_presenter_derives_three_blocks_and_twelve_week_strip() -> None:
     assert view.chain_groups[0].examples == (
         "alpha.example.test", "ldaps.example.test:636",
     )
+    assert [(fix.fix, [group.issuer for group in fix.groups]) for fix in view.chain_fixes] == [
+        ("missing", ["Zeta Test CA"]),
+        ("self_signed", ["Alpha Test CA"]),
+    ]
     assert view.last_scan_activity_label == "Last scan activity 2026-09-22 07:29 UTC"
     assert view.next_run_label == "2026-09-23 07:23 UTC"
 
@@ -168,3 +179,61 @@ def test_home_presenter_uses_safe_raw_error_and_no_scans_copy() -> None:
     assert view.monitoring_rows[0].cause.startswith("unexpected <script>")
     assert len(view.monitoring_rows[0].cause) <= 164
     assert view.last_scan_activity_label == "No scans yet"
+
+
+def _minimal_home(rows: dict, chain_groups: list) -> object:
+    return present_home(
+        axis_stats={
+            "condition": {"expired": 0, "le7": 0, "8to30": 0, "ok": 0},
+            "monitoring": {"current": 0, "failing": 0, "never_scanned": 0},
+            "delivery": {"ok": 0, "failing": 0, "unrouted": 0},
+            "renewal": {},
+            "overall": {},
+        },
+        home_data={"tracked_total": 1, "rows": rows, "chain_groups": chain_groups},
+        smtp_configured=True,
+        webhook_configured=False,
+        webhook_kind="",
+        sched_hour=6,
+        sched_min=0,
+        now=datetime(2026, 9, 22, 12, tzinfo=UTC),
+    )
+
+
+def test_home_chain_fixes_print_each_guidance_once_in_severity_order() -> None:
+    def group(issuer: str, statuses: str) -> dict:
+        return {"issuer": f"CN={issuer}", "count": 1, "statuses": statuses,
+                "total_certs": 4, "total_issuers": 4}
+
+    view = _minimal_home({}, [
+        group("Missing One", "incomplete"),
+        group("Mixed", "invalid,self-signed"),
+        group("Broken", "invalid,unknown"),
+        group("Missing Two", "unknown,unverified"),
+    ])
+    assert [fix.fix for fix in view.chain_fixes] == ["invalid", "missing", "self_signed"]
+    by_fix = {fix.fix: [g.issuer for g in fix.groups] for fix in view.chain_fixes}
+    # Self-signed wins over invalid, matching the per-issuer guidance.
+    assert by_fix == {
+        "invalid": ["Broken"],
+        "missing": ["Missing One", "Missing Two"],
+        "self_signed": ["Mixed"],
+    }
+    for fix in view.chain_fixes:
+        assert {g.guidance for g in fix.groups} == {fix.guidance}
+
+
+def test_home_risk_row_marks_chain_only_when_the_chain_is_unverified() -> None:
+    base = {"host_id": "h", "source": "scanned", "condition": "le7", "effective_days": 3}
+    view = _minimal_home({"risk:le7": [
+        {**base, "id": "ok", "host": "ok.example.test:443", "chain_status": "public",
+         "issuer": "CN=Fine CA"},
+        {**base, "id": "bad", "host": "bad.example.test:443", "chain_status": "self-signed"},
+    ]}, [])
+    broken, clean = sorted(view.risk_rows, key=lambda row: row.name)
+    assert clean.chain_url is None and clean.chain_label == ""
+    assert "chain" not in clean.difference
+    # No issuer recorded: link the whole unverified population, not a broken filter.
+    assert broken.chain_url == "/browse?chain_problem=1&grouped=0"
+    assert broken.chain_label == "Chain can\u2019t be verified"
+    assert broken.difference == ""

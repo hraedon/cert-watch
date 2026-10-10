@@ -104,7 +104,59 @@ Browse inventory</a>
     · 1 monitored endpoint
   </p>
 
-  <div class="cw-home-grid" data-testid="home-blocks">
+
+
+
+
+
+  <div class="cw-home-blocks" data-testid="home-blocks">
+
+
+
+    <section class="cw-home-block" data-testid="delivery-routing-block">
+      <div class="cw-home-head">
+        <h2>Delivery &amp; routing</h2>
+
+        <div class="cw-home-counts">
+          <a href="/browse?delivery=failing&amp;grouped=0" data-testid="home-delivery-count-failing"><b class="t-crit">1</b> can’t be delivered</a>
+          <a href="/browse?delivery=unrouted&amp;grouped=0" data-testid="home-delivery-count-unrouted"><b>0</b> unrouted</a>
+        </div>
+
+      </div>
+      <ul class="cw-home-rows cw-home-table">
+
+        <li class="cw-home-row cw-home-row--line" data-testid="home-delivery-line">
+          <span class="cw-home-state t-warn"><span class="cw-home-dot"></span>Email not configured</span>
+          <span class="cw-home-detail">SMTP is not configured; email routes cannot deliver.</span>
+
+        </li>
+
+      </ul>
+    </section>
+
+
+
+    <div class="cw-home-strip-status" data-testid="home-status-strip">
+
+      <section class="cw-home-cell" data-testid="monitoring-gaps-block">
+        <div class="cw-home-cell-head"><h2>Monitoring</h2>
+        <div class="cw-home-counts">
+          <a href="/browse?monitoring=failing&amp;grouped=0" data-testid="home-monitoring-count-failing"><b class="">0</b> failing</a>
+          <a href="/browse?monitoring=never_scanned&amp;grouped=0" data-testid="home-monitoring-count-never"><b class="">0</b> never scanned</a>
+          <a href="/browse?monitoring=current&amp;grouped=0" data-testid="home-monitoring-count-current"><b>1</b> of 1 current</a>
+        </div>
+  </div>
+        <div class="cw-home-cell-meta">
+
+          <span>Last scan activity 2026-09-22 12:00 UTC</span><span>Next daily run 2026-09-23 06:00 UTC</span><a class="cw-link" href="/scan-history">Scan history</a>
+        </div>
+      </section>
+
+
+    </div>
+
+
+  <div class="cw-home-split">
     <section class="cw-home-block" data-testid="certificate-risk-block">
       <div class="cw-home-head">
         <h2>Certificate risk</h2>
@@ -113,7 +165,7 @@ Browse inventory</a>
           <a href="/browse?condition=le7&amp;grouped=0" data-testid="home-condition-count-le7"><b class="">0</b> ≤7 days</a>
           <a href="/browse?condition=8to30&amp;grouped=0" data-testid="home-condition-count-8to30"><b class="">0</b> 8–30 days</a>
           <a href="/browse?renewal=failed&amp;grouped=0" data-testid="home-renewal-count-failed"><b class="">0</b> renewal failed</a>
-          <a href="/browse?renewal=not_deployed&amp;grouped=0" data-testid="home-renewal-count-not-deployed"><b class="">0</b> Deployment not confirmed</a>
+          <a href="/browse?renewal=not_deployed&amp;grouped=0" data-testid="home-renewal-count-not-deployed"><b class="">0</b> deployment not confirmed</a>
           <a href="/browse?condition=ok&amp;grouped=0" data-testid="home-condition-count-ok"><b>1</b> OK</a>
         </div>
       </div>
@@ -121,67 +173,36 @@ Browse inventory</a>
 
         <p class="cw-home-calm">No certificates expire in the next 30 days.</p>
 
+    </section>
 
+    <section class="cw-home-block" data-testid="certificate-hygiene-block">
+      <div class="cw-home-head">
+        <h2>Certificate hygiene</h2>
 
-      <div class="cw-home-subhead">
-        <span>Chain can’t be verified · <a class="cw-link" href="/browse?chain_problem=1&amp;grouped=0" data-testid="home-chain-total-link">1 certificate</a>, 1 issuer</span>
+        <div class="cw-home-counts">
+          <a href="/browse?chain_problem=1&amp;grouped=0" data-testid="home-chain-total-link"><b>1</b> chain can’t be verified</a>
+          <span><b>1</b> issuer</span>
+        </div>
+
       </div>
+
+      <p class="cw-home-hygiene-sub">Chain and trust problems don’t get worse with time, but strict clients may already reject these certificates.</p>
+
+      <div class="cw-home-fix" data-testid="home-chain-fix" data-fix="missing"><b>Missing intermediate or private CA</b> — Serve the intermediate with the leaf, or add a private CA in Trust anchors.</div>
       <ul class="cw-home-rows">
 
-        <li class="cw-home-row cw-home-row--stack" data-testid="home-chain-row">
-          <div class="cw-home-row-main">
-            <span><strong>Demo Internal CA</strong> <span class="cw-muted">· 1 certificate</span></span>
-            <span class="cw-id cw-home-detail">mail.demo.test</span>
-            <span class="cw-home-detail">Serve the intermediate with the leaf, or add a private CA in Trust anchors.</span>
-          </div>
+        <li class="cw-home-row cw-home-row--issuer" data-testid="home-chain-row">
+          <span><strong>Demo Internal CA</strong> <span class="cw-muted">· 1 certificate</span></span>
           <a class="cw-link cw-home-side" href="/browse?chain_problem=1&amp;issuer=CN%3DDemo+Internal+CA&amp;grouped=0">View 1</a>
+          <span class="cw-id cw-home-detail cw-home-row-detail">mail.demo.test</span>
         </li>
 
       </ul>
 
+
+
     </section>
-
-    <section class="cw-home-block" data-testid="monitoring-gaps-block">
-      <div class="cw-home-head">
-        <h2>Monitoring gaps</h2>
-        <div class="cw-home-counts">
-          <a href="/browse?monitoring=failing&amp;grouped=0" data-testid="home-monitoring-count-failing"><b class="">0</b> failing</a>
-          <a href="/browse?monitoring=never_scanned&amp;grouped=0" data-testid="home-monitoring-count-never"><b class="">0</b> never scanned</a>
-          <a href="/browse?monitoring=current&amp;grouped=0" data-testid="home-monitoring-count-current"><b>1</b> of 1 current</a>
-        </div>
-      </div>
-
-
-        <p class="cw-home-calm">All monitored endpoints have current observations.</p>
-
-
-      <footer class="cw-home-foot">
-        <span>Last scan activity 2026-09-22 12:00 UTC</span>
-        <span>Next daily run 2026-09-23 06:00 UTC</span>
-        <a class="cw-link" href="/scan-history">Scan history</a>
-      </footer>
-    </section>
-
-    <section class="cw-home-block" data-testid="delivery-routing-block">
-      <div class="cw-home-head">
-        <h2>Delivery &amp; routing</h2>
-        <div class="cw-home-counts">
-          <a href="/browse?delivery=failing&amp;grouped=0" data-testid="home-delivery-count-failing"><b class="t-crit">1</b> can’t be delivered</a>
-          <a href="/browse?delivery=unrouted&amp;grouped=0" data-testid="home-delivery-count-unrouted"><b>0</b> unrouted</a>
-        </div>
-      </div>
-      <ul class="cw-home-rows">
-
-        <li class="cw-home-row cw-home-row--stack" data-testid="home-delivery-line">
-          <div class="cw-home-row-main">
-            <span class="cw-home-state t-warn"><span class="cw-home-dot"></span>Email not configured</span>
-            <span class="cw-home-detail">SMTP is not configured; email routes cannot deliver.</span>
-          </div>
-
-        </li>
-
-      </ul>
-    </section>
+  </div>
   </div>
 
   <section class="cw-home-horizon" data-testid="horizon-panel">

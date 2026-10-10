@@ -283,14 +283,18 @@ def test_home_populated_visual(page: Page, populated_server: str, assert_snapsho
 def test_home_a_blocks_layout_and_every_filtered_link(page: Page, populated_server: str) -> None:
     page.set_viewport_size({"width": 1440, "height": 1000})
     page.goto(populated_server)
-    blocks = [
-        page.get_by_test_id("certificate-risk-block"),
-        page.get_by_test_id("monitoring-gaps-block"),
-        page.get_by_test_id("delivery-routing-block"),
-    ]
-    boxes = [block.bounding_box() for block in blocks]
-    assert all(box is not None for box in boxes)
-    assert max(box["y"] for box in boxes if box) - min(box["y"] for box in boxes if box) < 2
+    def box(testid: str) -> dict[str, float]:
+        found = page.get_by_test_id(testid).bounding_box()
+        assert found is not None, testid
+        return found
+
+    # Monitoring and delivery (strip cells or opened blocks) sit above risk and
+    # hygiene, which share one row: risk on the left.
+    risk, hygiene = box("certificate-risk-block"), box("certificate-hygiene-block")
+    assert abs(risk["y"] - hygiene["y"]) < 2
+    assert hygiene["x"] > risk["x"] + risk["width"] - 1
+    for testid in ("monitoring-gaps-block", "delivery-routing-block"):
+        assert box(testid)["y"] + box(testid)["height"] <= risk["y"], testid
 
     summary_ids = (
         "home-tracked-count",
@@ -338,16 +342,12 @@ def test_home_a_blocks_layout_and_every_filtered_link(page: Page, populated_serv
 
     page.set_viewport_size({"width": 390, "height": 844})
     page.goto(populated_server)
-    boxes = [
-        page.get_by_test_id(testid).bounding_box()
-        for testid in (
-            "certificate-risk-block",
-            "monitoring-gaps-block",
-            "delivery-routing-block",
-        )
-    ]
-    assert all(box is not None for box in boxes)
-    assert [box["y"] for box in boxes if box] == sorted(box["y"] for box in boxes if box)
+    # Phones stack everything: whichever of monitoring/delivery is open comes
+    # first, then the strip, then risk above hygiene.
+    risk, hygiene = box("certificate-risk-block"), box("certificate-hygiene-block")
+    for testid in ("monitoring-gaps-block", "delivery-routing-block"):
+        assert box(testid)["y"] < risk["y"], testid
+    assert risk["y"] + risk["height"] <= hygiene["y"]
     assert page.evaluate("document.documentElement.scrollWidth === innerWidth")
     page.evaluate("window.scrollTo(500, 0)")
     assert page.evaluate("window.scrollX") == 0

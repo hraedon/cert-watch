@@ -19,7 +19,94 @@
     · {{ monitored_total }} monitored endpoint{{ 's' if monitored_total != 1 }}
   </p>
 
-  <div class="cw-home-grid" data-testid="home-blocks">
+  {#- Monitoring and delivery collapse into one status strip while they are
+      healthy and open into full blocks when they have problems. -#}
+  {% set monitoring_open = monitoring_rows | length > 0 %}
+  {% set delivery_open = delivery_lines | selectattr('tone') | list | length > 0 %}
+
+  {% macro monitoring_counts() %}
+        <div class="cw-home-counts">
+          <a href="/browse?monitoring=failing&amp;grouped=0" data-testid="home-monitoring-count-failing"><b class="{{ 't-warn' if axis_stats.monitoring.failing else '' }}">{{ axis_stats.monitoring.failing }}</b> failing</a>
+          <a href="/browse?monitoring=never_scanned&amp;grouped=0" data-testid="home-monitoring-count-never"><b class="{{ 't-warn' if axis_stats.monitoring.never_scanned else '' }}">{{ axis_stats.monitoring.never_scanned }}</b> never scanned</a>
+          <a href="/browse?monitoring=current&amp;grouped=0" data-testid="home-monitoring-count-current"><b>{{ axis_stats.monitoring.current }}</b> of {{ monitored_total }} current</a>
+        </div>
+  {% endmacro %}
+  {% macro delivery_counts() %}
+        <div class="cw-home-counts">
+          <a href="/browse?delivery=failing&amp;grouped=0" data-testid="home-delivery-count-failing"><b class="{{ 't-crit' if axis_stats.delivery.failing else '' }}">{{ axis_stats.delivery.failing }}</b> can’t be delivered</a>
+          <a href="/browse?delivery=unrouted&amp;grouped=0" data-testid="home-delivery-count-unrouted"><b>{{ axis_stats.delivery.unrouted }}</b> unrouted</a>
+        </div>
+  {% endmacro %}
+  {% macro scan_meta() %}<span>{{ last_scan_activity_label }}</span><span>Next daily run {{ next_run_label }}</span><a class="cw-link" href="/scan-history">Scan history</a>{% endmacro %}
+
+  <div class="cw-home-blocks" data-testid="home-blocks">
+  {% if monitoring_open %}
+    <section class="cw-home-block" data-testid="monitoring-gaps-block">
+      <div class="cw-home-head">
+        <h2>Monitoring gaps</h2>
+        {{ monitoring_counts() }}
+      </div>
+      <ul class="cw-home-rows cw-home-table">
+        {% for row in monitoring_rows %}
+        <li class="cw-home-row" data-testid="home-monitoring-row" data-monitoring="{{ row.state }}">
+          <span class="cw-home-state {{ row.tone }}"><span class="cw-home-dot"></span>{{ row.state_label }}</span>
+          <span class="cw-home-name"><a class="cw-id cw-home-id" href="{{ row.detail_url }}">{{ row.name }}</a></span>
+          <span class="cw-home-side{% if not row.owner_name %} cw-muted{% endif %}">{{ row.owner_name or 'No owner' }}</span>
+          <span class="cw-home-detail cw-home-row-detail">
+            {%- if row.cause_time_label %}Scan overdue since <span class="cw-home-time">{{ row.cause_time_label }}</span>.{% else %}<span{% if row.cause_is_raw %} class="cw-id"{% endif %}>{{ row.cause }}</span>{% endif %}
+            {%- if row.when_label %} <span class="cw-home-when">· {{ row.when_prefix }} <span class="cw-home-time">{{ row.when_time_label }}</span></span>{% endif %}
+            {%- if row.last_success_label != 'Not yet' %} <span class="cw-home-when">· last good scan <span class="cw-home-time">{{ row.last_success_label }}</span></span>{% endif %}
+          </span>
+        </li>
+        {% endfor %}
+      </ul>
+      <footer class="cw-home-foot">{{ scan_meta() }}</footer>
+    </section>
+  {% endif %}
+
+  {% if delivery_open %}
+    <section class="cw-home-block" data-testid="delivery-routing-block">
+      <div class="cw-home-head">
+        <h2>Delivery &amp; routing</h2>
+        {{ delivery_counts() }}
+      </div>
+      <ul class="cw-home-rows cw-home-table">
+        {% for line in delivery_lines %}
+        <li class="cw-home-row cw-home-row--line" data-testid="home-delivery-line">
+          <span class="cw-home-state {{ line.tone }}"><span class="cw-home-dot{% if not line.tone %} hollow{% endif %}"></span>{{ line.label }}</span>
+          <span class="cw-home-detail">{{ line.detail }}</span>
+          {% if line.action_url and (not line.admin_only or is_admin) %}<a class="cw-link cw-home-side" href="{{ line.action_url }}">{{ line.action_label }}</a>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
+  {% if not (monitoring_open and delivery_open) %}
+    <div class="cw-home-strip-status" data-testid="home-status-strip">
+      {% if not monitoring_open %}
+      <section class="cw-home-cell" data-testid="monitoring-gaps-block">
+        <div class="cw-home-cell-head"><h2>Monitoring</h2>{{ monitoring_counts() }}</div>
+        <div class="cw-home-cell-meta">
+          {% if not monitored_total %}<span>No monitored endpoints yet. Uploaded files are not monitored.</span>{% endif %}
+          {{ scan_meta() }}
+        </div>
+      </section>
+      {% endif %}
+      {% if not delivery_open %}
+      <section class="cw-home-cell" data-testid="delivery-routing-block">
+        <div class="cw-home-cell-head"><h2>Delivery &amp; routing</h2>{{ delivery_counts() }}</div>
+        <div class="cw-home-cell-meta">
+          {% for line in delivery_lines %}
+          <span data-testid="home-delivery-line" title="{{ line.detail }}">{{ line.label }}{% if line.action_url and (not line.admin_only or is_admin) %} · <a class="cw-link" href="{{ line.action_url }}">{{ line.action_label }}</a>{% endif %}</span>
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  <div class="cw-home-split">
     <section class="cw-home-block" data-testid="certificate-risk-block">
       <div class="cw-home-head">
         <h2>Certificate risk</h2>
@@ -28,21 +115,22 @@
           <a href="/browse?condition=le7&amp;grouped=0" data-testid="home-condition-count-le7"><b class="{{ 't-crit' if axis_stats.condition.le7 else '' }}">{{ axis_stats.condition.le7 }}</b> ≤7 days</a>
           <a href="/browse?condition=8to30&amp;grouped=0" data-testid="home-condition-count-8to30"><b class="{{ 't-warn' if axis_stats.condition['8to30'] else '' }}">{{ axis_stats.condition['8to30'] }}</b> 8–30 days</a>
           <a href="/browse?renewal=failed&amp;grouped=0" data-testid="home-renewal-count-failed"><b class="{{ 't-crit' if axis_stats.renewal.failed else '' }}">{{ axis_stats.renewal.failed }}</b> renewal failed</a>
-          <a href="/browse?renewal=not_deployed&amp;grouped=0" data-testid="home-renewal-count-not-deployed"><b class="{{ 't-crit' if axis_stats.renewal.not_deployed else '' }}">{{ axis_stats.renewal.not_deployed }}</b> Deployment not confirmed</a>
+          <a href="/browse?renewal=not_deployed&amp;grouped=0" data-testid="home-renewal-count-not-deployed"><b class="{{ 't-crit' if axis_stats.renewal.not_deployed else '' }}">{{ axis_stats.renewal.not_deployed }}</b> deployment not confirmed</a>
           <a href="/browse?condition=ok&amp;grouped=0" data-testid="home-condition-count-ok"><b>{{ axis_stats.condition.ok }}</b> OK</a>
         </div>
       </div>
 
       {% if risk_rows %}
-      <ul class="cw-home-rows">
+      <ul class="cw-home-rows cw-home-table">
         {% for row in risk_rows %}
         <li class="cw-home-row" data-testid="home-risk-row" data-condition="{{ row.condition }}">
-          <div class="cw-home-row-main">
-            <span class="cw-home-state {{ row.tone }}"><span class="cw-home-dot"></span>{{ row.condition_label }}</span>
+          <span class="cw-home-state {{ row.tone }}"><span class="cw-home-dot"></span>{{ row.condition_label }}</span>
+          <span class="cw-home-name">
             <a class="cw-id cw-home-id" href="{{ row.detail_url }}">{{ row.name }}</a>
-            {% if row.difference %}<span class="cw-home-detail">{{ row.difference }}</span>{% endif %}
-          </div>
+            {%- if row.chain_url %}<a class="cw-home-chain" href="{{ row.chain_url }}" title="{{ row.chain_label }}" aria-label="{{ row.chain_label }}" data-testid="home-risk-chain">{{ icons.svg_icon('unlink', 14, 1.8) }}</a>{% endif %}
+          </span>
           <span class="cw-home-side{% if not row.owner_name %} cw-muted{% endif %}">{{ row.owner_name or 'No owner' }}</span>
+          {% if row.difference %}<span class="cw-home-detail cw-home-row-detail">{{ row.difference }}</span>{% endif %}
         </li>
         {% endfor %}
       </ul>
@@ -53,83 +141,43 @@
           {% if may_write %}<a href="/browse" class="cw-btn primary">{{ icons.svg_icon('plus', 15, 2) }}Add certificates</a>{% endif %}
         {% endcall %}
       {% endif %}
+    </section>
 
+    <section class="cw-home-block" data-testid="certificate-hygiene-block">
+      <div class="cw-home-head">
+        <h2>Certificate hygiene</h2>
+        {% if chain_problem_total %}
+        <div class="cw-home-counts">
+          <a href="/browse?chain_problem=1&amp;grouped=0" data-testid="home-chain-total-link"><b>{{ chain_problem_total }}</b> chain{{ 's' if chain_problem_total != 1 }} can’t be verified</a>
+          <span><b>{{ chain_issuer_total }}</b> issuer{{ 's' if chain_issuer_total != 1 }}</span>
+        </div>
+        {% endif %}
+      </div>
       {% if chain_problem_total %}
-      <div class="cw-home-subhead">
-        <span>Chain can’t be verified · <a class="cw-link" href="/browse?chain_problem=1&amp;grouped=0" data-testid="home-chain-total-link">{{ chain_problem_total }} certificate{{ 's' if chain_problem_total != 1 }}</a>, {{ chain_issuer_total }} issuer{{ 's' if chain_issuer_total != 1 }}</span>
-      </div>
+      <p class="cw-home-hygiene-sub">Chain and trust problems don’t get worse with time, but strict clients may already reject these certificates.</p>
+      {% for fix in chain_fixes %}
+      <div class="cw-home-fix" data-testid="home-chain-fix" data-fix="{{ fix.fix }}"><b>{{ fix.label }}</b> — {{ fix.guidance }}</div>
       <ul class="cw-home-rows">
-        {% for group in chain_groups %}
-        <li class="cw-home-row cw-home-row--stack" data-testid="home-chain-row">
-          <div class="cw-home-row-main">
-            <span><strong>{{ group.issuer }}</strong> <span class="cw-muted">· {{ group.count }} certificate{{ 's' if group.count != 1 }}</span></span>
-            {% if group.examples %}<span class="cw-id cw-home-detail">{{ group.examples | join(', ') }}</span>{% endif %}
-            <span class="cw-home-detail">{{ group.guidance }}</span>
-          </div>
+        {% for group in fix.groups %}
+        <li class="cw-home-row cw-home-row--issuer" data-testid="home-chain-row">
+          <span><strong>{{ group.issuer }}</strong> <span class="cw-muted">· {{ group.count }} certificate{{ 's' if group.count != 1 }}</span></span>
           <a class="cw-link cw-home-side" href="{{ group.browse_url }}">View {{ group.count }}</a>
+          {% if group.examples %}<span class="cw-id cw-home-detail cw-home-row-detail">{{ group.examples | join(', ') }}</span>{% endif %}
         </li>
         {% endfor %}
       </ul>
+      {% endfor %}
+      {% if chain_issuer_total > chain_groups | length %}
+      {% set more = chain_issuer_total - chain_groups | length %}
+      <p class="cw-home-more"><a class="cw-link" href="/browse?chain_problem=1&amp;grouped=0">{{ more }} more issuer{{ 's' if more != 1 }}</a> in Browse</p>
       {% endif %}
-    </section>
-
-    <section class="cw-home-block" data-testid="monitoring-gaps-block">
-      <div class="cw-home-head">
-        <h2>Monitoring gaps</h2>
-        <div class="cw-home-counts">
-          <a href="/browse?monitoring=failing&amp;grouped=0" data-testid="home-monitoring-count-failing"><b class="{{ 't-warn' if axis_stats.monitoring.failing else '' }}">{{ axis_stats.monitoring.failing }}</b> failing</a>
-          <a href="/browse?monitoring=never_scanned&amp;grouped=0" data-testid="home-monitoring-count-never"><b class="{{ 't-warn' if axis_stats.monitoring.never_scanned else '' }}">{{ axis_stats.monitoring.never_scanned }}</b> never scanned</a>
-          <a href="/browse?monitoring=current&amp;grouped=0" data-testid="home-monitoring-count-current"><b>{{ axis_stats.monitoring.current }}</b> of {{ monitored_total }} current</a>
-        </div>
-      </div>
-
-      {% if monitoring_rows %}
-      <ul class="cw-home-rows">
-        {% for row in monitoring_rows %}
-        <li class="cw-home-row cw-home-row--stack" data-testid="home-monitoring-row" data-monitoring="{{ row.state }}">
-          <div class="cw-home-row-main">
-            <span class="cw-home-state {{ row.tone }}"><span class="cw-home-dot"></span>{{ row.state_label }}{% if row.when_label %} <span class="cw-home-when">{{ row.when_prefix }} <span class="cw-home-time">{{ row.when_time_label }}</span></span>{% endif %}</span>
-            <a class="cw-id cw-home-id" href="{{ row.detail_url }}">{{ row.name }}</a>
-            {% if row.cause_time_label %}<span class="cw-home-detail">Scan overdue since <span class="cw-home-time">{{ row.cause_time_label }}</span>.</span>{% else %}<span class="cw-home-detail{% if row.cause_is_raw %} cw-id{% endif %}">{{ row.cause }}</span>{% endif %}
-            {% if row.last_success_label != 'Not yet' %}<span class="cw-home-detail cw-muted">Last good scan <span class="cw-home-time">{{ row.last_success_label }}</span></span>{% endif %}
-          </div>
-          <span class="cw-home-side{% if not row.owner_name %} cw-muted{% endif %}">{{ row.owner_name or 'No owner' }}</span>
-        </li>
-        {% endfor %}
-      </ul>
-      {% elif monitored_total %}
-        <p class="cw-home-calm">All monitored endpoints have current observations.</p>
+      {% elif tracked_total %}
+        <p class="cw-home-calm">No chain or trust problems found.</p>
       {% else %}
-        <p class="cw-home-calm">No monitored endpoints yet. Uploaded files are not monitored.</p>
+        <p class="cw-home-calm">Chain and trust problems will appear here once certificates are added.</p>
       {% endif %}
-
-      <footer class="cw-home-foot">
-        <span>{{ last_scan_activity_label }}</span>
-        <span>Next daily run {{ next_run_label }}</span>
-        <a class="cw-link" href="/scan-history">Scan history</a>
-      </footer>
     </section>
-
-    <section class="cw-home-block" data-testid="delivery-routing-block">
-      <div class="cw-home-head">
-        <h2>Delivery &amp; routing</h2>
-        <div class="cw-home-counts">
-          <a href="/browse?delivery=failing&amp;grouped=0" data-testid="home-delivery-count-failing"><b class="{{ 't-crit' if axis_stats.delivery.failing else '' }}">{{ axis_stats.delivery.failing }}</b> can’t be delivered</a>
-          <a href="/browse?delivery=unrouted&amp;grouped=0" data-testid="home-delivery-count-unrouted"><b>{{ axis_stats.delivery.unrouted }}</b> unrouted</a>
-        </div>
-      </div>
-      <ul class="cw-home-rows">
-        {% for line in delivery_lines %}
-        <li class="cw-home-row cw-home-row--stack" data-testid="home-delivery-line">
-          <div class="cw-home-row-main">
-            <span class="cw-home-state {{ line.tone }}"><span class="cw-home-dot{% if not line.tone %} hollow{% endif %}"></span>{{ line.label }}</span>
-            <span class="cw-home-detail">{{ line.detail }}</span>
-          </div>
-          {% if line.action_url and (not line.admin_only or is_admin) %}<a class="cw-link cw-home-side" href="{{ line.action_url }}">{{ line.action_label }}</a>{% endif %}
-        </li>
-        {% endfor %}
-      </ul>
-    </section>
+  </div>
   </div>
 
   <section class="cw-home-horizon" data-testid="horizon-panel">
