@@ -183,7 +183,11 @@ def _risk_difference(row: dict[str, Any]) -> str:
         elif renewal == "in_progress":
             details.append("Renewal in progress (operator report)")
         elif renewal == "stalled" and method:
-            details.append(f"{method} configured — no new certificate yet")
+            # A manual method is not something that is "configured" to renew.
+            if method.casefold() == "manual":
+                details.append("Manual renewal — no new certificate yet")
+            else:
+                details.append(f"{method} configured — no new certificate yet")
     return " · ".join(details)
 
 

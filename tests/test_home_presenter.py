@@ -237,3 +237,15 @@ def test_home_risk_row_marks_chain_only_when_the_chain_is_unverified() -> None:
     assert broken.chain_url == "/browse?chain_problem=1&grouped=0"
     assert broken.chain_label == "Chain can\u2019t be verified"
     assert broken.difference == ""
+
+
+def test_home_stalled_renewal_copy_reads_naturally_for_each_method() -> None:
+    def stalled(method: str) -> dict:
+        return {"id": method or "none", "host": f"{method or 'none'}.example.test:443",
+                "host_id": "h", "source": "scanned", "condition": "8to30",
+                "effective_days": 20, "renewal": "stalled", "renewal_method": method}
+
+    view = _minimal_home({"risk:8to30": [stalled("manual"), stalled("acme")]}, [])
+    by_name = {row.name: row.difference for row in view.risk_rows}
+    assert by_name["manual.example.test"] == "Manual renewal — no new certificate yet"
+    assert by_name["acme.example.test"] == "ACME configured — no new certificate yet"
