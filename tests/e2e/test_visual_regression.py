@@ -43,6 +43,29 @@ def visual_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
             proc.kill()
 
 
+@pytest.fixture(scope="module")
+def login_visual_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """A server with a local admin, so /login renders the sign-in form.
+
+    visual_server disables auth, where /login only redirects to Home.
+    """
+    from cert_watch.auth.local_admin import _scrypt_hash
+
+    data_dir: Path = tmp_path_factory.mktemp("cw-visual-login-data")
+    proc, base = boot_server(data_dir, env_extra={
+        "CERT_WATCH_LOCAL_ADMIN_USER": "visual-admin",
+        "CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH": _scrypt_hash("visual-pass-1"),
+    })
+    try:
+        yield base
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
 # Regions that legitimately vary between runs/builds.
 _MASKS = [
     "[data-testid=auth-user]",
@@ -63,8 +86,6 @@ _VISUAL_PAGES = {
     "settings-policy": ("/settings/policy", "settings-heading"),
     "settings-access": ("/settings/access", "settings-heading"),
     "api-keys": ("/settings/api-keys", "api-keys-heading"),
-    # This server explicitly disables auth: /login redirects to Home.
-    "login": ("/login", "home-heading"),
 }
 
 
@@ -79,6 +100,16 @@ def test_page_visual(page: Page, visual_server: str, assert_snapshot, name, spec
     page.evaluate("document.fonts.ready")
     page.wait_for_timeout(400)
     assert_snapshot(page, name=f"{name}.png", mask_elements=_MASKS)
+
+
+@pytest.mark.visual
+def test_login_visual(page: Page, login_visual_server: str, assert_snapshot) -> None:
+    page.goto(f"{login_visual_server}/login")
+    expect(page.get_by_test_id("login-heading")).to_be_visible()
+    expect(page.get_by_test_id("login-username")).to_be_visible()
+    page.evaluate("document.fonts.ready")
+    page.wait_for_timeout(400)
+    assert_snapshot(page, name="login.png", mask_elements=_MASKS)
 
 
 @pytest.mark.visual

@@ -17,6 +17,12 @@ All notable changes to cert-watch are documented in this file.
   rows move their timestamp to the detail line ("Reported …"/"Raised …"), and
   the "deployment not confirmed" count is lower-cased like its siblings.
 
+### Fixed
+
+- A stalled renewal on a host with the manual renewal method read "manual
+  configured — no new certificate yet" on Home. It now reads "Manual renewal —
+  no new certificate yet".
+
 ## [1.2.3] - 2026-10-07
 
 A maintenance release with no migrations and no configuration changes. A
