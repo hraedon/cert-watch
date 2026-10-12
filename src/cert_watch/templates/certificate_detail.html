@@ -464,6 +464,37 @@
                     {% endif %}
                 </div>
             </section>
+            {%- if shared_endpoints %}
+                <section class="cw-panel" data-testid="shared-endpoints">
+                    <div class="cw-panel-head">
+                        <h2>Also served by</h2>
+                    </div>
+                    <div class="cw-panel-body">
+                        <p class="cw-hint">
+                            {{ shared_endpoints | length }} other {{ 'endpoint serves' if shared_endpoints | length == 1 else 'endpoints serve' }} this certificate.
+                            Owner, renewal settings and notes belong to each endpoint; open one to edit its own.
+                        </p>
+                        <div class="cw-table-wrap">
+                            <table class="cw-table cw-mobile-wrap-table cw-mobile-card-table">
+                                <thead>
+                                    <tr>
+                                        <th>Endpoint</th>
+                                        <th>Notes</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for endpoint in shared_endpoints %}
+                                        <tr data-testid="shared-endpoint">
+                                            <td data-label="Endpoint"><a class="cw-id cw-link" href="/certificates/{{ endpoint.cert_id }}">{{ endpoint.name }}</a></td>
+                                            <td data-label="Notes">{% if endpoint.notes %}{{ endpoint.notes }}{% else %}<span class="cw-muted">None</span>{% endif %}</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+            {% endif %}
             {% if cert %}
                 <section class="cw-panel cw-detail-disclosures">
                     <details id="certificate-facts" data-testid="certificate-facts">

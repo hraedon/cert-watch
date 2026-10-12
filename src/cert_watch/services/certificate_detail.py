@@ -16,6 +16,7 @@ from cert_watch.database import (
     Alert,
     HostEntry,
     LatestScanRecord,
+    SharedEndpointRecord,
     SqliteAlertRepository,
     SqliteCertificateRepository,
     SqliteTrustAnchorRepository,
@@ -27,6 +28,7 @@ from cert_watch.database import (
     get_renewal_history,
     get_stored_certificate_detail_records,
     list_cert_history,
+    list_shared_endpoints,
 )
 from cert_watch.database.renewal_attempts import get_renewal_detail
 from cert_watch.scan_freshness import ScanEvidence, load_scan_evidence
@@ -60,6 +62,9 @@ class StoredCertificateDetailData:
     status: dict[str, Any] | None = None
     renewal_attempt: dict[str, object] | None = None
     renewal_reports: tuple[dict[str, object], ...] = ()
+    # Other endpoints serving this certificate, each with its own host
+    # settings and notes.
+    shared_endpoints: tuple[SharedEndpointRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -216,4 +221,11 @@ def load_certificate_detail(
         status=status_model,
         renewal_attempt=stored_renewal_attempt,
         renewal_reports=tuple(stored_renewal_reports),
+        shared_endpoints=(
+            list_shared_endpoints(
+                db_path, cert_id, stored.cert.fingerprint_sha256, scope_tags=scope_tags
+            )
+            if stored.cert.source == "scanned"
+            else ()
+        ),
     )
