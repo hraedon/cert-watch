@@ -16,6 +16,9 @@ All notable changes to cert-watch are documented in this file.
   issuer's certificates, in place of the "chain also unverified" text. Renewal
   rows move their timestamp to the detail line ("Reported …"/"Raised …"), and
   the "deployment not confirmed" count is lower-cased like its siblings.
+- CI also runs the unit and integration tests on Python 3.15. cert-watch needed
+  no changes for it. Until the lockfile picks up 3.15 wheels, eight locked
+  dependencies (among them cffi and pydantic-core) build from source on 3.15.
 
 ### Added
 
