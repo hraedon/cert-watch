@@ -71,7 +71,11 @@ _MASKS = [
     "[data-testid=auth-user]",
     ".cw-ver",
     "#cw-health",
-    ".cw-home-foot span:nth-child(2)",  # Next run crosses at the configured schedule.
+    # "Next daily run <date>" changes at the configured schedule. It is the
+    # last span of scan_meta(), which renders in the footer or the
+    # Monitoring cell of the status strip.
+    ".cw-home-foot span:last-of-type",
+    "[data-testid=monitoring-gaps-block] .cw-home-cell-meta span:last-of-type",
     ".cw-home-strip",  # Twelve calendar weeks roll at each UTC week boundary.
 ]
 

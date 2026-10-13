@@ -50,11 +50,13 @@ from cert_watch.database.dashboard_detail import (
     CurrentCertificateRef,
     LatestScanRecord,
     PendingHostDetailRecords,
+    SharedEndpointRecord,
     StoredCertificateDetailRecords,
     get_cert_detail,
     get_latest_scan_record,
     get_pending_host_detail_records,
     get_stored_certificate_detail_records,
+    list_shared_endpoints,
     resolve_current_certificate,
 )
 from cert_watch.database.dashboard_grouped import (
@@ -292,6 +294,7 @@ __all__ = [  # noqa: RUF022 — exports are grouped by database subsystem
     "SqliteCertificateRepository",
     "SqliteHostRepository",
     "SqliteTrustAnchorRepository",
+    "SharedEndpointRecord",
     "StoredCertificateDetailRecords",
     "TrustAnchorEntry",
     # api keys
@@ -337,6 +340,7 @@ __all__ = [  # noqa: RUF022 — exports are grouped by database subsystem
     "resolve_current_certificate",
     "CurrentCertificateRef",
     "get_stored_certificate_detail_records",
+    "list_shared_endpoints",
     "list_dashboard_grouped_page",
     "list_dashboard_page",
     "list_dashboard_rows",

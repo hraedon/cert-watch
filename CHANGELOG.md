@@ -20,6 +20,13 @@ All notable changes to cert-watch are documented in this file.
   no changes for it. Until the lockfile picks up 3.15 wheels, eight locked
   dependencies (among them cffi and pydantic-core) build from source on 3.15.
 
+### Added
+
+- A certificate's detail page lists the other endpoints serving the same
+  certificate, each with its notes and a link to its own page. Notes, owner and
+  renewal settings belong to each endpoint, so the page where they are edited
+  was reachable only through the expand control on a grouped Browse row.
+
 ### Fixed
 
 - A stalled renewal on a host with the manual renewal method read "manual
