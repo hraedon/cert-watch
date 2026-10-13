@@ -9,7 +9,7 @@ from typing import Any
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database.connection import _connect, _row_to_cert, _sql_now
-from cert_watch.database.dashboard_helpers import current_leaf_sql
+from cert_watch.database.dashboard_helpers import _add_effective_tag_filter, current_leaf_sql
 from cert_watch.database.dashboard_rows import _build_dashboard_rows
 from cert_watch.database.dashboard_unified import _build_unified_from_dash
 from cert_watch.database.posture import get_posture_for_cert
@@ -32,6 +32,17 @@ class StoredCertificateDetailRecords:
     hostname: str
     port: int
     host: HostEntry | None
+
+
+@dataclass(frozen=True)
+class SharedEndpointRecord:
+    """Another monitored endpoint currently serving the same certificate."""
+
+    cert_id: str
+    host_id: str
+    hostname: str
+    port: int
+    notes: str
 
 
 @dataclass(frozen=True)
@@ -69,6 +80,47 @@ def get_stored_certificate_detail_records(
         hostname=hostname,
         port=port,
         host=(SqliteHostRepository._row_to_host(host_row) if host_row is not None else None),
+    )
+
+
+def list_shared_endpoints(
+    db_path: str | Path,
+    cert_id: str,
+    fingerprint: str,
+    *,
+    scope_tags: list[str] | tuple[str, ...] = (),
+) -> tuple[SharedEndpointRecord, ...]:
+    """The other endpoints whose current scanned leaf has *fingerprint*.
+
+    Owner, notes and renewal settings live on each host, so a certificate
+    served by several endpoints has one set per endpoint. Only endpoints the
+    caller's *scope_tags* can see are returned.
+    """
+    if not fingerprint:
+        return ()
+    init_schema(db_path)
+    sql = (
+        "SELECT c.id AS cert_id, h.id AS host_id, h.hostname, h.port, h.notes "
+        "FROM certificates c JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port "
+        "WHERE c.fingerprint_sha256 = ? AND c.id != ? AND c.source = 'scanned' "
+        f"AND {current_leaf_sql('c')}"
+    )
+    params: list[Any] = [fingerprint, cert_id]
+    sql, params = _add_effective_tag_filter(
+        sql, params, scope_tags, col_cert="c.tags", col_host="h.tags"
+    )
+    sql += " ORDER BY h.hostname, h.port"
+    with _connect(db_path) as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return tuple(
+        SharedEndpointRecord(
+            cert_id=row["cert_id"],
+            host_id=row["host_id"],
+            hostname=row["hostname"],
+            port=row["port"],
+            notes=row["notes"] or "",
+        )
+        for row in rows
     )
 
 

@@ -84,6 +84,15 @@ class CertificateView:
 
 
 @dataclass(frozen=True)
+class SharedEndpointView:
+    """Another endpoint serving this certificate, linked to its own page."""
+
+    cert_id: str
+    name: str
+    notes: str
+
+
+@dataclass(frozen=True)
 class HostInfoView:
     owner_name: str | None
     owner_email: str | None
@@ -272,6 +281,7 @@ class CertificateDetailView:
     renewal_attempt: RenewalAttemptView | None = None
     renewal_reports: tuple[RenewalReportView, ...] = ()
     reveal_renewal_report_details: bool = False
+    shared_endpoints: tuple[SharedEndpointView, ...] = ()
 
     def template_context(self) -> dict[str, Any]:
         """Expose one stable boundary to Jinja or a future JSON serializer."""
@@ -1304,4 +1314,12 @@ def present_certificate_detail(
         renewal_attempt=renewal_attempt,
         renewal_reports=renewal_reports,
         reveal_renewal_report_details=reveal_renewal_report_details,
+        shared_endpoints=tuple(
+            SharedEndpointView(
+                cert_id=item.cert_id,
+                name=f"{item.hostname}:{item.port}",
+                notes=item.notes.strip(),
+            )
+            for item in data.shared_endpoints
+        ),
     )
