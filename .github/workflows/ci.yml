@@ -89,6 +89,45 @@ jobs:
           .venv/bin/pytest -q --no-cov -p no:cacheprovider
           --ignore=tests/e2e --ignore=tests/integration
 
+  test-newest-python:
+    # The newest CPython release (3.15), so an incompatibility shows up before
+    # the image moves to it. requires-python is open-ended (>=3.12), so a pip
+    # install can already land on this interpreter.
+    runs-on: ubuntu-latest
+    # Bounded because several locked dependencies build from source here (see
+    # the libffi step); a stuck build should fail, not hold the runner.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Patina verifies the recorded content-model review against git history.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.15"
+      # Until a lock refresh picks up cp315 wheels, uv builds cffi,
+      # pydantic-core, regex, pyyaml, markupsafe, httptools, uvloop and librt
+      # from source on 3.15. The runner has a C compiler and Rust; cffi also
+      # needs the libffi headers, which the runner image does not list.
+      - name: libffi headers (cffi source build)
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libffi-dev
+      - run: uv venv
+      - run: uv sync --frozen --extra dev --extra auth
+      - name: Confirm the interpreter is a 3.15 final release
+        run: >-
+          .venv/bin/python -c "import sys; print(sys.version);
+          assert sys.version_info[:2] == (3, 15) and sys.version_info.releaselevel == 'final'"
+      - name: pytest (newest interpreter)
+        run: >-
+          .venv/bin/pytest -q --no-cov -p no:cacheprovider
+          --ignore=tests/e2e --ignore=tests/integration
+      - name: Integration tests (newest interpreter)
+        # Real sockets, TLS and SMTP: where an interpreter's ssl/asyncio
+        # changes would surface.
+        run: >-
+          .venv/bin/pytest -m integration -q --no-cov -n0 tests
+          --ignore=tests/e2e --ignore=tests/integration --ignore=tests/deploy
+
   test-future-clock:
     runs-on: ubuntu-latest
     # ~5 minutes normally. Bounded because the libfaketime version of this
