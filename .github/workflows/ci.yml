@@ -118,9 +118,12 @@ jobs:
           .venv/bin/python -c "import sys; print(sys.version);
           assert sys.version_info[:2] == (3, 15) and sys.version_info.releaselevel == 'final'"
       - name: pytest (newest interpreter)
+        # The coverage floors need the `test` job's coverage.json; here they
+        # would only skip, so leave them out rather than count 19 skips.
         run: >-
           .venv/bin/pytest -q --no-cov -p no:cacheprovider
           --ignore=tests/e2e --ignore=tests/integration
+          --deselect tests/test_module_coverage_floors.py
       - name: Integration tests (newest interpreter)
         # Real sockets, TLS and SMTP: where an interpreter's ssl/asyncio
         # changes would surface.
