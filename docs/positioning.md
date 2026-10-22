@@ -91,7 +91,7 @@ rather than extended indefinitely. Its scope:
 - **Fit an audited environment.** Directory sign-in, role mapping and scoping,
   an audit log with SIEM export, Windows/IIS as a first-class host.
 
-It declines anything that makes an external cloud service a dependency or turns
+It deliberately declines anything that makes an external cloud service a dependency or turns
 it into a different product:
 
 - cloud-API discovery;

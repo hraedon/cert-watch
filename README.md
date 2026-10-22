@@ -39,7 +39,7 @@ answers three questions:
   Kubernetes, under systemd, or on Windows behind IIS. Prometheus metrics
   included.
 
-It does **not** issue or renew certificates, discover assets on its own, or
+It deliberately does **not** issue or renew certificates, discover assets on its own, or
 monitor Certificate Transparency logs. Tools such as Certimate or cert-manager,
 your inventory, and Cert Spotter do those better.
 [docs/positioning.md](docs/positioning.md) explains where cert-watch fits.
