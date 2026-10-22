@@ -1,10 +1,9 @@
 # Reporting renewals from automation
 
 A renewal report is a claim from your automation. A cert-watch scan is the
-evidence that decides which certificate the endpoint actually serves. Reports
-can pause a **Renewal stalled** notice while work is active and can create
-renewal-specific alerts, but they never suppress an expiry warning or an
-expired alert.
+evidence of which certificate the endpoint actually serves. Reports can pause a
+**Renewal stalled** notice while work is active and can create renewal-specific
+alerts. They never suppress an expiry warning or an expired alert.
 
 This guide covers the reporting API and ready-to-adapt hooks for plain shell,
 Certbot, and acme.sh. The examples are in
@@ -24,13 +23,13 @@ Every reporting key needs an explicit binding:
   manages the whole fleet. It is never selected implicitly.
 
 Bindings are checked on every request and cannot be edited. Revoke and replace
-the key when its scope changes. An endpoint that does not exist and one outside
+the key when its scope changes. An endpoint that doesn't exist and one outside
 the key's binding both return the same `404`.
 
 The credential can reach only `GET /api/renewal-reports` and
-`POST /api/renewal-reports`. It cannot read certificates, health, metrics,
-settings, HTML, or static files. Ordinary read, write, and admin keys cannot
-call the reporting routes.
+`POST /api/renewal-reports`. It can't read certificates, health, metrics,
+settings, HTML, or static files. Ordinary read, write, and admin keys can't call
+the reporting routes.
 
 Put the token in a root- or service-readable file, not in a script:
 
@@ -42,9 +41,9 @@ export CW_RENEWAL_REPORT_KEY_FILE=/etc/cert-watch/renewal-report.key
 export CW_BASE_URL=https://cert-watch.example.com
 ```
 
-`cw-report.sh` also accepts the token through `CW_RENEWAL_REPORT_KEY`, but the
-0600 file is preferred: an environment value is inherited by every child hook
-and reload command. The helper unsets that variable as soon as it reads it. It
+`cw-report.sh` also accepts the token through `CW_RENEWAL_REPORT_KEY`, but
+prefer the 0600 file: every child hook and reload command inherits an
+environment value. The helper unsets that variable as soon as it reads it. It
 never accepts a token argument, and it keeps the token out of curl's process
 arguments.
 
@@ -103,11 +102,11 @@ docs/examples/renewal-reports/cw-report.sh succeeded \
 ```
 
 The helper calculates a PEM leaf's SHA-256 fingerprint with OpenSSL, generates
-an idempotency key, safely JSON-encodes text, and exits non-zero for a non-2xx
-response. It checks the HTTP status manually, so it also works with curl
-versions older than 7.76. Set `CW_REPORT_TIMEOUT_SECONDS` to change its
-10-second request timeout, and set `CW_IDEMPOTENCY_KEY` yourself when retrying
-one logical delivery.
+an idempotency key, JSON-encodes text safely, and exits non-zero for a non-2xx
+response. It checks the HTTP status itself, so it also works with curl versions
+older than 7.76. Set `CW_REPORT_TIMEOUT_SECONDS` to change its 10-second request
+timeout, and set `CW_IDEMPOTENCY_KEY` yourself when retrying one logical
+delivery.
 
 ### Responses
 
@@ -209,11 +208,11 @@ text never enters logs, events, digests, alerts, or outbound notifications.
 
 ## Connect the renewal webhook
 
-The `renewal_needed` webhook includes an `event_id`, a stable 32-character
-hexadecimal id across delivery retries. Echo it as `correlation_id` on
-`started`, `succeeded`, and `failed` reports from that run. It links the
-request and outcome for operators without making repeated HTTP deliveries
-idempotent; continue to use a separate `Idempotency-Key` header for those.
+The `renewal_needed` webhook includes an `event_id`, a 32-character hexadecimal
+id that stays the same across delivery retries. Echo it as `correlation_id` on
+`started`, `succeeded`, and `failed` reports from that run. It links the request
+and outcome for operators but doesn't make repeated HTTP deliveries idempotent;
+use a separate `Idempotency-Key` header for those.
 
 ## Install the hook examples
 
@@ -233,16 +232,17 @@ supplied `CW_CORRELATION_ID`, such as a `renewal_needed` event id, takes
 precedence.
 
 Each reporting key can send five reports per endpoint per minute and 30 per
-minute in total. Above that, cert-watch answers `429`. The hooks do not retry,
-so a renewal re-run within the same minute can lose a report; the hook logs the
+minute in total. Above that, cert-watch answers `429`. The hooks don't retry, so
+a renewal re-run within the same minute can lose a report; the hook logs the
 `429` to standard error.
 
 Reporting is strictly best effort. Every hook logs a reporting error to
 standard error and exits zero when cert-watch is unavailable, times out, or
-rejects a request. If the state directory cannot be used safely, the hooks
-still report, each with a fresh correlation id, and say so on standard error. The wrappers preserve the renewal command's own exit status;
-whether cert-watch accepted a report never changes a renewal from succeeded to
-failed or from failed to succeeded.
+rejects a request. If the state directory can't be used safely, the hooks still
+report, each with a fresh correlation id, and say so on standard error. The
+wrappers preserve the renewal command's own exit status. Whether cert-watch
+accepted a report never changes a renewal from succeeded to failed or from
+failed to succeeded.
 
 ## Certbot
 
@@ -379,7 +379,7 @@ newer, the script reports `started`, runs your deployment step, confirms that
 the new certificate is in the store with a private key, and then reports
 `succeeded` with its fingerprint. A failure reports `failed`.
 
-The script reports nothing when the certificate is unchanged. A report
+The script reports nothing when the certificate is unchanged: a report
 describes a renewal attempt, not a heartbeat.
 
 The deployment step, `Invoke-CertificateUpdate`, is a stub: importing the PFX
@@ -397,8 +397,8 @@ served fingerprint. Confirm that the deployment updated the actual monitored
 hostname and port, including every load-balancer/backend path. Then run **Scan
 now**. A report cannot clear this state; only a successful scan serving the
 expected certificate can. If the report omitted `new_fingerprint`, check
-whether another certificate replacement happened in the preceding 24 hours
-and send fingerprints on future runs to remove that ambiguity.
+whether another certificate replacement happened in the preceding 24 hours, and
+send fingerprints on future runs to remove that ambiguity.
 
 ### A hook logs “cert-watch returned HTTP 400” and “invalid Host header”
 

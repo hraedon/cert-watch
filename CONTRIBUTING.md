@@ -2,7 +2,7 @@
 
 This page is for anyone changing the code, people and coding agents alike.
 [docs/architecture.md](docs/architecture.md) explains how the code is laid
-out. [AGENTS.md](AGENTS.md) adds a few notes that only matter to coding agents.
+out. [AGENTS.md](AGENTS.md) adds notes for coding agents.
 
 ## Setting up
 
@@ -55,14 +55,13 @@ A release tag publishes a signed, attested multi-architecture image, but only
 after the same checks pass on that exact commit.
 
 Several tests are ratchets. They pin a number (coverage per module, complexity
-limits) or a rule, and the only way to change the number is to make things
-better. They fail loudly by design. Don't loosen one to get a change through;
-fix what it found.
+limits) or a rule, and the number can only move in the better direction. They
+fail loudly by design. Don't loosen one to get a change through; fix what it
+found.
 
 ## Rules that protect users
 
-These came out of real incidents. Each one is enforced by a test or a review
-check.
+These came out of real incidents. A test or a review check enforces each one.
 
 - **Every route has exactly one guard** from `auth/guards.py`. Write guards
   always include CSRF. `tests/test_route_guards.py` fails on a mutating route
@@ -96,7 +95,7 @@ check.
 
 ## When you change the UI
 
-Each of these bugs shipped once, past a green suite:
+Each of these bugs shipped once, past a green suite.
 
 - Look at every page you changed with data and empty, in light and dark theme.
   `tests/e2e/_seed.py <data_dir>` seeds a realistic estate.
@@ -148,7 +147,7 @@ only reading it. Merge only on green CI.
 ## Decisions for the maintainer
 
 Implementation choices are yours. These need the maintainer's agreement
-before they merge, because their consequences are ones the tests can't see:
+before they merge, because tests can't see their consequences:
 
 - new runtime dependencies;
 - changes to authentication, session or CSRF defaults, or other security

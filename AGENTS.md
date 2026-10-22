@@ -1,8 +1,8 @@
 # AGENTS.md
 
-Notes for coding agents working on cert-watch. Start with
-[CONTRIBUTING.md](CONTRIBUTING.md): its rules apply to you in full. This file
-only adds what is specific to agents.
+Notes for coding agents working on cert-watch. The rules in
+[CONTRIBUTING.md](CONTRIBUTING.md) apply to you in full. This file adds only
+what is specific to agents.
 
 ## Orient
 
@@ -11,8 +11,8 @@ only adds what is specific to agents.
 2. Check open pull requests and recent `main` history before starting. Other
    agents work on this repository too. Fetch before you push, and read the
    push output: a rejected push is easy to miss.
-3. This repository is **public**. Stage files by explicit path, keep reviewer
-   scratch directories (`.review/`) out of commits, and don't put private host
+3. This repository is **public**. Stage files by explicit path. Keep reviewer
+   scratch directories (`.review/`) out of commits. Don't put private host
    names, credentials or work-domain identifiers in code, docs or commit
    messages. The identifier gate catches some of this, not all of it.
 
@@ -25,9 +25,9 @@ are archived; see [docs/history.md](docs/history.md).
 
 ## Seeing the UI
 
-A Playwright MCP server is configured (`.mcp.json`) for looking at the running
-app: navigating, clicking through a flow, taking screenshots. Use it to *see* a
-change before committing, and the e2e suite to *lock it in*.
+A Playwright MCP server is configured in `.mcp.json`. Use it to look at the
+running app: navigate, click through a flow, take screenshots. Use it to *see*
+a change before committing, and the e2e suite to *lock it in*.
 
 ## Test estate (mvmcitest01)
 
@@ -42,9 +42,13 @@ A live cert-watch instance is deployed on `mvmcitest01` (Windows/IIS, real AD LD
 
 ## Releasing
 
-Versions come from the git tag. The release workflow stamps
-`src/cert_watch/_version.txt` from `GIT_TAG` at build time; the committed file
-is the fallback for running from a checkout. To release, set the version in
-`pyproject.toml` and `_version.txt`, update `CHANGELOG.md` and `UPGRADING.md`,
-merge, and push a `vX.Y.Z` tag. The workflow refuses a tag that doesn't match
-`pyproject.toml`. Releases are the maintainer's call.
+The git tag sets the version. At build time the release workflow stamps
+`src/cert_watch/_version.txt` from `GIT_TAG`; the committed file is the
+fallback when running from a checkout. To release:
+
+1. Set the version in `pyproject.toml` and `_version.txt`.
+2. Update `CHANGELOG.md` and `UPGRADING.md`.
+3. Merge, then push a `vX.Y.Z` tag.
+
+The workflow refuses a tag that doesn't match `pyproject.toml`. Releases are
+the maintainer's call.

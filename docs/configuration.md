@@ -1,15 +1,15 @@
 # Configuration
 
 cert-watch is configured with environment variables and, for many settings,
-from **Settings** in the web interface. This page explains how the two
-combine, then lists every setting.
+from **Settings** in the web interface. This page explains how the two combine,
+then lists every setting.
 
 ## Where a setting's value comes from
 
-For each setting, cert-watch takes the first of these that exists:
+For each setting, cert-watch uses the first of these that exists:
 
-1. **The environment variable**, if it is set. For settings that can also be
-   saved in Settings, a blank value counts as unset, so a placeholder such as
+1. **The environment variable**, if set. For settings that can also be saved in
+   Settings, a blank value counts as unset, so a placeholder such as
    `SMTP_PASSWORD: ""` in a Compose file doesn't hide what you saved there.
 2. **The `_FILE` variant.** Every secret can instead be read from a file named
    by `<VARIABLE>_FILE`, e.g. `SMTP_PASSWORD_FILE=/run/secrets/smtp`. Use this
@@ -21,20 +21,20 @@ For each setting, cert-watch takes the first of these that exists:
    Saved secrets are encrypted with the auth secret.
 4. **The default.**
 
-So environment variables always win, which makes them the right place for
-configuration you manage as code. The Settings page shows a setting as locked
-when an environment variable is supplying it. Saving a setting in the
-interface applies it immediately, with no restart.
+Environment variables always win, so use them for configuration you manage as
+code. The Settings page shows a setting as locked when an environment variable
+supplies it. Saving a setting in the interface applies it immediately, with no
+restart.
 
 Numeric settings have ranges. An out-of-range environment value stops
-cert-watch at startup with a message naming the variable. An out-of-range
-saved value falls back to the default and is logged. Boolean variables are `1`
-for on; anything else is off.
+cert-watch at startup with a message naming the variable. An out-of-range saved
+value falls back to the default and is logged. Boolean variables are `1` for
+on; anything else is off.
 
 ## Process controls
 
-These aren't settings in the table below because they control the process
-rather than the application:
+These control the process rather than the application, so they aren't in the
+reference below:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -47,33 +47,36 @@ Generic webhook templates support `{{alert_type}}`, `{{cert_id}}`,
 `{{message}}`, `{{threshold_days}}`, and `{{status}}`. Leading Unicode BOMs and
 whitespace are ignored. A template uses JSON mode only when the remaining text
 starts with `{` and a neutral substitution parses as a JSON object. Everything
-else, including bracketed, placeholder-only, and form-looking templates, uses
-`text/plain`. In JSON templates, put string-valued placeholders inside JSON
-string literals. Only `{{threshold_days}}` (a number or `null`) may appear
-unquoted; a JSON template with any other unquoted placeholder is refused when
-saved, and at send time if it came from the environment.
+else, including bracketed, placeholder-only, and form-looking templates, is sent
+as `text/plain`.
 
-Placeholder values are escaped for exactly one JSON string level. A
-placeholder inside a string that itself contains an encoded JSON document gets
-no second level of escaping, so templates must not embed JSON inside a string;
-build nested payloads as real JSON objects instead. A generic template that
-starts with `{` but fails the neutral parse is rejected when saved and refused
-at delivery. Plain-text template values have control characters removed but
-are not escaped for form encoding or any other structured format. Use a JSON
+In JSON templates, put string-valued placeholders inside JSON string literals.
+Only `{{threshold_days}}` (a number or `null`) may appear unquoted. A JSON
+template with any other unquoted placeholder is refused when saved, and at send
+time if it came from the environment. A template that starts with `{` but fails
+the neutral parse is likewise rejected when saved and refused at delivery.
+
+Placeholder values are escaped for exactly one JSON string level. A placeholder
+inside a string that itself contains an encoded JSON document gets no second
+level of escaping, so don't embed JSON inside a string; build nested payloads as
+real JSON objects. Plain-text template values have control characters removed
+but are not escaped for form encoding or any other structured format. Use a JSON
 template when the receiver needs structure.
 
-Generic webhooks do not apply Slack, Discord, or Teams markup escaping. Use the
-dedicated channel kind when sending to one of those chat systems.
+Generic webhooks don't apply Slack, Discord, or Teams markup escaping. Use the
+dedicated channel kind for those chat systems.
 
 ## Renewal reporting settings
 
-`CERT_WATCH_RENEWAL_REPORT_LEASE_HOURS` controls how long the first `started`
+`CERT_WATCH_RENEWAL_REPORT_LEASE_HOURS` sets how long the first `started`
 report for an endpoint and served certificate can mute renewal-stalled notices.
 Repeats never extend or re-grant that lease. It never affects expiry alerts.
-`CERT_WATCH_RENEWAL_VERIFY_GRACE_MINUTES` controls how long after a `succeeded`
-report an unchanged successful scan must wait before it can count toward a
-deployment warning; an immediate scan can still verify a new certificate.
-See [Reporting renewals from automation](renewal-reports.md) for the complete
+
+`CERT_WATCH_RENEWAL_VERIFY_GRACE_MINUTES` sets how long after a `succeeded`
+report an unchanged successful scan must wait before it counts toward a
+deployment warning. An immediate scan can still verify a new certificate.
+
+See [Reporting renewals from automation](renewal-reports.md) for the full
 outcome and verification behavior.
 
 ## Reference
@@ -237,7 +240,7 @@ settings that can also be saved from the web interface.
 
 ## Settings that live only in the interface
 
-A few configurations are too structured for environment variables and are
-managed only under **Settings**: alert groups, the posture policy (rules and
-severities), event-stream forwarding, roles, local users and API keys. They're
+Some configuration is too structured for environment variables and is managed
+only under **Settings**: alert groups, the posture policy (rules and
+severities), event-stream forwarding, roles, local users and API keys. It's
 stored in the database and included in backups.

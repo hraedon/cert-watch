@@ -1,9 +1,9 @@
 # Vault wiring for cert-watch
 
-Operational runbook for sourcing every cert-watch secret from Vault — runtime,
-CI, and the agentic E2E layer — on one issuance + audit plane. The design rationale
-is in the archived plan 034 (see [docs/history.md](../../docs/history.md)); this
-is the how-to.
+Runbook for sourcing every cert-watch secret from Vault (runtime, CI and the
+agentic E2E layer) on one issuance and audit plane. The design rationale is in
+the archived plan 034 (see [docs/history.md](../../docs/history.md)); this is
+the how-to.
 
 > **Assumptions** (this cluster): KV v2 mounted at `kv/`, Vault at
 > `https://vault.k8s.hraedon.com`, app namespace `cert-watch`, k8s auth mount
@@ -36,9 +36,8 @@ Live and proven via the `cert-watch-setup` AppRole:
 
 ## 0. Bootstrap the automation identity (one-time, operator with admin token)
 
-Chicken-and-egg: creating the reusable setup identity needs admin once. After
-this, cert-watch automation authenticates as the scoped `cert-watch-setup`
-AppRole — never root.
+Creating the reusable setup identity needs admin once. After this, cert-watch
+automation authenticates as the scoped `cert-watch-setup` AppRole, never root.
 
 ```bash
 export VAULT_ADDR=https://vault.k8s.hraedon.com   # + admin VAULT_TOKEN in your shell
@@ -58,10 +57,10 @@ vault read  -field=role_id    auth/approle/role/cert-watch-setup/role-id
 vault write -field=secret_id -f auth/approle/role/cert-watch-setup/secret-id
 ```
 
-Then expose to the agent's **shell environment** (not chat):
-`VAULT_ADDR`, `VAULT_ROLE_ID`, `VAULT_SECRET_ID`. The agent logs in with
+Then expose `VAULT_ADDR`, `VAULT_ROLE_ID` and `VAULT_SECRET_ID` to the agent's
+**shell environment** (not chat). The agent logs in with
 `vault write -field=token auth/approle/login role_id="$VAULT_ROLE_ID" secret_id="$VAULT_SECRET_ID"`
-and runs steps 1–4. The secret-id is short-TTL / limited-use, so it self-expires.
+and runs steps 1–4. The secret-id has a short TTL and limited uses, so it expires on its own.
 
 ## 1. Engines + policies
 
@@ -73,13 +72,14 @@ vault policy write cert-watch-totp-mcp   deploy/vault/policies/cert-watch-totp-m
 ```
 
 Three policies, three trust levels: **app** reads its own KV subtree; **runner**
-reads test passwords; **mcp** reads only ephemeral TOTP codes. The split is the
-point — agent context never touches a reusable secret.
+reads test passwords; **mcp** reads only ephemeral TOTP codes. Agent context
+never touches a reusable secret.
 
 ## 2. Runtime — Vault Agent Injector (no app changes)
 
-cert-watch already honors the `<NAME>_FILE` convention (`config.py:read_secret`),
-so the injector renders secrets to files and we point `*_FILE` env at them.
+cert-watch honors the `<NAME>_FILE` convention (`read_secret` in
+`config/helpers.py`), so the injector renders secrets to files and the `*_FILE`
+env variables point at them.
 
 k8s auth role binding the pod ServiceAccount to the app policy:
 ```bash
@@ -109,8 +109,8 @@ Then set the matching env (replace the `secretKeyRef` blocks):
   value: /vault/secrets/oauth_client_secret
 # ...repeat for CSRF, LDAP_BIND_PASSWORD, LDAP_CA_CERT, SMTP_PASSWORD as needed
 ```
-(Alternative if you prefer native k8s Secrets / no sidecars: Vault Secrets
-Operator or External Secrets Operator syncing the same paths into a Secret.)
+(Alternative for native k8s Secrets and no sidecars: Vault Secrets Operator or
+External Secrets Operator syncing the same paths into a Secret.)
 
 ## 3. CI — runner credentials (no long-lived token)
 
@@ -131,8 +131,8 @@ Give the Vault MCP (or agent) a token/AppRole bound to **only**
 ```bash
 vault read -field=code totp/code/entra-cert-watch-admin
 ```
-Codes are 30s and audit-logged; even in agent context the blast radius is one
-expired code. Raw passwords stay on the runner side (policy split above).
+Codes last 30 seconds and are audit-logged, so a code exposed in agent context
+is one expired code. Raw passwords stay on the runner side (policy split above).
 
 ## Verify
 

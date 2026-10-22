@@ -11,28 +11,28 @@ releases do not receive backports; upgrade to the latest 1.x.
 | Latest `1.x` release | Yes |
 | Older releases | No |
 
-Upgrade to the latest release before reporting behavior that may already have
-been corrected.
+Before reporting, upgrade to the latest release in case the behavior is already
+fixed.
 
 ## Reporting a vulnerability
 
-Please report suspected vulnerabilities through
+Report suspected vulnerabilities through
 [GitHub private vulnerability reporting](https://github.com/hraedon/cert-watch/security/advisories/new).
 Do not open a public issue for an undisclosed vulnerability.
 
 Include the affected version or commit, deployment shape, prerequisites,
-reproduction steps, observed impact, and any suggested remediation. Remove real
-credentials, private keys, internal hostnames, and personal data from the
+reproduction steps, observed impact and any suggested fix. Remove real
+credentials, private keys, internal hostnames and personal data from the
 report. You should receive an acknowledgement within five business days. The
-maintainer will coordinate validation, remediation, release timing, and public
-disclosure with the reporter.
+maintainer coordinates validation, remediation, release timing and public
+disclosure with you.
 
 ## Security boundaries
 
 The living [threat model](docs/threat-model.md) documents assets, trust
-boundaries, attacker capabilities, deployment assumptions, and current
-controls. Reports are especially useful when they show a violation of one of
-these properties:
+boundaries, attacker capabilities, deployment assumptions and current
+controls. Reports are most useful when they show a violation of one of these
+properties:
 
 - exposed deployments establish authentication or fail closed;
 - state-changing cookie-authenticated requests require CSRF validation;
@@ -46,9 +46,9 @@ these properties:
 
 Configuration questions, hardening suggestions without a demonstrated boundary
 violation, and findings that require prior compromise of the host, identity
-provider, external integration, repository maintainer, or release authority are
-still welcome, but may be handled as ordinary issues after sensitive details are
-removed.
+provider, external integration, repository maintainer or release authority are
+still welcome. They may be handled as ordinary issues once sensitive details
+are removed.
 
 ## Changes that require security review
 

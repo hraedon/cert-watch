@@ -1,9 +1,9 @@
 # Access control
 
 This page explains who can sign in to cert-watch, what each person can do once
-signed in, and how to narrow a person to part of the estate. It describes
-current behaviour. If you are upgrading from 0.9, read the access-control
-section of [UPGRADING.md](../UPGRADING.md) first: several defaults became stricter.
+signed in, and how to limit a person to part of the estate. If you are upgrading
+from 0.9, read the access-control section of [UPGRADING.md](../UPGRADING.md)
+first: several defaults became stricter.
 
 ## The three kinds of account
 
@@ -42,10 +42,9 @@ the protection.
 
 ## How directory users get a tier
 
-cert-watch looks for a role mapping first. If there isn't one, it falls back
-to two older username lists. If neither exists, every signed-in directory user
-is an administrator; that default exists for compatibility and you should not
-rely on it.
+cert-watch looks for a role mapping first. Without one, it falls back to two
+older username lists. If neither exists, every signed-in directory user is an
+administrator. That default exists for compatibility; don't rely on it.
 
 ### 1. Role mapping (recommended)
 
@@ -72,16 +71,16 @@ is a viewer.
 Once a mapping has been saved under **Settings → Roles**, cert-watch remembers
 that role mapping is in use. A mapping that exists only in
 `CERT_WATCH_ROLE_MAP` isn't remembered this way; removing it returns directory
-users to the username lists below. Removing every mapping afterwards leaves directory users as
-viewers; it doesn't return them to full access. The same applies if the
-stored mapping becomes unreadable. Going back to the unmapped behaviour is
-deliberately awkward. With cert-watch stopped, delete the `ldap_role_map` and
-`ldap_role_map_configured` rows from the `kv_store` table.
+users to the username lists below. Removing every mapping afterwards leaves
+directory users as viewers; it doesn't return them to full access. The same
+applies if the stored mapping becomes unreadable. Going back to the unmapped
+behaviour is deliberately awkward: with cert-watch stopped, delete the
+`ldap_role_map` and `ldap_role_map_configured` rows from the `kv_store` table.
 
-Group membership is read when a user signs in and carried in their session.
-So a change that depends on groups, whether in the directory or a new group
-mapping in cert-watch, applies from the user's next sign-in. Changes to a
-role's tier or scope, and username mappings, apply on the next request.
+Group membership is read at sign-in and carried in the session. A change that
+depends on groups, whether in the directory or a new group mapping in
+cert-watch, applies from the user's next sign-in. Changes to a role's tier or
+scope, and username mappings, apply on the next request.
 
 ### 2. Username lists (older deployments)
 
@@ -106,8 +105,9 @@ break-glass admin.
 
 A role can carry a **scope**: one or more tags. A non-administrator who holds
 any scoped role sees and changes only hosts and certificates carrying one of
-their scope tags, even if they also hold an unscoped role. A role can also grant a different tier on specific tags, for example
-viewer everywhere in scope but operator on `payments`.
+their scope tags, even if they also hold an unscoped role. A role can also grant
+a different tier on specific tags, for example viewer everywhere in scope but
+operator on `payments`.
 
 Scope applies to the inventory, certificate and host pages, alerts, scan
 history, posture and readiness reports, compliance reports, exports and the
@@ -157,9 +157,9 @@ The report-key allowlist compares the raw request path. Deploying cert-watch
 under a URL path prefix or ASGI `root_path` is not supported for report keys
 yet; those credentials fail closed instead of reaching the report routes.
 
-Create keys for systems, not people, and revoke them when they are no longer needed.
+Create keys for systems, not people, and revoke them when no longer needed.
 Creating, listing and revoking keys needs an administrator's browser session,
-so an API key can't mint more keys, not even an `admin` key. A key keeps
+so an API key can't create more keys, not even an `admin` key. A key keeps
 working after the person who created it loses administrator access, so review
 keys when access changes.
 
@@ -180,9 +180,9 @@ lists, exports, `GET /api/certificates/{id}`, and
 `GET /api/certificates/{id}/alert-routing`. A `read` API key is redacted;
 `write` and `admin` keys are not.
 
-`/metrics` is separate from all of this. It accepts its own bearer token
-(`CERT_WATCH_METRICS_TOKEN`) or an administrator's browser session, and
-nothing else.
+`/metrics` is separate. It accepts its own bearer token
+(`CERT_WATCH_METRICS_TOKEN`) or an administrator's browser session, and nothing
+else.
 
 ## Sessions
 

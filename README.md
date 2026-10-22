@@ -2,13 +2,13 @@
 
 [![CI](https://github.com/hraedon/cert-watch/actions/workflows/ci.yml/badge.svg)](https://github.com/hraedon/cert-watch/actions/workflows/ci.yml)
 
-cert-watch keeps track of every TLS certificate an organisation depends on,
-and tells the right people before one causes an outage.
+cert-watch tracks every TLS certificate an organisation depends on and tells
+the right people before one causes an outage.
 
-It is self-hosted and built for small and mid-sized organisations that have
-dozens to a few thousand certificates spread across public websites, internal
-services, domain controllers, appliances and files nobody remembers. You tell
-it where to look, and it answers three questions:
+It is self-hosted, for small and mid-sized organisations with dozens to a few
+thousand certificates across public websites, internal services, domain
+controllers, appliances and forgotten files. You tell it where to look. It
+answers three questions:
 
 - **What expires, and when?** Every certificate, its expiry, and whether the
   renewal that should have replaced it has actually happened.
@@ -39,9 +39,9 @@ it where to look, and it answers three questions:
   Kubernetes, under systemd, or on Windows behind IIS. Prometheus metrics
   included.
 
-It deliberately does **not** issue or renew certificates, discover assets on
-its own, or monitor Certificate Transparency logs. Tools such as Certimate or
-cert-manager, your inventory, and Cert Spotter do those better;
+It deliberately does **not** issue or renew certificates, discover assets on its own, or
+monitor Certificate Transparency logs. Tools such as Certimate or cert-manager,
+your inventory, and Cert Spotter do those better.
 [docs/positioning.md](docs/positioning.md) explains where cert-watch fits.
 
 ## Try it
@@ -56,8 +56,7 @@ Open <http://localhost:8000>, sign in as `admin`, and add a host with
 **Browse → Add host**. The first scan runs immediately.
 
 For anything longer-lived, follow [docs/install.md](docs/install.md). It covers
-pinning and verifying a release, and sets out what to configure before
-production.
+pinning and verifying a release, and what to configure before production.
 
 ## Documentation
 

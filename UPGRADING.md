@@ -2,8 +2,8 @@
 
 ## How upgrades work
 
-Install the new version over the same data directory and start it. On
-startup, cert-watch:
+Install the new version over the same data directory and start it. On startup,
+cert-watch:
 
 1. takes a lock so a second process starting at the same time waits;
 2. writes a backup of the database next to it
@@ -18,10 +18,10 @@ Upgrades only go forward. To roll back, stop cert-watch, restore the
 pre-migration backup (see [operations.md](docs/operations.md#restoring)), and
 start the previous version.
 
-**Supported upgrade path: 0.9.x to 1.0.** A test replays a real 0.9.0
-database through the upgrade and checks that nothing is lost. For an older
-release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
-with the CSV import; history is not carried over that way.
+**Supported upgrade path: 0.9.x to 1.0.** A test replays a real 0.9.0 database
+through the upgrade and checks that nothing is lost. From an older release,
+upgrade to 0.9.x first, or start a fresh 1.0 and re-add your hosts with the CSV
+import (history is not carried over that way).
 
 ## Upgrading from 1.2.2 to 1.2.3
 
@@ -29,8 +29,8 @@ A drop-in upgrade: no database migrations, no new settings, no API removals.
 Upgrade the usual way for your hosting model and confirm `/readyz` returns 200.
 `/api/health` gains `auth_config_error` for administrators. When directory
 sign-in cannot work as configured, the health strip turns amber and says why;
-`/readyz` is unaffected. If you poll `/api/health` from monitoring, an amber
-`overall` can now also mean a directory misconfiguration.
+`/readyz` is unaffected. If monitoring polls `/api/health`, an amber `overall`
+can now also mean a directory misconfiguration.
 
 ## Upgrading from 1.2.1 to 1.2.2
 
@@ -41,17 +41,17 @@ Five things may look different:
 - **Directory sign-in with a broken search filter.** If the LDAP user search
   filter cannot work, cert-watch logs an error naming it at startup, and sign-in
   says *Directory sign-in is misconfigured* instead of *invalid credentials*.
-  Sign in with the local account and correct it under Settings → Sign-in. The
-  usual Active Directory filter is `(sAMAccountName={username})`. Settings
-  refuses to save a filter that cannot work.
+  Sign in with the local account and correct the filter under Settings →
+  Sign-in. The usual Active Directory filter is `(sAMAccountName={username})`.
+  Settings refuses to save a filter that cannot work.
 - **CAA on hosts whose lookup fails or cannot apply.** These were reported as
   "No CAA records found" and counted against the compliance report's CAA ratio.
   From each host's next scan they show no CAA finding and drop out of that
   ratio. This covers IP addresses, single-label and `.local`-style names, and
   names whose CAA lookup your resolver cannot answer.
-- **Alert retries run on their own schedule.** A delivery that failed is
-  retried when its backoff expires, instead of at the next host scan, so a
-  recovered mail relay or webhook receives the backlog sooner.
+- **Alert retries run on their own schedule.** A failed delivery is retried
+  when its backoff expires, not at the next host scan, so a recovered mail
+  relay or webhook receives the backlog sooner.
 - **One current certificate per endpoint everywhere.** If an old alias merge
   left an endpoint with two scanned certificates, alerts, renewal decisions,
   digests and routing previews now use the same one inventory shows. A link to
@@ -64,8 +64,8 @@ Five things may look different:
 
 A drop-in upgrade: no database migrations, no new or changed settings, no API
 changes. Upgrade the usual way for your hosting model and confirm `/readyz`
-returns 200. If you run the container image, 1.2.1 also picks up Debian's fixed
-OpenSSL (CVE-2026-75804, CVE-2026-84782).
+returns 200. The container image 1.2.1 also picks up Debian's fixed OpenSSL
+(CVE-2026-75804, CVE-2026-84782).
 
 ## Upgrading from 1.1.1 to 1.2.0
 
@@ -79,8 +79,8 @@ hooks.
 
 Authorization parsing is stricter for cert-watch API keys. A malformed
 `Authorization` header that presents a `cwk_` credential now returns `401` on
-every route instead of being trimmed or passed through. Authorization headers
-that do not present a `cwk_` credential are unaffected.
+every route instead of being trimmed or passed through. Headers that do not
+present a `cwk_` credential are unaffected.
 
 Startup applies migrations **0045–0049** in order:
 
@@ -109,10 +109,10 @@ Startup applies migrations **0045–0049** in order:
   upgrade and remains open until a qualifying scan, endpoint deletion, or an
   explicit operator clear.
 
-Pay particular attention to hosts left **in progress** before the upgrade.
-Their migration lease expires after the configured interval, so hosts that
-were left in that state for weeks start receiving renewal-stalled notices 24
-hours after upgrade under the default. Re-marking the same served certificate
+Check hosts left **in progress** before the upgrade. Their migration lease
+expires after the configured interval, so hosts left in that state for weeks
+start receiving renewal-stalled notices 24 hours after upgrade under the
+default. Re-marking the same served certificate
 can show new work but cannot grant a second stalled-muting lease; a served
 successor ends the old stalled condition.
 
@@ -122,9 +122,9 @@ Alertmanager fingerprint keys byte-for-byte. Only the new
 keys, so an upgrade does not split or orphan existing provider incidents.
 
 The migrations are forward-only. To roll back, stop cert-watch, restore the
-pre-migration backup created before **0045**, and then start 1.1.1. Do not run
-an older binary against the migrated database. Renewal-report credentials are
-also deliberately unusable by the older verifier.
+pre-migration backup created before **0045**, and start 1.1.1. Do not run an
+older binary against the migrated database. Renewal-report credentials are
+deliberately unusable by the older verifier.
 
 ## Upgrading from 1.1.0 to 1.1.1
 
@@ -147,9 +147,9 @@ After this version, a generic webhook template that starts with `{` after
 leading BOMs and whitespace but is not valid JSON after neutral substitution
 is refused when saved and at send time, as is a JSON template with any
 unquoted placeholder other than `{{threshold_days}}`. This is the only
-delivery behaviour change for existing templates; startup logs a warning naming the generic
-channel when an environment-provided or previously saved template would be
-refused.
+delivery behaviour change for existing templates. Startup logs a warning naming
+the generic channel when an environment-provided or previously saved template
+would be refused.
 
 ### Migration 0044
 
@@ -170,10 +170,10 @@ still invalidate or recompute the affected endpoint.
 1.1.0 describes every endpoint with four separate facts -- certificate
 condition (expiry only), monitoring (is the scan current), renewal, and alert
 delivery -- and rebuilds Home, Browse, certificate detail and Posture around
-them. One schema migration is applied on startup; nothing needs
-reconfiguring. Several API responses and exports change shape, and recipient
-details are now hidden from read-only callers, so check any scripts against
-the list below before upgrading.
+them. One schema migration is applied on startup; nothing needs reconfiguring.
+Several API responses and exports change shape, and recipient details are now
+hidden from read-only callers. Check your scripts against the list below before
+upgrading.
 
 ### Migration 0043
 
@@ -411,7 +411,7 @@ Four schema migrations are applied on startup; nothing else to reconfigure.
   and port; the startup log reports how many of each. It is kept for good
   (one small row per renewal) and is not part of the event stream.
 
-Behaviour to be aware of: Home's *Needs attention* panel lists the 50 most
+Other behaviour changes: Home's *Needs attention* panel lists the 50 most
 urgent items and says how many there are, and expanding a group in the
 issuer, owner or renewal-method views loads 100 rows at a time. Tag scopes
 now match tags stored with spaces (`staging, edge` is in scope `edge`)
@@ -420,12 +420,12 @@ everywhere, as grouped Browse already did.
 Bulk actions now act only on what the caller may change. For a user whose
 role gives write access on some tags and read-only access on others, *Scan
 all*, *Mark all read* and *Flush* cover only the writable tags (they used to
-include read-only ones), and a user with no writable tag gets nothing selected.
+include read-only ones). A user with no writable tag gets nothing selected.
 *Scan all*, adding hosts and CSV import report a `refused` count or per-row
 message when a host moves out of the caller's scope while its scan is running,
 instead of failing the whole request.
 
-One more behaviour change affects access control:
+One more change affects access control:
 
 - **Certificate tags are now durable grants.** A scan no longer wipes the
   tags set on a certificate itself, and a renewal carries them to the new
@@ -487,12 +487,12 @@ know:
 
 ## Upgrading from 1.0.1 to 1.0.2
 
-Nothing to migrate or reconfigure. Two behaviour changes to be aware of:
+Nothing to migrate or reconfigure. Two behaviour changes:
 
 - JSON API request bodies are limited to 256 KiB and 64 levels of nesting;
   larger or deeper bodies get `400`. Every JSON endpoint takes small bodies
-  (the largest real one is a host note, capped at 10,000 characters), so
-  this only affects a client that sends far more than the API uses.
+  (the largest real one is a host note, capped at 10,000 characters), so only a
+  client that sends far more than the API uses is affected.
 - The container image runs Python 3.14 and no longer contains `pip`. If you
   extend the image or run `pip` inside the container, install it in your own
   layer.
@@ -514,9 +514,9 @@ didn't exist) and any copies you shared: they can contain your
 
 ## Upgrading from 0.9 to 1.0
 
-1.0 is the release where cert-watch's defaults became strict. Most
-installations need to do nothing, but go through this list first: several
-items can lock someone out or change who gets alerted.
+1.0 made cert-watch's defaults strict. Most installations need to do nothing,
+but go through this list first: several items can lock someone out or change
+who gets alerted.
 
 ### Before you upgrade
 
@@ -697,27 +697,26 @@ items can lock someone out or change who gets alerted.
   `*:443:` and switches out of SNI mode. (`-SharePort443` by itself is
   rejected.)
 
-  The installer stops the application pool, which releases the database,
-  updates the code, and starts the pool again. It does not replace the database,
-  signing keys, or an existing `web.config`; the restarted application applies
-  the pending database migrations. For any *manual* file operation, such as
-  restoring a backup, stop the pool first; Windows won't let you replace an
-  open database.
+  The installer stops the application pool (which releases the database),
+  updates the code, and starts the pool again. It does not replace the
+  database, signing keys, or an existing `web.config`; the restarted
+  application applies the pending database migrations. Before any *manual* file
+  operation, such as restoring a backup, stop the pool: Windows won't let you
+  replace an open database.
 
   The script upgrades pip, then runs `pip install --upgrade` for the cert-watch
   project in the extracted source tree; it does not install from `uv.lock`.
-  With pip's default `only-if-needed` upgrade strategy, already-installed
-  dependencies remain in place unless they no longer satisfy cert-watch's
-  declared ranges. Any dependency resolution uses pip's configured package
-  index, which is not necessarily PyPI.
+  With pip's default `only-if-needed` upgrade strategy, installed dependencies
+  stay in place unless they no longer satisfy cert-watch's declared ranges.
+  Dependency resolution uses pip's configured package index, which is not
+  necessarily PyPI.
 
-Then watch the log for `backed up …` and `applying migration …` lines, and open
-the web interface. Those lines are visible from 1.0.1 onward. Independently of
-the application version, confirm that a new
-`cert-watch-pre-migration-*.sqlite3` file appeared beside the database and
-inspect the database's `schema_version` table. Windows does not include a
-`sqlite3` executable, so use the installation's Python. Reuse `$python` and
-`$dataDir` from the live IIS inspection above (the default `$python` is
+Then watch the log for `backed up …` and `applying migration …` lines (visible
+from 1.0.1 onward), and open the web interface. Whatever the application
+version, confirm that a new `cert-watch-pre-migration-*.sqlite3` file appeared
+beside the database and inspect the database's `schema_version` table. Windows
+has no `sqlite3` executable, so use the installation's Python. Reuse `$python`
+and `$dataDir` from the live IIS inspection above (the default `$python` is
 `C:\ProgramData\cert-watch\venv\Scripts\python.exe`):
 
 ```powershell
@@ -775,8 +774,7 @@ below the highest recorded ID is present. For the unchanged schemas in the
 - **v0.9.3:** 0027–0037.
 - **v0.9.4 and v0.9.5:** 0029–0037.
 
-**Alerting behaves better, and slightly differently.** See
-[alerting.md](docs/alerting.md) for the whole picture.
+**Alerting changes.** See [alerting.md](docs/alerting.md) for the full picture.
 
 - Failed deliveries back off and retry (1 h, 4 h, 12 h), and give up after 12
   attempts. A given-up alert stays **failed** until someone selects **Retry**.

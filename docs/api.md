@@ -18,7 +18,7 @@ complete leaf-chain result or endpoint.
 
 Inventory endpoints that accept the public `renewal` filter use one shared
 precedence: `not_deployed`, `failed`, `stalled`, `verifying`, `in_progress`,
-`manual`, `automation_configured`, then `unknown`. The `not_deployed`,
+`automation_configured`, `manual`, then `unknown`. The `not_deployed`,
 `failed`, and `verifying` values are additive in 1.2; existing filter values
 remain valid. Browse uses the same vocabulary in its query string.
 
@@ -29,8 +29,8 @@ hooks, see [Reporting renewals from automation](renewal-reports.md). This
 section is the compact wire-level reference.
 
 Renewal automation uses a dedicated `renewal-report` API key. Send it as
-`Authorization: Bearer cwk_…`. These keys can call only the two routes below;
-ordinary read, write and admin API keys cannot call them. The normal per-IP
+`Authorization: Bearer cwk_…`. These keys can call only the two routes below,
+and ordinary read, write and admin API keys can't call them. The normal per-IP
 API limit still applies, plus 30 requests per minute per report key and five
 per minute per key and endpoint.
 
@@ -102,17 +102,17 @@ that wider addressing window does not change the baseline rules.
 A first report whose `new_fingerprint` equals the baseline is stored with
 `"effect":"no_change"` and returns `"state":null`, because no attempt exists.
 
-`report_id` is an opaque random identifier and carries no ordering information.
+`report_id` is an opaque random identifier with no ordering information.
 History is ordered newest-first by an internal sequence that is never exposed.
-A repeated `started` is retained but never extends the original lease. The default lease is 24
-hours (`CERT_WATCH_RENEWAL_REPORT_LEASE_HOURS`, range 1–168). A lapsed lease
-becomes `abandoned` without raising an alert. A partial unique index marks at
-most one attempt as current for an endpoint. Repeated
-`failed` reports are retained without changing the state. Correlation
-ownership moves when its report opens a new attempt, so an identical retry
-resolves to that current attempt. Until retention removes the ownership row, a
-late report stays attached to its finished attempt and cannot reopen work.
-Only the first attempt for an endpoint and baseline leaf can suppress a stalled signal,
+A repeated `started` is retained but never extends the original lease. The
+default lease is 24 hours (`CERT_WATCH_RENEWAL_REPORT_LEASE_HOURS`, range
+1–168). A lapsed lease becomes `abandoned` without raising an alert. A partial
+unique index marks at most one attempt as current for an endpoint. Repeated
+`failed` reports are retained without changing the state. Correlation ownership
+moves when its report opens a new attempt, so an identical retry resolves to
+that current attempt. Until retention removes the ownership row, a late report
+stays attached to its finished attempt and cannot reopen work. Only the first
+attempt for an endpoint and baseline leaf can suppress a stalled signal,
 including across intervening baselines and cancelled attempts.
 
 Each reporting key may create at most 1,000 correlation IDs per endpoint in a
@@ -122,8 +122,9 @@ rolling 24-hour period. Further new correlations return the same
 ### `GET /api/renewal-reports?hostname=…&port=…`
 
 Returns newest-first history. `page` defaults to 1 (maximum 10,000) and
-`limit` defaults to 50 (maximum 100). A report key receives only reports created by that same key,
-and only while the endpoint remains in its live host-tag binding. Unknown and
+`limit` defaults to 50 (maximum 100). A report key receives only reports created
+by that same key, and only while the endpoint remains in its live host-tag
+binding. Unknown and
 out-of-binding endpoints both return `404 {"error":"endpoint not found"}`.
 GET also maps a malformed hostname to that same 404; POST treats a malformed
 hostname as body validation and returns 422.
@@ -132,8 +133,8 @@ A signed-in user who can read the endpoint sees outcome, timestamps, effect
 and the state of that report's actual attempt. `message`, `tool`, `source` and
 `correlation_id` are included only for an administrator or a caller with
 HOST-tag write access to the endpoint. A report key can see those fields on
-its own reports. Report text is never
-copied to logs, events, alerts or notification delivery. Audit detail
+its own reports. Report text is never copied to logs, events, alerts or
+notification delivery. Audit detail
 deliberately retains `tool` and `correlation_id` for administrators, but stores
 only the message length and hash rather than its text.
 

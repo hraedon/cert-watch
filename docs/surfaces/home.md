@@ -4,7 +4,7 @@
 
 Home is the operator's compact triage surface. It separates certificate risk
 (expiry and renewal) from certificate hygiene (chain and trust problems), keeps
-monitoring and alert delivery visible without letting them take space while
+monitoring and alert delivery visible without taking space while they are
 healthy, and shows where expiry work lands over the next twelve weeks.
 
 ## Structure
@@ -20,9 +20,9 @@ healthy, and shows where expiry work lands over the next twelve weeks.
    (stacked below 1100 px). Risk is the only one with status colour.
 3. A clickable twelve-week expiry strip.
 
-Every count and week opens the exact flat Browse population it counts. Expiry
-rows are ranked by days. Failed and unconfirmed renewal deployments appear in
-Certificate risk after expiry rows, even when the certificate is not near
+Every count and week opens the flat Browse population it counts. Expiry rows
+are ranked by days. Failed and unconfirmed renewal deployments appear in
+Certificate risk after the expiry rows, even when the certificate is not near
 expiry; their counts link to the matching renewal-filtered Browse population.
 Risk and monitoring rows share one grammar: state, name and owner on the first
 line, with an optional detail line under the name, and state labels aligned
@@ -35,10 +35,10 @@ neutral: these problems don't get worse with time, though strict clients may
 already reject the certificates. A risk row whose chain is also unverified
 carries a small broken-chain icon linking to that issuer's unverified
 certificates, so the chain can be fixed at renewal. Monitoring rows
-distinguish failed, overdue, and never-scanned endpoints, explain failures in
+distinguish failed, overdue and never-scanned endpoints, explain failures in
 plain language, and state when the problem began. Delivery shows problem
 channels and scoped owner/group routing gaps, or one neutral all-delivering
-line. Empty state explains how to begin.
+line. The empty state explains how to begin.
 
 ## Ownership and boundaries
 

@@ -1,9 +1,8 @@
 # Alerting
 
-cert-watch raises an alert when something about a certificate needs a person's
-attention. It works out who that person is, delivers the alert by email or
-webhook, and keeps a record of every delivery attempt. This page explains each
-step.
+cert-watch raises an alert when a certificate needs a person's attention. It
+works out who that person is, delivers the alert by email or webhook, and
+records every delivery attempt. This page explains each step.
 
 ## What raises an alert
 
@@ -19,12 +18,13 @@ step.
 
 Every endpoint is tracked separately. A wildcard certificate served by five
 hosts produces an alert for each of them, routed to each host's owner.
+
 Marking a renewal **in progress** opens a time-limited attempt. Its first lease
 for that endpoint and served certificate suppresses only the renewal-stalled
 condition and the automation-facing `renewal_needed` webhook; the overdue event
 is still recorded. It never suppresses expiry warnings or expired alerts.
-Repeated starts do not extend or re-grant the lease. Renewal completion is
-established by observing a successor certificate, not by an operator report.
+Repeated starts don't extend or re-grant the lease. A renewal is complete when
+cert-watch observes a successor certificate, not when an operator reports it.
 For the reporting API and tested Certbot/acme.sh hooks, see
 [Reporting renewals from automation](renewal-reports.md).
 
@@ -56,14 +56,14 @@ whose baseline is the certificate currently being served.
 
 ### Renewal verification
 
-A `succeeded` report that enters verification queues one immediate check; repeat
-reports cannot move it. Scheduler eligibility keeps every check at least five
-minutes after that endpoint's last actual scan. The first check can verify a fast
-deployment, but an unchanged result does not count toward an alert until the
+A `succeeded` report that enters verification queues one immediate check;
+repeat reports cannot move it. The scheduler keeps every check at least five
+minutes after that endpoint's last actual scan. The first check can verify a
+fast deployment, but an unchanged result doesn't count toward an alert until the
 configured grace period after the report that entered verification has elapsed
-(`CERT_WATCH_RENEWAL_VERIFY_GRACE_MINUTES`,
-5 minutes by default, range 5–15). Later checks use the expiry of the leaf that
-was serving when the attempt opened:
+(`CERT_WATCH_RENEWAL_VERIFY_GRACE_MINUTES`, 5 minutes by default, range 5–15).
+Later checks use the expiry of the leaf that was serving when the attempt
+opened:
 
 | Previous certificate has left | Verification checks | Alert after |
 |---|---|---|
@@ -72,7 +72,7 @@ was serving when the attempt opened:
 | Less than 3 days, or expiry unknown | At the grace boundary, then hourly | First qualifying unchanged check |
 | Expired | At the grace boundary, then every 15 minutes | First qualifying unchanged check |
 
-A failed network scan or database store is not verification evidence. It sets
+A failed network scan or database store isn't verification evidence. It sets
 the attempt's blocked timestamp, leaves the state and alert unchanged, and
 reschedules using the same band. If evaluating an otherwise stored scan fails,
 cert-watch retries with exponential backoff from five minutes up to that band's
@@ -196,7 +196,7 @@ templated), `slack`, `teams`, `discord`, `pagerduty` and `alertmanager`. All
 webhook traffic goes through the same address allowlist as scanning, checked
 at every redirect.
 
-Generic webhooks do not apply Slack, Discord, or Teams markup escaping. Use the
+Generic webhooks don't apply Slack, Discord, or Teams markup escaping. Use the
 dedicated channel kind for chat destinations.
 
 Each alert moves through a small set of states, shown in **Activity → Alerts**:
@@ -210,9 +210,9 @@ Each alert moves through a small set of states, shown in **Activity → Alerts**
 | **Cancelled** | The condition went away before it was delivered, e.g. the certificate was replaced. |
 
 Delivery runs every alert cycle, and on demand from **Activity → Alerts →
-Flush queue**. Each round retries a failing channel three times. If the alert still
-isn't delivered, it waits 1 hour, then 4 hours, then 12 hours between rounds,
-and after 12 attempts it is marked failed.
+Flush queue**. Each round retries a failing channel three times. If the alert
+still isn't delivered, it waits 1 hour, then 4 hours, then 12 hours between
+rounds, and after 12 attempts it is marked failed.
 
 An alert that can't be sent because no channel is configured waits without
 using up attempts. Saving an SMTP or webhook channel under Settings makes it
@@ -250,7 +250,7 @@ rescan that finds the same certificate doesn't count as a renewal.
 | **Renewal digest** | Weekly | Renewals seen, renewals overdue, shorter replacement lifetimes, every **Renewal failed** condition that overlapped the period (including one since cleared), and current **Reported but not deployed** transitions raised during the period |
 | **Orphan notice** | Weekly when there are orphans, to local administrator accounts with an email | Certificates nobody specific is watching |
 
-Each digest is claimed per recipient and per period. So a restart, a second
+Each digest is claimed per recipient and per period. A restart, a second
 process or a changed setting mid-week never sends one twice, and a partial
 failure retries only the recipients that didn't get it.
 
@@ -258,10 +258,10 @@ The two renewal-problem sections read durable attempt transition timestamps,
 not Event stream or alert-delivery rows. A carried failure condition appears
 once, under the attempt that first reported it, when it was open at any point
 in the digest period; verification or manual clearing later in the same period
-does not erase that history. A superseding attempt without scan evidence also
-does not erase it. Current not-deployed conditions appear once using their
-raise time (or their accepted report time for upgraded historical rows). Owner copies use
-the endpoint's owner email when the digest is sent; the global copy and delivery
+doesn't erase that history. Neither does a superseding attempt without scan
+evidence. Current not-deployed conditions appear once using their raise time (or
+their accepted report time for upgraded historical rows). Owner copies use the
+endpoint's owner email when the digest is sent; the global copy and delivery
 ledger behave like the existing renewal sections. Digest content includes only
 the endpoint and transition time, never report text, tool or correlation data,
 key identity, tags, or recipient identities.
@@ -299,12 +299,13 @@ idempotency key for receiving the webhook, and is independent of the Event
 stream's database row id. Echo it as the renewal report's `correlation_id` to
 link the request with `started`, `succeeded`, and `failed` outcomes; use a
 separate `Idempotency-Key` header for retrying a report delivery.
-`cert_watch_url` is included when `CERT_WATCH_BASE_URL` is set. The event is
-sent at most once per endpoint per day and retried with backoff if the
-destination fails. Disabling `renewal_overdue` under **Settings → Event
-streaming** stops that event from being stored or forwarded but does not
-disable this renewal webhook. It goes through
-the address allowlist and never blocks the scan cycle.
+`cert_watch_url` is included when `CERT_WATCH_BASE_URL` is set.
+
+The event is sent at most once per endpoint per day and retried with backoff if
+the destination fails. It goes through the address allowlist and never blocks
+the scan cycle. Disabling `renewal_overdue` under **Settings → Event streaming**
+stops that event from being stored or forwarded but doesn't disable this
+renewal webhook.
 
 ## Event forwarding
 

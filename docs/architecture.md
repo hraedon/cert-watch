@@ -2,8 +2,8 @@
 
 cert-watch is a FastAPI application with a background scheduler, backed by one
 SQLite file. This page describes how the code is organised and the few rules
-that keep it that way. [CONTRIBUTING.md](../CONTRIBUTING.md) lists the rules
-as a checklist; this page explains them.
+that keep it that way. [CONTRIBUTING.md](../CONTRIBUTING.md) lists the rules as
+a checklist; this page explains them.
 
 ## Layers
 
@@ -75,18 +75,19 @@ carry on during a write.
 The schema is defined only by the numbered migrations in `migrations/`,
 starting from the 0001 baseline. Each migration and its version row commit
 together. A cross-process lock serialises startup, so two processes starting
-at once can't both migrate. Before any migration runs, the database is backed
-up. `tests/test_schema_migration_invariants.py` compares a fresh schema with
+at once can't both migrate. The database is backed up before any migration
+runs. `tests/test_schema_migration_invariants.py` compares a fresh schema with
 one upgraded from real historical versions.
 
-Operational readers share `database/dashboard_helpers.py`'s current-leaf
-selection. For scanned certificates, each hostname and port has one head:
-prefer a leaf no other leaf on that endpoint replaces, then newest creation
-time and rowid. A lineage cycle falls back to newest. Uploaded leaves remain
-individual records. Inventory, alerts, renewal baselines, digests, routing
-previews and chain-cache refreshes all use this population. Detail pages
-redirect surviving non-head scanned IDs to the head after checking its scope;
-explicit historical record reads and stored alert-routing snapshots stay exact.
+Operational readers share the current-leaf selection in
+`database/dashboard_helpers.py`. For scanned certificates, each hostname and
+port has one head: prefer a leaf that no other leaf on that endpoint replaces,
+then the newest creation time and rowid. A lineage cycle falls back to newest.
+Uploaded leaves stay individual records. Inventory, alerts, renewal baselines,
+digests, routing previews and chain-cache refreshes all use this population.
+Detail pages redirect surviving non-head scanned IDs to the head after checking
+its scope. Explicit historical record reads and stored alert-routing snapshots
+stay exact.
 
 ## Configuration
 
