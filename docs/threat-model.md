@@ -6,14 +6,13 @@ and deployment-manifest review; no live environment was assessed.
 Every control below names the code that implements it and the test that fails
 if it regresses. Code paths are relative to `src/cert_watch/` unless they
 start with `.github/`, `scripts/`, `deploy/` or `tests/`. A claim with no test
-is marked *(untested)*. When you change
-code named here, update this file in the same change (see
-[Review triggers](#review-triggers)).
+is marked *(untested)*. When you change code named here, update this file in
+the same change (see [Review triggers](#review-triggers)).
 
 ## What cert-watch is
 
 A single FastAPI process with a server-rendered UI, a JSON API, a CLI and an
-in-process scheduler, persisting to one local SQLite database. It inventories
+in-process scheduler, storing data in one local SQLite database. It inventories
 certificates, connects to operator-chosen TLS/STARTTLS endpoints, and sends
 alerts and audit events to configured sinks. Supported deployments run exactly
 one instance; the Kubernetes manifest pins `replicas: 1` with a `Recreate`
@@ -142,7 +141,7 @@ strategy (`deploy/k8s/deployment.yaml`).
 
 ## Residual risks and accepted gaps
 
-These are true of the current code. Operators should plan around them.
+These hold for the current code. Plan around them.
 
 1. **API keys cover the whole fleet.** A key's `AuthContext` carries no tag
    scope, so a `write` key can change any host. Keys never expire; revoke
@@ -191,14 +190,13 @@ These are true of the current code. Operators should plan around them.
 ## Review triggers
 
 Update this model in the same change when code or deployment configuration
-alters: authentication, sessions, CSRF, the guard family, API keys, role
+changes: authentication, sessions, CSRF, the guard family, API keys, role
 mapping or tag scoping; public paths or metrics exposure; scan or sink address
 policy, DNS pinning or redirects; upload bounds or trust-anchor authority;
 secret loading, encryption, SQLite topology or file paths; sink payloads,
 credentials or delivery semantics; proxy trust or security headers; or release
-authority and image provenance. Name the affected assets and boundaries, point
-at the enforcing test, and list anything unresolved under residual risks
-rather than assuming it is accepted.
+authority and image provenance. Name the affected assets and boundaries, point at the enforcing test, and list
+anything unresolved under residual risks; do not assume it is accepted.
 
 See also: [access control](access-control.md) for how roles, scopes and keys
 are configured, and [SECURITY.md](../SECURITY.md) for reporting.

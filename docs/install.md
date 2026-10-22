@@ -1,8 +1,8 @@
 # Installing cert-watch
 
 cert-watch is one Python process with one SQLite database file. It runs the
-same way everywhere; the platforms differ only in how the process is started,
-where its data lives and what sits in front of it.
+same way everywhere. Platforms differ only in how the process starts, where
+its data lives and what sits in front of it.
 
 | Platform | Start here |
 |----------|------------|
@@ -43,7 +43,7 @@ Images are published to `ghcr.io/hraedon/cert-watch` for amd64 and arm64:
 ### Verifying an image
 
 Every image is signed with a keyless Sigstore signature, and carries an SBOM
-and build provenance. Verifying before you deploy tells you it came from this
+and build provenance. Verifying before you deploy shows that it came from this
 repository's release workflow, and what is in it, without trusting the
 registry:
 
@@ -57,8 +57,8 @@ docker buildx imagetools inspect ghcr.io/hraedon/cert-watch:v1.0.0 --format '{{ 
 docker buildx imagetools inspect ghcr.io/hraedon/cert-watch:v1.0.0 --format '{{ json .Provenance }}'
 ```
 
-Pin the identity to the exact ref, as above. A looser pattern would also accept
-a signature from a run of the same workflow on another branch.
+Pin the identity to the exact ref, as above. A looser pattern also accepts a
+signature from a run of the same workflow on another branch.
 
 Signatures cover digests, not tags. The release job pushes tags a few seconds
 before it signs, so when timing matters, verify and deploy by digest
@@ -109,8 +109,8 @@ Three things matter:
   [configuration.md](configuration.md#scanning)).
 
 `deploy/argocd/application.yaml` is an Argo CD Application for GitOps
-deployments that track this repository. For your own deployment, point it at
-your fork or a pinned release instead.
+deployments that track this repository. For your own, point it at your fork or
+a pinned release.
 
 ## Linux
 
@@ -122,9 +122,9 @@ This installs cert-watch into a virtual environment under `/opt/cert-watch`,
 creates a `cert-watch` system user and `/var/lib/cert-watch`, and enables the
 `cert-watch.service` unit from `deploy/systemd/`. Put your configuration in a
 drop-in (`systemctl edit cert-watch`, then `Environment=` lines, or an
-`EnvironmentFile=` of your own); the installer rewrites the unit itself on
-upgrade. Put a reverse proxy such as nginx or
-Caddy in front of it for TLS, and set the [proxy settings](#behind-a-proxy).
+`EnvironmentFile=` of your own). The installer rewrites the unit itself on
+upgrade. Put a reverse proxy such as nginx or Caddy in front for TLS, and set
+the [proxy settings](#behind-a-proxy).
 
 ## Windows / IIS
 
@@ -142,10 +142,10 @@ signing keys. `-WithAuthExtras` adds the LDAP and OAuth libraries.
 `AlwaysRunning` and the application to `preloadEnabled`, and installs IIS's
 Application Initialization feature if it is missing.
 
-The last three settings matter, so use `-ConfigureIIS` or apply them by hand
-(the runbook below says how). Without them IIS starts cert-watch only when the
-first web request arrives, so after a reboot or recycle with no traffic the
-scheduler never runs and nothing is scanned.
+The last three settings matter: use `-ConfigureIIS` or apply them by hand (the
+runbook below says how). Without them IIS starts cert-watch only on the first
+web request, so after a reboot or recycle with no traffic the scheduler never
+runs and nothing is scanned.
 
 The script is unsigned. Run it with
 `powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1`, or
@@ -165,8 +165,8 @@ installer's venv and set `CERT_WATCH_EVENTLOG=1` in the site's environment:
 
 ## First start
 
-What cert-watch does when no sign-in method is configured depends on whether
-it can be reached from the network:
+With no sign-in method configured, what cert-watch does depends on whether the
+network can reach it:
 
 | Situation | Behaviour |
 |-----------|-----------|
@@ -174,9 +174,9 @@ it can be reached from the network:
 | Listening on a routable address, or on loopback behind a proxy (`CERT_WATCH_TRUST_PROXY=1`) | Creates an `admin` account with a random password and writes it to `<data dir>/initial-admin-password` (readable only by the service account). The log names the file; it never contains the password. |
 | `CERT_WATCH_ALLOW_UNAUTH=1` | Runs with no sign-in at all. Only for development or isolated test systems. |
 
-So a network-exposed instance never comes up without authentication unless you
-ask it to. After the first sign-in, either configure LDAP or OAuth, or pin the
-break-glass password (`CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH`, generated with
+A network-exposed instance never comes up without authentication unless you
+ask. After the first sign-in, configure LDAP or OAuth, or pin the break-glass
+password (`CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH`, generated with
 `cert-watch hash-password`), and delete the password file.
 
 ## Behind a proxy

@@ -18,16 +18,15 @@ Everything is stored in one SQLite database, `cert-watch.sqlite3`, in the data
 directory (`CERT_WATCH_DATA_DIR`). The same directory holds the generated
 secrets and the pre-upgrade backups.
 
-Because the database has a single writer, run exactly one cert-watch process
-against a data directory. Two copies started at once, for example during an
-overlapping restart, serialise their startup, but the application doesn't
-support two live writers.
+The database has a single writer, so run exactly one cert-watch process per
+data directory. Two copies started at once, for example during an overlapping
+restart, serialise their startup, but two live writers aren't supported.
 
 ## Monitoring
 
-**Health endpoints.** Both work without authentication. Their status codes
-are the probe contract; the bodies reveal nothing beyond the status to
-anyone who is not an administrator.
+**Health endpoints.** Both work without authentication. Their status codes are
+the probe contract. To anyone who isn't an administrator, the bodies reveal
+nothing beyond the status.
 
 | Endpoint | Returns | Use it for |
 |----------|---------|------------|
@@ -37,22 +36,22 @@ anyone who is not an administrator.
 With authentication enabled, `/readyz` answers `{"status": "ok"}` or
 `{"status": "degraded"}` and nothing more, unless the caller is an
 administrator (browser session or `admin` API key) or presents the metrics
-bearer token (`CERT_WATCH_METRICS_TOKEN`); those get the detailed `checks`
-(database, last scan, certificate and alert counts, scheduler state), which
-describe the whole estate. `/api/health`, which feeds the dashboard's health
-strip, requires a session and gives the same detail to administrators only;
-every other signed-in user gets `{"overall": "ok" | "warning" | "critical"}`.
-A monitor that scrapes the detail should therefore use `/readyz` with the
-metrics token, not a personal account. With authentication disabled both
-endpoints return the full body to everyone.
+bearer token (`CERT_WATCH_METRICS_TOKEN`). Those callers get the detailed
+`checks` (database, last scan, certificate and alert counts, scheduler state),
+which describe the whole estate. `/api/health`, which feeds the dashboard's
+health strip, requires a session and gives the same detail to administrators
+only; every other signed-in user gets
+`{"overall": "ok" | "warning" | "critical"}`. A monitor that scrapes the detail
+should use `/readyz` with the metrics token, not a personal account. With
+authentication disabled, both endpoints return the full body to everyone.
 
-**Metrics.** `/metrics` exposes Prometheus gauges. With authentication
-enabled, it answers only the dedicated bearer token (`CERT_WATCH_METRICS_TOKEN`,
-not an API key) or an administrator's browser session, so set the token for
-your scraper. With authentication disabled it is open, unless a metrics token is set, in which
-case the token is still required.
-The labels include host names and certificate subjects, so also restrict it to
-your monitoring network at the ingress or firewall.
+**Metrics.** `/metrics` exposes Prometheus gauges. With authentication enabled,
+it answers only the dedicated bearer token (`CERT_WATCH_METRICS_TOKEN`, not an
+API key) or an administrator's browser session, so set the token for your
+scraper. With authentication disabled it is open, unless a metrics token is set,
+in which case the token is still required. The labels include host names and
+certificate subjects, so also restrict it to your monitoring network at the
+ingress or firewall.
 
 | Metric | Labels | Meaning |
 |--------|--------|---------|
@@ -67,15 +66,15 @@ your monitoring network at the ingress or firewall.
 | `cert_watch_alerts` | `status` | Alerts by lifecycle state (pending, sending, failed, …) |
 | `cert_watch_alerts_failed_recent` | | Alerts that gave up in the last 24 hours, counted from when they gave up; the `CertWatchAlertDeliveryFailed` rule uses it |
 
-`deploy/k8s/prometheus-rules.yaml` contains ready-made rules. The one to keep
-even if you use no others is **`CertWatchScanStalled`**: no scan for 36 hours.
-A cert-watch that has stopped scanning looks healthy from the outside, and it
-is the failure that matters most. It has happened in practice, on IIS hosts
-that weren't configured to start the process without an incoming request.
+`deploy/k8s/prometheus-rules.yaml` contains ready-made rules. Keep
+**`CertWatchScanStalled`** (no scan for 36 hours) even if you use no others. A
+cert-watch that has stopped scanning looks healthy from the outside, and that is
+the failure that matters most. It has happened in practice, on IIS hosts that
+weren't configured to start the process without an incoming request.
 
 **The health strip** at the top of every page polls `/api/health` (any
 signed-in user). It turns amber when any of these is non-zero or the last scan
-failed, and red when the scheduler or the database is down:
+failed. It turns red when the scheduler or the database is down:
 
 | Field | Counts |
 |-------|--------|
@@ -88,7 +87,7 @@ Its timestamps are UTC, like the rest of the UI.
 
 ### What the numbers mean
 
-Every page counts the estate with the same definitions.
+Every page counts the estate with these definitions.
 
 - **Endpoint** — a registered `host:port`. It is *scanned* once a scan has
   stored its certificate, and *pending* until then. A later failed scan
@@ -155,7 +154,7 @@ Every page counts the estate with the same definitions.
   groups in SQL before it builds display rows. A grouped filter or search
   selects a group when any member matches, then shows every in-scope member of
   that selected group; the group is the result unit.
-- **Home links** — Home's summary numbers use those same condition, monitoring
+- **Home links** — Home's summary numbers use the same condition, monitoring
   and delivery filters. Its owner/group gap, chain rows, and twelve-week bars
   add exact routing, issuer, and seven-day expiry filters. All open flat Browse,
   so the destination row count is the number shown on Home.
@@ -178,9 +177,8 @@ Every page counts the estate with the same definitions.
 - **Compliance report** — *Certificates* are the certificates in scope and
   *Endpoints* the scanned endpoints among them. Its expiry sections place each
   certificate by its effective days, with the legacy display-status boundaries
-  (under 7 days, then under 30 days), and list
-  the expiry date and days that put it
-  there: for a certificate whose intermediate expires first, the
+  (under 7 days, then under 30 days), and list the expiry date and days that put
+  it there: for a certificate whose intermediate expires first, the
   intermediate's. Each entry also carries monitoring, renewal and delivery;
   condition remains a separate expiry fact.
 - **Posture trends** count each endpoint once per month, by its latest scan
@@ -209,11 +207,12 @@ cert-watch backup /backups/cert-watch-$(date +%F).sqlite3
 This writes a consistent copy with SQLite's `VACUUM INTO`, so it's safe while
 cert-watch is running. It refuses to overwrite an existing file, so give each
 backup a new name.
-Don't copy the database file directly while the process is up: with
-write-ahead logging, a plain copy can miss committed data. Keep the generated
-`.auth_secret` file from the data directory with your backups, or set
-`CERT_WATCH_AUTH_SECRET` explicitly. Without the auth secret, stored SMTP, LDAP and webhook
-credentials can't be decrypted.
+
+Don't copy the database file directly while the process is up: with write-ahead
+logging, a plain copy can miss committed data. Keep the generated `.auth_secret`
+file from the data directory with your backups, or set `CERT_WATCH_AUTH_SECRET`
+explicitly. Without the auth secret, stored SMTP, LDAP and webhook credentials
+can't be decrypted.
 
 cert-watch also writes a backup automatically before applying database
 migrations on upgrade: `cert-watch-pre-migration-<timestamp>-<id>.sqlite3` in

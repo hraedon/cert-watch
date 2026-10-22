@@ -1,16 +1,15 @@
 # Taking over a cert-watch installation
 
 Start here if you've inherited a running cert-watch and the person who set it
-up isn't around to ask. This page is a map plus a short list of rules. The
-detail lives in the other docs, and this page links to the right section
-instead of repeating it.
+up isn't around to ask. This page is a map and a short list of rules. It links
+to the detail in the other docs instead of repeating it.
 
 ## 1. Fill in the site sheet first
 
-Every installation differs in hostnames, accounts, and how it was installed.
-Keep these facts in your own records, **not in this repository**, which is
-public. Copy the table below into your team's documentation and fill it in
-with the previous owner before they leave.
+Every installation differs in hostnames, accounts and install method. Keep
+these facts in your own records, **not in this repository**, which is public.
+Copy the table below into your team's documentation and fill it in with the
+previous owner before they leave.
 
 | Fact | Where to find it | Value |
 |------|------------------|-------|
@@ -29,7 +28,7 @@ with the previous owner before they leave.
 
 ## 2. Rules that are easy to break
 
-These rules come from real failures. Everything else in the docs is
+These rules come from real failures. Anything else in the docs is
 recoverable.
 
 1. **Back up with the CLI, never by copying the file.**
@@ -44,10 +43,9 @@ recoverable.
    has a single writer ([operations: how it runs](operations.md#how-it-runs)).
 4. **On IIS, the app pool must never idle out.** If it does, scanning silently
    stops while the site still looks healthy. Set `startMode=AlwaysRunning`,
-   `idleTimeout=0`, *and* application preload, which needs the
-   `IIS-ApplicationInit` feature. See
-   [deploy/iis](../deploy/iis/README.md). Watch for a stalled scan (next
-   section).
+   `idleTimeout=0` *and* application preload, which needs the
+   `IIS-ApplicationInit` feature. See [deploy/iis](../deploy/iis/README.md).
+   Watch for a stalled scan (next section).
 5. **On an IIS upgrade, give the installer the live site's real values.**
    It stops only the pool named by `-AppPool`. With `-ConfigureIIS` it
    repoints the site to `-SitePath`, so accepting the defaults on a customised
@@ -86,9 +84,9 @@ previous version.
 
 ## 5. Where updates come from
 
-cert-watch is MIT-licensed open source. Releases (source tag, release notes,
+cert-watch is MIT-licensed open source. Releases (source tag, release notes
 and a container image) are published on the project's GitHub Releases page.
-If upstream ever stops publishing, the license lets your organisation fork the
+If upstream stops publishing, the license lets your organisation fork the
 repository and keep building it. The test suite and CI configuration come with
 it.
 

@@ -7,25 +7,25 @@ All notable changes to cert-watch are documented in this file.
 ### Changed
 
 - Home is denser and splits certificate risk from certificate hygiene. Healthy
-  monitoring and delivery share a two-line status strip and open into full
+  monitoring and delivery share a two-line status strip and expand into full
   blocks only when they have problems. Certificate risk and a new Certificate
   hygiene card sit side by side. Hygiene holds the chain and trust problems,
   grouped by the fix they need so each piece of guidance prints once, in
   neutral colour. Risk rows put state, name and owner on one line. A risk row
   whose chain is also unverified shows a broken-chain icon linking to that
-  issuer's certificates, in place of the "chain also unverified" text. Renewal
-  rows move their timestamp to the detail line ("Reported …"/"Raised …"), and
-  the "deployment not confirmed" count is lower-cased like its siblings.
+  issuer's certificates, replacing the "chain also unverified" text. Renewal
+  rows move their timestamp to the detail line ("Reported …"/"Raised …"). The
+  "deployment not confirmed" count is lower-cased like its siblings.
 - CI also runs the unit and integration tests on Python 3.15. cert-watch needed
   no changes for it. Until the lockfile picks up 3.15 wheels, eight locked
-  dependencies (among them cffi and pydantic-core) build from source on 3.15.
+  dependencies (among them cffi and pydantic-core) build from source there.
 
 ### Added
 
 - A certificate's detail page lists the other endpoints serving the same
   certificate, each with its notes and a link to its own page. Notes, owner and
-  renewal settings belong to each endpoint, so the page where they are edited
-  was reachable only through the expand control on a grouped Browse row.
+  renewal settings belong to each endpoint, and their edit page was reachable
+  only through the expand control on a grouped Browse row.
 
 ### Fixed
 
