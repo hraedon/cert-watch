@@ -61,10 +61,11 @@ the lifecycle; it doesn't drive it.
 | Cert Spotter | CT monitoring | n/a | n/a | — | — | n/a | — | ✓ | Go (CLI) |
 | Certimate | cert operations (ACME) | — | — | — | — | — | — | ✓ | Go / React |
 | Certsentry | cert monitoring | ✓ | — | ✓ | — | — | — | ✓ | Go (single binary) |
-| cw-agent | agent + cloud sync | ✓ | — | ✓ | — | — | — | — | ✗ (cloud) | Go agent |
-| Doomsday / certwatcher | expiry warning | ✓ | — | — | — | — | — | — | ✓ | Go |
+| cw-agent | agent + cloud sync | ✓ | — | ✓ | — | — | — | ✗ (cloud) | Go agent |
+| Doomsday / certwatcher | expiry warning | ✓ | — | — | — | — | — | ✓ | Go |
 
-Legend: ✓ present · — not observed in the survey (not necessarily absent) ·
+Legend: ✓ present · ✗ documented as absent (cw-agent depends on a cloud
+service) · — not observed in the survey (not necessarily absent) ·
 n/a not applicable to that tool's model. Star counts and feature sets are a
 2026-Q2 snapshot (see the prior-art research); treat blanks as "undocumented at
 survey time," not as a definitive claim of absence.

@@ -2119,3 +2119,20 @@ def test_migration_0045_adds_explicit_all_binding_to_existing_keys(tmp_path: Pat
         assert binding_info[4] is None  # no default: creation must be explicit
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute("UPDATE api_keys SET binding = 'unknown' WHERE id = 'old'")
+
+
+def test_upgrading_documents_the_manual_sql_for_0033_and_0034() -> None:
+    """The migration modules say UPGRADING.md documents manual application;
+    keep the documented SQL identical to each module's MANUAL_SQL."""
+    from cert_watch.migrations import m0033_alert_deferred_since as m33
+    from cert_watch.migrations import m0034_alert_trigger_cert_id as m34
+
+    text = (Path(__file__).resolve().parent.parent / "UPGRADING.md").read_text(
+        encoding="utf-8"
+    )
+    for module in (m33, m34):
+        assert f"#### Migration {module.MIGRATION_ID}:" in text
+        flat = " ".join(text.replace("(", " ( ").replace(")", " ) ").split())
+        for statement in module.MANUAL_SQL:
+            norm = " ".join(statement.replace("(", " ( ").replace(")", " ) ").split())
+            assert norm in flat, statement
