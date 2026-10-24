@@ -27,6 +27,9 @@ answers three questions:
 - **Tracks renewals.** It links each certificate to its successor, flags
   renewals that stall before they turn into expiries, and can call your
   automation through a renewal webhook.
+- **Tracks application secret expiry** from metadata, with owner reminders and
+  explicit retirement after rotation. Secret values are never required. See
+  [application credentials](docs/application-secrets.md).
 - **Grades posture** per endpoint and across the fleet, with trends over time
   and a signed compliance report for auditors.
 - **Routes alerts** through alert groups matched on tags, with owners, digests

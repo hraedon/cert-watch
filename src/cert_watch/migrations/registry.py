@@ -220,6 +220,15 @@ from cert_watch.migrations.m0049_renewal_failure_marker import (
 from cert_watch.migrations.m0049_renewal_failure_marker import (
     upgrade as renewal_failure_marker_upgrade,
 )
+from cert_watch.migrations.m0050_application_secrets import (
+    DESCRIPTION as application_secrets_description,
+)
+from cert_watch.migrations.m0050_application_secrets import (
+    MIGRATION_ID as application_secrets_id,
+)
+from cert_watch.migrations.m0050_application_secrets import (
+    upgrade as application_secrets_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -389,4 +398,7 @@ runner.register(
     renewal_failure_marker_id,
     renewal_failure_marker_description,
     renewal_failure_marker_upgrade,
+)
+runner.register(
+    application_secrets_id, application_secrets_description, application_secrets_upgrade,
 )

@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from cert_watch.routes.activity import router as activity_router
 from cert_watch.routes.alerts_view import router as alerts_view_router
 from cert_watch.routes.api import router as api_router
+from cert_watch.routes.application_secrets import router as application_secrets_router
 from cert_watch.routes.audit import router as audit_router
 from cert_watch.routes.auth import router as auth_router
 from cert_watch.routes.certificates import router as certificates_router
@@ -20,6 +21,7 @@ from cert_watch.routes.team import router as team_router
 
 # Collect all routers for easy mounting
 api: list[APIRouter] = [
+    application_secrets_router,
     auth_router,
     health_router,
     dashboard_router,

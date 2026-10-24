@@ -22,7 +22,7 @@
     <a href="/browse"{% if testids %} data-testid="nav-browse"{% endif %} {% if active_page == 'browse' %}class="active" aria-current="page"{% endif %}>Browse</a>
     <a href="/posture"{% if testids %} data-testid="nav-posture"{% endif %} {% if active_page == 'posture' %}class="active" aria-current="page"{% endif %}>Posture</a>
     <a href="/activity"{% if testids %} data-testid="nav-activity"{% endif %} {% if active_page == 'activity' %}class="active" aria-current="page"{% endif %}>Activity</a>
-    {% if is_admin %}<a href="/settings"{% if testids %} data-testid="nav-settings"{% endif %} {% if active_page == 'settings' %}class="active" aria-current="page"{% endif %}>Settings</a>{% endif %}
+    {% if is_admin %}<a href="/application-secrets" {% if active_page == 'credentials' %}class="active" aria-current="page"{% endif %}>Credentials</a><a href="/settings"{% if testids %} data-testid="nav-settings"{% endif %} {% if active_page == 'settings' %}class="active" aria-current="page"{% endif %}>Settings</a>{% endif %}
   </nav>
   {% endmacro %}
   <div class="cw-app">

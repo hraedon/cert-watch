@@ -116,6 +116,16 @@ redirect for outbound HTTP.
 
 ## Alerting
 
+Application credential expiry is a separate metadata inventory in
+`application_secrets`, not a synthetic certificate. The admin-only browser and
+JSON adapters share `services/application_secrets.py`; the schema has no
+credential-value field. Its scheduler rule queues stage reminders through
+`AlertStore`, using `application-secret:<id>` resource handles and stored owner
+recipients. The ordinary dispatcher and evidence ledger deliver them. These
+global records do not participate in certificate tag groups or scoped alert
+queries. Retirement closes their alerts transactionally before incident
+resolution runs outside the write lock. See [application credentials](application-secrets.md).
+
 `alerting/` is layered in one direction:
 
 `model` → `messages` → `routing` → `rules` → `dispatch` → `transports` → `digest`
