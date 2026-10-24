@@ -26,12 +26,13 @@ def _local_admin_app(reload_app, tmp_path: Path):
 
 
 def test_metrics_requires_admin_session_when_no_bearer_token(
-    reload_app, tmp_path
+    reload_app, tmp_path, monkeypatch, caplog
 ):
     from cert_watch.auth import SESSION_COOKIE, create_session
     from cert_watch.auth.rbac import BREAK_GLASS_CLAIM, LOCAL_USER_CLAIM
     from cert_watch.database import Role, SqliteRoleRepository, SqliteUserRepository, User
 
+    monkeypatch.delenv("CERT_WATCH_METRICS_TOKEN", raising=False)
     app_mod, db = _local_admin_app(reload_app, tmp_path)
     role_id = SqliteRoleRepository(db).add(
         Role(name="team-a-viewer", permission_tier="viewer", scope_tag="team-a")
@@ -41,6 +42,17 @@ def test_metrics_requires_admin_session_when_no_bearer_token(
     )
 
     with TestClient(app_mod.app, base_url="http://localhost") as client:
+        # Startup guidance must match the access contract exercised below.
+        startup_warnings = [
+            record.getMessage() for record in caplog.records
+            if (
+                record.name == "cert_watch.app"
+                and "CERT_WATCH_METRICS_TOKEN" in record.getMessage()
+            )
+        ]
+        assert len(startup_warnings) == 1
+        assert "requires an admin browser session" in startup_warnings[0]
+
         anonymous = client.get("/metrics", follow_redirects=False)
         assert anonymous.status_code == 401
         assert anonymous.json()["error"] == "unauthenticated"
@@ -67,7 +79,7 @@ def test_metrics_requires_admin_session_when_no_bearer_token(
 
 
 def test_metrics_accepts_admin_session_as_alternative_to_configured_token(
-    reload_app, tmp_path, monkeypatch
+    reload_app, tmp_path, monkeypatch, caplog
 ):
     from cert_watch.auth import SESSION_COOKIE, create_session
     from cert_watch.auth.rbac import BREAK_GLASS_CLAIM
@@ -76,6 +88,11 @@ def test_metrics_accepts_admin_session_as_alternative_to_configured_token(
     app_mod, _db = _local_admin_app(reload_app, tmp_path)
 
     with TestClient(app_mod.app, base_url="http://localhost") as client:
+        assert not any(
+            record.name == "cert_watch.app"
+            and "CERT_WATCH_METRICS_TOKEN" in record.getMessage()
+            for record in caplog.records
+        )
         token = create_session(
             "admin",
             client.app.state.security,
