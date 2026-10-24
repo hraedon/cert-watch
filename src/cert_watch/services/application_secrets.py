@@ -15,6 +15,7 @@ from cert_watch.audit import export_audit, record_audit
 from cert_watch.auth.scope import ScopeDeniedError, require_auth_context
 from cert_watch.database.alert_store import AlertStore
 from cert_watch.database.connection import _connect, get_write_lock
+from cert_watch.database.repo import SqliteAlertRepository
 
 
 def require_secret_admin(auth: Any) -> None:
@@ -72,6 +73,13 @@ def retire_application_secret(
         ).rowcount
         if not changed:
             return False
+        # An earlier stage can finish sending after escalation closes its
+        # condition. It still opened an incident that retirement must resolve.
+        previously_closed = conn.execute(
+            """SELECT * FROM alerts WHERE cert_id=? AND closed_at IS NOT NULL
+               AND status IN ('sending','sent')""",
+            (f"application-secret:{identifier}",),
+        ).fetchall()
         # Cancel queued notifications before any manual flush can claim them.
         keys = {str(row[0]) for row in conn.execute(
             "SELECT dedupe_key FROM alerts WHERE cert_id=? AND closed_at IS NULL",
@@ -80,6 +88,7 @@ def retire_application_secret(
         closed_sent = AlertStore(db_path, initialize=False).close_keys(
             keys, conn=conn, reason="application credential retired",
         )
+        closed_sent.extend(SqliteAlertRepository._row_to_alert(row) for row in previously_closed)
         event = record_audit(
             db_path, actor=actor, action="application_secret.retire",
             target_type="application_secret", target_id=identifier,

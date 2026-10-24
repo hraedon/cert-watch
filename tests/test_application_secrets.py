@@ -243,6 +243,38 @@ def test_stage_marker_and_queue_roll_back_together(db):
     assert not conn.execute("SELECT * FROM alerts").fetchall()
 
 
+def test_retirement_resolves_a_delivered_stage_closed_during_send(db, fake_transport, monkeypatch):
+    from cert_watch.alerting import resolve
+    from cert_watch.alerting.dispatch import Dispatcher
+    from cert_watch.alerting.model import SendResult, WebhookConfig
+
+    identifier = create(db, expires_at=(NOW + timedelta(days=14, seconds=1)).isoformat())
+    evaluate_application_secrets(db, now=NOW)
+    transport = fake_transport(channel="webhook:pagerduty")
+
+    def send(message):
+        assert message.threshold_days == 30
+        evaluate_application_secrets(db, now=NOW + timedelta(seconds=2))
+        return SendResult("accepted")
+
+    monkeypatch.setattr(transport, "send", send)
+    Dispatcher(db, transports=[transport], clock=lambda: NOW).process_pending()
+    calls = []
+
+    def resolve_incident(*args, **kwargs):
+        assert not _connect(db).in_transaction
+        calls.append(args)
+        return True
+
+    monkeypatch.setattr(resolve, "send_webhook_resolve", resolve_incident)
+    retire_application_secret(
+        db, identifier, auth=AuthContext.system(), actor="test",
+        webhook_config=WebhookConfig(url="https://example.invalid", kind="pagerduty"),
+    )
+    assert len(calls) == 1
+    assert calls[0][2] == 30
+
+
 @pytest.mark.parametrize("days,state", [(31, "Current"), (30, "Expires within 30 days"),
     (7, "Expires within 7 days"), (0, "Expired"), (-1, "Expired")])
 def test_inventory_status(db, days, state):
