@@ -5,8 +5,8 @@ agentic E2E layer) on one issuance and audit plane. The design rationale is in
 the archived plan 034 (see [docs/history.md](../../docs/history.md)); this is
 the how-to.
 
-> **Assumptions** (this cluster): KV v2 mounted at `kv/`, Vault at
-> `https://vault.k8s.hraedon.com`, app namespace `cert-watch`, k8s auth mount
+> **Assumptions** (example values; adjust to your cluster): KV v2 mounted at `kv/`, Vault at
+> `https://<vault-host>`, app namespace `cert-watch`, k8s auth mount
 > `kubernetes`. For **KV v1**, drop the `/data/` and `/metadata/` path segments
 > everywhere below.
 
@@ -16,7 +16,7 @@ the how-to.
 kv/cert-watch/entra/app              client_secret=...
 kv/cert-watch/entra/cert-watch-admin password=...
 kv/cert-watch/entra/cert-watch-user  password=...
-kv/cert-watch/ldap/bind              password=...  bind_dn=...   # lab AD service acct
+kv/cert-watch/ldap/bind              password=...  bind_dn=...   # AD service account (bind)
 kv/cert-watch/ldap/cw-admin          password=...               # AD test user (admins)
 kv/cert-watch/ldap/cw-user           password=...               # AD test user (users)
 kv/cert-watch/app                    csrf_secret=... auth_secret=...
@@ -24,15 +24,14 @@ totp/keys/entra-cert-watch-admin         (seed; see plan A.1)
 totp/keys/entra-cert-watch-user
 ```
 
-## Provisioned in this cluster (verified 2026-06-05)
+## Resulting state
 
-Live and proven via the `cert-watch-setup` AppRole:
+After running the steps below you should have:
 - **Policies:** `cert-watch-setup`, `cert-watch-app`, `cert-watch-e2e-runner`, `cert-watch-totp-mcp`.
-- **AppRoles:** `cert-watch-e2e` (runner), `cert-watch-totp-mcp` (agent) — trust split verified (mcp: codes only; runner: passwords+codes; neither can read seeds).
-- **kubernetes auth:** enabled at `kubernetes/`, role `cert-watch` → SA `cert-watch/cert-watch` → `cert-watch-app`; end-to-end login verified.
-- **TOTP:** `totp/keys/entra-cert-watch-{admin,user}` live; codes issue correctly.
-- **Pending:** `kv/cert-watch/ldap/*` (below), and the deployment cutover to the
-  injector (csrf/auth secrets still live in the `cert-watch-secrets` k8s Secret).
+- **AppRoles:** `cert-watch-e2e` (runner), `cert-watch-totp-mcp` (agent). Trust split: mcp reads codes only; runner reads passwords and codes; neither can read seeds.
+- **kubernetes auth:** enabled at `kubernetes/`, role `cert-watch` bound to SA `cert-watch/cert-watch` with policy `cert-watch-app`.
+- **TOTP:** `totp/keys/entra-cert-watch-{admin,user}` seeded; codes issue correctly.
+- **Optional follow-up:** populate `kv/cert-watch/ldap/*` (above) and cut the deployment over to the injector (csrf/auth secrets otherwise stay in the `cert-watch-secrets` k8s Secret).
 
 ## 0. Bootstrap the automation identity (one-time, operator with admin token)
 
@@ -40,7 +39,7 @@ Creating the reusable setup identity needs admin once. After this, cert-watch
 automation authenticates as the scoped `cert-watch-setup` AppRole, never root.
 
 ```bash
-export VAULT_ADDR=https://vault.k8s.hraedon.com   # + admin VAULT_TOKEN in your shell
+export VAULT_ADDR=https://<vault-host>   # + admin VAULT_TOKEN in your shell
 
 # Scoped automation policy (manages only cert-watch policies/TOTP/auth — see the HCL)
 vault policy write cert-watch-setup deploy/vault/policies/cert-watch-setup.hcl

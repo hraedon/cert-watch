@@ -200,8 +200,8 @@ Set-ItemProperty IIS:\AppPools\$pool -Name recycling.periodicRestart.time -Value
 HttpPlatformHandler spawns `python.exe` on the *first HTTP request* unless the
 application has `preloadEnabled=true`. Without preload, a reboot (or process
 exit) with no inbound traffic silently stops all scanning until someone
-visits the site. This failure mode ran undetected for 12 days on the
-mvmcitest01 test estate (WI-140). Enable preload on the site (the install
+visits the site. This failure mode has run undetected for
+weeks on a test deployment. Enable preload on the site (the install
 script does this):
 
 ```powershell
@@ -232,9 +232,8 @@ installation, use the value passed to `-AppPool`.
 **preloadEnabled does nothing without the Application Initialization role
 service.** IIS does not warn when the feature is missing: the setting is
 accepted, visible in config, and ignored. This caused a second silent scan gap
-on the mvmcitest01 estate (WI-140 follow-up, 2026-08-20). Preload was
-configured on 2026-07-27, but after an IIS recycle on 2026-08-16 the backend
-never restarted and scanning stopped for 4 days. Verify the feature is
+on a test deployment: preload was configured, but after an IIS recycle the
+backend never restarted and scanning stopped for days. Verify the feature is
 installed:
 
 ```powershell
