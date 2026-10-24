@@ -129,6 +129,9 @@ The inventory retains its lowest raised threshold in the same transaction as
 enqueueing. Purging alert history cannot reset reminder progress. Superseding
 an older reminder closes both pending and sending rows through `AlertStore`,
 preserving an active worker's lease while preventing a stale lease from replaying.
+Retirement resolves already-sent rows after commit; a credential alert still
+sending is resolved by dispatcher settlement after its accepted trigger is
+recorded. This keeps a concurrent retirement from resolving before the trigger.
 
 `alerting/` is layered in one direction:
 

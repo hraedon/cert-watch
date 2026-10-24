@@ -96,10 +96,13 @@ def retire_application_secret(
         )
         conn.commit()
     export_audit(event)
-    if closed_sent:
+    # A live send must finish its trigger before a resolve can be sent. The
+    # dispatcher handles closed sending rows after recording acceptance.
+    already_sent = [alert for alert in closed_sent if alert.status == "sent"]
+    if already_sent:
         from cert_watch.alerting.resolve import resolve_webhook_for_renewed_cert
 
         resolve_webhook_for_renewed_cert(
-            db_path, "", webhook_config, pending_alerts=closed_sent,
+            db_path, "", webhook_config, pending_alerts=already_sent,
         )
     return True

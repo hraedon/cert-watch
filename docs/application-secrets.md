@@ -32,7 +32,9 @@ After rotating a credential in its provider and deploying the replacement,
 add the replacement's metadata and **Retire credential** on the old record.
 Retirement is an operator assertion, not evidence that Entra removed a key or
 that a workload switched credentials. It cancels pending reminders, retains
-the inventory/audit history, and resolves supported webhook incidents.
+the inventory/audit history, and attempts to resolve supported webhook incidents.
+A send already in flight finishes its trigger before the dispatcher requests
+resolution. Resolution requests are best effort and can be repeated.
 cert-watch neither reads secret values nor creates, rotates or deletes keys.
 To correct an incorrect entry, retire it and add the corrected metadata.
 

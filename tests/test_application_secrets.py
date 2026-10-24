@@ -275,6 +275,54 @@ def test_retirement_resolves_a_delivered_stage_closed_during_send(db, fake_trans
     assert calls[0][2] == 30
 
 
+def test_retirement_during_send_resolves_after_the_trigger(db, fake_transport, monkeypatch):
+    from cert_watch.alerting import resolve
+    from cert_watch.alerting.dispatch import Dispatcher
+    from cert_watch.alerting.model import SendResult, WebhookConfig
+
+    identifier = create(db)
+    evaluate_application_secrets(db, now=NOW)
+    config = WebhookConfig(url="https://example.invalid", kind="pagerduty")
+    events = []
+
+    def resolve_incident(*args, **kwargs):
+        assert not _connect(db).in_transaction
+        events.append("resolve")
+        return True
+
+    monkeypatch.setattr(resolve, "send_webhook_resolve", resolve_incident)
+    transport = fake_transport(channel="webhook:pagerduty")
+
+    def send(message):
+        retire_application_secret(
+            db, identifier, auth=AuthContext.system(), actor="test", webhook_config=config,
+        )
+        events.append("trigger")
+        return SendResult("accepted")
+
+    monkeypatch.setattr(transport, "send", send)
+    Dispatcher(db, transports=[transport], webhook_config=config,
+               clock=lambda: NOW).process_pending()
+    assert events == ["trigger", "resolve"]
+
+
+def test_active_credential_trigger_does_not_resolve_itself(db, fake_transport, monkeypatch):
+    from cert_watch.alerting import resolve
+    from cert_watch.alerting.dispatch import Dispatcher
+    from cert_watch.alerting.model import WebhookConfig
+
+    create(db)
+    evaluate_application_secrets(db, now=NOW)
+    calls = []
+    monkeypatch.setattr(resolve, "send_webhook_resolve", lambda *a, **kw: calls.append(a))
+    Dispatcher(
+        db, transports=[fake_transport(channel="webhook:pagerduty")],
+        webhook_config=WebhookConfig(url="https://example.invalid", kind="pagerduty"),
+        clock=lambda: NOW,
+    ).process_pending()
+    assert not calls
+
+
 @pytest.mark.parametrize("days,state", [(31, "Current"), (30, "Expires within 30 days"),
     (7, "Expires within 7 days"), (0, "Expired"), (-1, "Expired")])
 def test_inventory_status(db, days, state):
