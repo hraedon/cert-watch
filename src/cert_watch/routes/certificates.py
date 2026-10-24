@@ -67,6 +67,7 @@ from cert_watch.services.renewal_reports import RenewalStatusOutOfDateError
 from cert_watch.services.resource_metadata import (
     ResourceMetadataNotFoundError,
     ResourceMetadataValidationError,
+    update_uploaded_certificate_notes,
 )
 from cert_watch.services.resource_metadata import (
     update_certificate_tags as persist_certificate_tags,
@@ -113,6 +114,7 @@ def _render_certificate_detail(
     edit_values: dict[str, str] | None = None,
     edit_errors: dict[str, str] | None = None,
     edit_error: str = "",
+    editing_certificate_notes: bool = False,
     status_code: int = 200,
 ) -> HTMLResponse | RedirectResponse:
     db = _db_path(request)
@@ -139,6 +141,7 @@ def _render_certificate_detail(
                     edit_values=edit_values,
                     edit_errors=edit_errors,
                     edit_error=edit_error,
+                    editing_certificate_notes=editing_certificate_notes,
                     status_code=status_code,
                 )
         return moved
@@ -190,6 +193,8 @@ def _render_certificate_detail(
         reveal_delivery_identities=may_reveal_routing_identities(auth_context, effective_tags),
         reveal_renewal_report_details=may_reveal_renewal_report_details(auth_context, host_tags),
     )
+    is_uploaded = view.cert is not None and view.cert.source == "uploaded"
+    notes_error = (edit_errors or {}).get("notes", "") if editing_certificate_notes else ""
     return templates.TemplateResponse(
         request=request,
         name="certificate_detail.html",
@@ -200,6 +205,12 @@ def _render_certificate_detail(
             **auth_template,
             "may_write": resource_writable,
             "may_edit_host": may_edit_host,
+            "may_edit_certificate_notes": (
+                not isinstance(data, PendingHostDetailData)
+                and data.cert.source == "uploaded"
+                and form_write_error(request) is None
+                and scope_write_denied(request, db, cert_id=cert_id) is None
+            ),
             "active_page": "browse",
             # Estate-wide "last scan failed" is misleading beside this
             # endpoint's own monitoring state. Detail has the authoritative
@@ -207,13 +218,24 @@ def _render_certificate_detail(
             "hide_health_banner": True,
             # Flash messages from actions that return here (tags, owner,
             # Scan now); base.html renders them.
-            "error": request.query_params.get("error", ""),
+            "error": request.query_params.get("error", "") or (
+                notes_error if not is_uploaded else ""
+            ),
             "warning": request.query_params.get("warning", ""),
             "host_saved": bool(request.query_params.get("host_saved")),
+            "notes_saved": bool(request.query_params.get("notes_saved")),
             "renewal_failure_cleared": bool(request.query_params.get("renewal_failure_cleared")),
-            "edit_open": bool(edit_values is not None or request.query_params.get("edit")),
-            "edit_values": edit_values or {},
-            "edit_errors": edit_errors or {},
+            "edit_open": bool(
+                (edit_values is not None and not editing_certificate_notes)
+                or request.query_params.get("edit")
+            ),
+            "certificate_notes_error": notes_error,
+            "certificate_notes_draft": (
+                (edit_values or {}).get("notes", view.certificate_notes)
+                if editing_certificate_notes else view.certificate_notes
+            ),
+            "edit_values": {} if editing_certificate_notes else edit_values or {},
+            "edit_errors": {} if editing_certificate_notes else edit_errors or {},
             **get_csrf_context(request),
         },
         status_code=status_code,
@@ -253,8 +275,32 @@ async def delete_certificate(
     return RedirectResponse(url="/", status_code=303)
 
 
-# Note: POST /certificates/{id}/notes was removed (UI-INVENTORY V1). Notes are
-# a host-scoped concept now — the single write surface is POST /hosts/{id}/notes.
+@router.post("/certificates/{cert_id}/notes", response_model=None)
+async def update_certificate_notes(
+    request: Request,
+    cert_id: IdParam,
+    notes: str = Form(""),
+    _auth: str = Depends(write_form_guard),
+) -> HTMLResponse | RedirectResponse:
+    try:
+        update_uploaded_certificate_notes(
+            _db_path(request),
+            cert_id,
+            notes,
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+    except ScopeDeniedError as exc:
+        return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
+    except ResourceMetadataNotFoundError:
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
+    except ResourceMetadataValidationError as exc:
+        return _render_certificate_detail(
+            request, cert_id, edit_values={"notes": notes},
+            edit_errors={"notes": str(exc)}, editing_certificate_notes=True, status_code=400,
+        )
+    return RedirectResponse(url=f"/certificates/{cert_id}?notes_saved=1", status_code=303)
 
 
 @router.post("/certificates/{cert_id}/tags")

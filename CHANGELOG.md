@@ -29,6 +29,11 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Manually uploaded certificates have editable notes again, without requiring
+  a monitored host. Preserved legacy upload notes are recovered on upgrade.
+  Scanned certificate notes remain attached to their endpoint. Scanning or
+  removing a host preserves uploaded files and their notes, including older
+  uploads with matching hostname metadata.
 - A stalled renewal on a host with the manual renewal method read "manual
   configured — no new certificate yet" on Home. It now reads "Manual renewal —
   no new certificate yet".

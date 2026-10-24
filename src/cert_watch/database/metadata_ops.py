@@ -13,6 +13,18 @@ def update_host_notes(conn: sqlite3.Connection, host_id: str, notes: str) -> boo
     return cursor.rowcount > 0
 
 
+def update_uploaded_certificate_notes(
+    conn: sqlite3.Connection, cert_id: str, notes: str
+) -> bool:
+    cursor = conn.execute(
+        "INSERT INTO uploaded_certificate_notes (cert_id, notes) "
+        "SELECT id, ? FROM certificates WHERE id = ? AND source = 'uploaded' "
+        "ON CONFLICT(cert_id) DO UPDATE SET notes = excluded.notes",
+        (notes, cert_id),
+    )
+    return cursor.rowcount > 0
+
+
 def update_host_tags(conn: sqlite3.Connection, host_id: str, tags: str) -> bool:
     cursor = conn.execute("UPDATE hosts SET tags = ? WHERE id = ?", (tags, host_id))
     return cursor.rowcount > 0

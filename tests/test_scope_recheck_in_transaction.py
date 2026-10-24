@@ -200,6 +200,10 @@ _RACE_CASES = {
         ("POST", "/hosts/{host_id}/notes"),
         ("PATCH", "/api/hosts/{host_id}/notes"),
     ),
+    "certificate_notes": (
+        ("POST", "/certificates/{cert_id}/notes"),
+        ("PATCH", "/api/certificates/{cert_id}/notes"),
+    ),
     "host_tags": (
         ("POST", "/hosts/{host_id}/tags"),
         ("PUT", "/api/hosts/{host_id}/tags"),
@@ -308,6 +312,52 @@ def test_certificate_tags(tmp_path, monkeypatch, adapter):
     else:
         assert (r.status_code, r.json()) == (403, _REFUSED)
     assert SqliteCertificateRepository(db).get_tags(cert_id) == ""
+
+
+@_race_adapters("certificate_notes")
+def test_uploaded_notes_recheck_scope_at_transaction_start(tmp_path, monkeypatch, adapter):
+    from cert_watch.services import resource_metadata
+
+    db, _, cert_id = _estate(tmp_path)
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE certificates SET source='uploaded', hostname=NULL, port=NULL, "
+            "tags='team-a' WHERE id=?", (cert_id,),
+        )
+        conn.commit()
+    real_begin = resource_metadata.begin_immediate
+    changed: list[str] = []
+
+    def change_then_begin(conn):
+        result = subprocess.run(
+            [sys.executable, "-c", _SET_RESOURCE_TAGS, str(db),
+             "certificates", cert_id, "team-b"],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert result.returncode == 0, result.stderr
+        changed.append(result.stdout.strip())
+        real_begin(conn)
+
+    monkeypatch.setattr(resource_metadata, "begin_immediate", change_then_begin)
+    with _team_a_client(db, tmp_path) as client:
+        if adapter == "html":
+            response = client.post(
+                f"/certificates/{cert_id}/notes", data={"notes": "refused"},
+                follow_redirects=False,
+            )
+            assert response.status_code == 303
+            assert "outside%20your%20team%20scope" in response.headers["location"]
+        else:
+            response = client.patch(
+                f"/api/certificates/{cert_id}/notes", json={"notes": "refused"},
+            )
+            assert (response.status_code, response.json()) == (403, _REFUSED)
+    assert changed == ["changed"]
+    assert SqliteCertificateRepository(db).get_uploaded_notes(cert_id) == ""
+    with _connect(db) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM audit_log WHERE action='cert.update_notes'"
+        ).fetchone()[0] == 0
 
 
 @_race_adapters("edit")

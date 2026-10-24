@@ -140,6 +140,14 @@ class SqliteCertificateRepository(CertificateRepository):
         self.chain_valid = chain_valid
         self.replaces_cert_id = replaces_cert_id
 
+    def get_uploaded_notes(self, cert_id: str) -> str:
+        """SQLite upload metadata, alongside the concrete repository's tag reads."""
+        with _connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT notes FROM uploaded_certificate_notes WHERE cert_id = ?", (cert_id,)
+            ).fetchone()
+        return str(row["notes"]) if row is not None else ""
+
     def add(self, cert: Certificate) -> str:
         cert_id = str(uuid.uuid4())
         now = _iso(datetime.now(UTC))
@@ -947,14 +955,16 @@ class SqliteHostRepository:
             leaf_ids = [
                 row["id"]
                 for row in conn.execute(
-                    "SELECT id FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1",
+                    "SELECT id FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1 "
+                    "AND source != 'uploaded'",
                     (hostname, port),
                 ).fetchall()
             ]
             all_cert_ids = [
                 row["id"]
                 for row in conn.execute(
-                    "SELECT id FROM certificates WHERE hostname = ? AND port = ?",
+                    "SELECT id FROM certificates WHERE hostname = ? AND port = ? "
+                    "AND source != 'uploaded'",
                     (hostname, port),
                 ).fetchall()
             ]
@@ -977,7 +987,16 @@ class SqliteHostRepository:
                     all_cert_ids,
                 )
             conn.execute(
-                "DELETE FROM certificates WHERE hostname = ? AND port = ?",
+                "DELETE FROM certificates WHERE hostname = ? AND port = ? "
+                "AND source != 'uploaded'",
+                (hostname, port),
+            )
+            # A later host at this address may belong to another team. Drop
+            # the removed association so its tags cannot grant access to an
+            # independently retained upload or its notes.
+            conn.execute(
+                "UPDATE certificates SET hostname = '', port = 0 "
+                "WHERE hostname = ? AND port = ? AND source = 'uploaded'",
                 (hostname, port),
             )
             conn.execute(

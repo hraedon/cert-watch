@@ -220,6 +220,9 @@ from cert_watch.migrations.m0049_renewal_failure_marker import (
 from cert_watch.migrations.m0049_renewal_failure_marker import (
     upgrade as renewal_failure_marker_upgrade,
 )
+from cert_watch.migrations.m0050_uploaded_certificate_notes import (
+    upgrade as uploaded_certificate_notes_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -389,4 +392,7 @@ runner.register(
     renewal_failure_marker_id,
     renewal_failure_marker_description,
     renewal_failure_marker_upgrade,
+)
+runner.register(
+    "0050", "restore notes for uploaded certificates", uploaded_certificate_notes_upgrade,
 )

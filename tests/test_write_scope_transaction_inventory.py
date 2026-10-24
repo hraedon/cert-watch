@@ -211,6 +211,15 @@ _target(
     "PATCH /api/hosts/{host_id}/notes",
 )
 _target(
+    _Contract(
+        resource_metadata.update_uploaded_certificate_notes,
+        resource_metadata._transact,
+        "persist(conn)",
+    ),
+    "POST /certificates/{cert_id}/notes",
+    "PATCH /api/certificates/{cert_id}/notes",
+)
+_target(
     _Contract(resource_metadata.update_host_tags, resource_metadata._transact, "persist(conn)"),
     "POST /hosts/{host_id}/tags",
     "PUT /api/hosts/{host_id}/tags",
@@ -284,6 +293,11 @@ _route_service(
     resource_metadata.update_host_notes,
     "POST /hosts/{host_id}/notes",
     "PATCH /api/hosts/{host_id}/notes",
+)
+_route_service(
+    resource_metadata.update_uploaded_certificate_notes,
+    "POST /certificates/{cert_id}/notes",
+    "PATCH /api/certificates/{cert_id}/notes",
 )
 _route_service(
     resource_metadata.update_host_tags,

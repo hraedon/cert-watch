@@ -32,6 +32,7 @@ class StoredCertificateDetailRecords:
     hostname: str
     port: int
     host: HostEntry | None
+    notes: str = ""
 
 
 @dataclass(frozen=True)
@@ -58,7 +59,11 @@ def get_stored_certificate_detail_records(
     init_schema(db_path)
     instant = _sql_now(datetime.now(UTC))
     with _connect(db_path) as conn:
-        leaf = conn.execute("SELECT * FROM certificates WHERE id = ?", (cert_id,)).fetchone()
+        leaf = conn.execute(
+            "SELECT c.*, COALESCE(n.notes, '') AS uploaded_notes "
+            "FROM certificates c LEFT JOIN uploaded_certificate_notes n ON n.cert_id = c.id "
+            "WHERE c.id = ?", (cert_id,),
+        ).fetchone()
         if leaf is None:
             return None
         chain_rows = conn.execute(
@@ -80,6 +85,7 @@ def get_stored_certificate_detail_records(
         hostname=hostname,
         port=port,
         host=(SqliteHostRepository._row_to_host(host_row) if host_row is not None else None),
+        notes=leaf["uploaded_notes"],
     )
 
 

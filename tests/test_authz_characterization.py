@@ -161,6 +161,11 @@ def _seed(db: Path, principal: Principal) -> Seeded:
     from cert_watch.database import SqliteCertificateRepository
 
     SqliteCertificateRepository(db).set_tags(ids["cert_split"], "A")
+    uploads = SqliteCertificateRepository(db, source="uploaded")
+    for suffix, fingerprint in (("a", "d"), ("b", "e")):
+        key = f"upload_{suffix}"
+        ids[key] = uploads.add(_cert(f"upload-{suffix}.example.com", fingerprint))
+        uploads.set_tags(ids[key], suffix.upper())
     ids["alert"] = SqliteAlertRepository(db).create(
         Alert(cert_id=ids["cert_a"], alert_type="expiry_warning", status="pending", message="m")
     )
@@ -238,6 +243,8 @@ def _expansions(path: str) -> list[dict[str, str]]:
         targets = _PARAM_TARGETS[name]
         if path in _CERTIFICATE_ADDRESSED_OWNER_PATHS:
             targets = (*targets, "cert_split")
+        if path in {"/certificates/{cert_id}/notes", "/api/certificates/{cert_id}/notes"}:
+            targets = (*targets, "upload_a", "upload_b")
         combos = [{**c, name: t} for c in combos for t in targets]
     return combos
 
