@@ -125,6 +125,10 @@ recipients. The ordinary dispatcher and evidence ledger deliver them. These
 global records do not participate in certificate tag groups or scoped alert
 queries. Retirement closes their alerts transactionally before incident
 resolution runs outside the write lock. See [application credentials](application-secrets.md).
+The inventory retains its lowest raised threshold in the same transaction as
+enqueueing. Purging alert history cannot reset reminder progress. Superseding
+an older reminder closes both pending and sending rows through `AlertStore`,
+preserving an active worker's lease while preventing a stale lease from replaying.
 
 `alerting/` is layered in one direction:
 

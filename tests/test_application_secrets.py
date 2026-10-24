@@ -85,6 +85,7 @@ def test_inventory_schema_cannot_store_a_secret_value(db):
     assert columns == {
         "id", "application_name", "application_id", "credential_id", "credential_name",
         "tenant_id", "expires_at", "owner_email", "created_at", "retired_at",
+        "last_alert_threshold",
     }
 
 
@@ -172,6 +173,74 @@ def test_scoped_dispatch_does_not_send_global_credential_alerts(db, fake_transpo
     transport = fake_transport()
     Dispatcher(db, transports=[transport], scope_tags=("team",)).process_pending()
     assert not transport.messages
+
+
+def test_escalation_cancels_crashed_older_delivery(db, fake_transport):
+    from cert_watch.alerting.dispatch import Dispatcher
+    from cert_watch.database.alert_store import AlertStore
+
+    create(db)
+    evaluate_application_secrets(db, now=NOW)
+    claimed = AlertStore(db, initialize=False).claim(
+        lease_owner="crashed-worker", now=NOW, lease_expires_at=NOW + timedelta(seconds=60),
+    )
+    assert len(claimed) == 1
+    later = NOW + timedelta(days=23)
+    evaluate_application_secrets(db, now=later)
+    transport = fake_transport()
+    Dispatcher(db, transports=[transport], clock=lambda: later).process_pending()
+    assert [message.threshold_days for message in transport.messages] == [7]
+    rows = _connect(db).execute("SELECT threshold_days,status FROM alerts").fetchall()
+    assert {row[0]: row[1] for row in rows} == {30: "cancelled", 7: "sent"}
+
+
+def test_expired_stage_does_not_reopen_after_history_retention(db, fake_transport):
+    from freezegun import freeze_time
+
+    from cert_watch.alerting.dispatch import Dispatcher
+    from cert_watch.database.pagination import purge_old_alerts
+
+    create(db, expires_at=NOW.isoformat())
+    evaluate_application_secrets(db, now=NOW)
+    transport = fake_transport()
+    Dispatcher(db, transports=[transport], clock=lambda: NOW).process_pending()
+    later = NOW + timedelta(days=91)
+    with freeze_time(later):
+        assert purge_old_alerts(db, 90) == 1
+    assert not _connect(db).execute("SELECT * FROM alerts").fetchall()
+    assert evaluate_application_secrets(db, now=later) == []
+    Dispatcher(db, transports=[transport], clock=lambda: later).process_pending()
+    assert len(transport.messages) == 1
+
+
+def test_escalation_closes_live_older_lease_without_clearing_it(db):
+    from cert_watch.database.alert_store import AlertStore
+
+    create(db)
+    evaluate_application_secrets(db, now=NOW)
+    store = AlertStore(db, initialize=False)
+    claimed = store.claim(
+        lease_owner="live-worker", now=NOW, lease_expires_at=NOW + timedelta(days=24),
+    )
+    assert len(claimed) == 1
+    evaluate_application_secrets(db, now=NOW + timedelta(days=23))
+    row = _connect(db).execute(
+        "SELECT status,closed_at,lease_owner FROM alerts WHERE id=?", (claimed[0].id,),
+    ).fetchone()
+    assert tuple(row) == ("sending", (NOW + timedelta(days=23)).isoformat(), "live-worker")
+
+
+def test_stage_marker_and_queue_roll_back_together(db):
+    identifier = create(db)
+    conn = _connect(db)
+    conn.execute("CREATE TRIGGER refuse_alert BEFORE INSERT ON alerts "
+                 "BEGIN SELECT RAISE(ABORT,'synthetic queue refusal'); END")
+    conn.commit()
+    with pytest.raises(Exception, match="synthetic queue refusal"):
+        evaluate_application_secrets(db, now=NOW)
+    assert conn.execute("SELECT last_alert_threshold FROM application_secrets WHERE id=?",
+                        (identifier,)).fetchone()[0] is None
+    assert not conn.execute("SELECT * FROM alerts").fetchall()
 
 
 @pytest.mark.parametrize("days,state", [(31, "Current"), (30, "Expires within 30 days"),

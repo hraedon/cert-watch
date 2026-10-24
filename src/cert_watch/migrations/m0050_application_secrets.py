@@ -20,7 +20,9 @@ def upgrade(conn: sqlite3.Connection) -> None:
             expires_at TEXT NOT NULL,
             owner_email TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
-            retired_at TEXT
+            retired_at TEXT,
+            last_alert_threshold INTEGER
+                CHECK(last_alert_threshold IN (0,1,3,7,14,30))
         )"""
     )
     conn.execute(

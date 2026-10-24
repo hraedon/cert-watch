@@ -13,9 +13,11 @@ the deadline.
 
 The scheduler raises one reminder at the most urgent crossed stage: 30, 14,
 7, 3 or 1 days, then a separate expired alert at the expiry instant. A stage
-is recorded once per record. If a credential is first added with two days
+is recorded once per record, with a durable stage marker independent of alert
+history retention. If a credential is first added with two days
 remaining, only the 3-day reminder is queued. Later stages cancel older
-unsent reminders. Delivery uses the existing retry queue and append-only
+unsent reminders, including abandoned delivery leases. Delivery uses the
+existing retry queue and append-only
 delivery evidence. The next alert evaluation occurs with the normal scheduler
 cycle; this is not an exact-time alarm.
 

@@ -31,15 +31,16 @@ def evaluate_application_secrets(
             threshold = 0 if seconds <= 0 else min(crossed)
             resource = f"application-secret:{secret.id}"
             seen = conn.execute(
-                "SELECT MIN(threshold_days) FROM alerts WHERE cert_id=?",
-                (resource,),
+                "SELECT last_alert_threshold FROM application_secrets WHERE id=?",
+                (secret.id,),
             ).fetchone()[0]
             if seen is not None and seen <= threshold:
                 continue
             # The most urgent stage supersedes unsent earlier reminders.
             stale_keys = {str(row[0]) for row in conn.execute(
                 """SELECT dedupe_key FROM alerts WHERE cert_id=?
-                   AND threshold_days>? AND closed_at IS NULL AND status='pending'""",
+                   AND threshold_days>? AND closed_at IS NULL
+                   AND status IN ('pending','sending')""",
                 (resource, threshold),
             )}
             store.close_keys(
@@ -65,6 +66,10 @@ def evaluate_application_secrets(
                 routing={"version": 1, "recipients": recipients, "groups": []},
             )
             if store.enqueue(alert, conn=conn, lifetime=True):
+                conn.execute(
+                    "UPDATE application_secrets SET last_alert_threshold=? WHERE id=?",
+                    (threshold, secret.id),
+                )
                 raised.append(alert)
         conn.commit()
     return raised
