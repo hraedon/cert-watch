@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from freezegun import freeze_time
 
 from cert_watch.alerting.rules.application_secrets import evaluate_application_secrets
 from cert_watch.application_secrets import parse_metadata
@@ -195,8 +196,6 @@ def test_escalation_cancels_crashed_older_delivery(db, fake_transport):
 
 
 def test_expired_stage_does_not_reopen_after_history_retention(db, fake_transport):
-    from freezegun import freeze_time
-
     from cert_watch.alerting.dispatch import Dispatcher
     from cert_watch.database.pagination import purge_old_alerts
 
@@ -275,6 +274,7 @@ def test_retirement_resolves_a_delivered_stage_closed_during_send(db, fake_trans
     assert calls[0][2] == 30
 
 
+@freeze_time(NOW)
 def test_retirement_during_send_resolves_after_the_trigger(db, fake_transport, monkeypatch):
     from cert_watch.alerting import resolve
     from cert_watch.alerting.dispatch import Dispatcher
