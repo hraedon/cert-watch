@@ -7,7 +7,7 @@ import re
 import sqlite3
 import uuid
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import monotonic
@@ -330,6 +330,7 @@ class Dispatcher:
         for item in queue:
             alert = item.alert
             if item.settled:
+                self._resolve_closed_credential(item.alert)
                 sent += 1
                 continue
             if item.lease_lost:
@@ -341,6 +342,7 @@ class Dispatcher:
                     attempts=self._attempts_to_persist(item),
                     now=now,
                 ):
+                    self._resolve_closed_credential(item.alert)
                     sent += 1
                 continue
 
@@ -399,6 +401,22 @@ class Dispatcher:
                 # backoff still prevents a hot loop until settings change.
                 deferred += not item.configuration_missing
         return {"sent": sent, "failed": failed, "deferred": deferred}
+
+    def _resolve_closed_credential(self, alert: Alert) -> None:
+        """Resolve a retired/superseded credential only after its trigger finishes."""
+        if self.webhook_config is None or not alert.cert_id.startswith("application-secret:"):
+            return
+        try:
+            if not self.store.is_closed(alert.id):
+                return
+            from cert_watch.alerting.resolve import resolve_webhook_for_renewed_cert
+
+            resolve_webhook_for_renewed_cert(
+                self.db_path, "", self.webhook_config,
+                pending_alerts=[replace(alert, status="sent")],
+            )
+        except (sqlite3.Error, OSError, ValueError):
+            logger.warning("Closed credential alert %s incident resolution failed", alert.id)
 
     def _complete_evidence_deferral(self, item: _Delivery, *, now: datetime) -> str:
         alert = item.alert

@@ -20,6 +20,7 @@ from fastapi import APIRouter
 
 from cert_watch.routes.api.alert_actions import router as alert_actions_router
 from cert_watch.routes.api.alerts import router as alerts_router
+from cert_watch.routes.api.application_secrets import router as application_secrets_router
 from cert_watch.routes.api.audit import router as audit_router
 from cert_watch.routes.api.certificates import router as certificates_router
 from cert_watch.routes.api.events import router as events_router
@@ -33,6 +34,7 @@ from cert_watch.routes.api.reports import router as reports_router
 from cert_watch.routes.api.system import router as system_router
 
 router = APIRouter()
+router.include_router(application_secrets_router)
 
 # Include all sub-routers.  Prefixes are empty because each sub-router already
 # declares its full path (e.g.  @router.get("/api/certificates"))

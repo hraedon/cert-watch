@@ -2,6 +2,14 @@
 
 ## How upgrades work
 
+The next release adds migration 0050 for application credential expiry
+metadata and active-identity/expiry indexes. It does not change certificate
+records, authentication settings or existing alerts. Startup takes the normal
+pre-migration backup. Administrators gain a Credentials page and the matching
+`/api/application-secrets` endpoints. No credential values are migrated or
+stored; configure global delivery channels for reminders. Rollback requires
+restoring the pre-migration database as described below.
+
 Install the new version over the same data directory and start it. On startup,
 cert-watch:
 

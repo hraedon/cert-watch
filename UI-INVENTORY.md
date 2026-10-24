@@ -183,6 +183,8 @@ because the HTML and JSON adapters must share their mutation owner too.
 
 | Concept | HTML endpoint | JSON endpoint | Service symbol |
 |---|---|---|---|
+| application credential add | `POST /application-secrets` | `POST /api/application-secrets` | `application_secrets.create_application_secret` |
+| application credential retire | `POST /application-secrets/{secret_id}/retire` | `POST /api/application-secrets/{secret_id}/retire` | `application_secrets.retire_application_secret` |
 | detail host edit | `POST /hosts/{resource_id}/edit` | `PUT /api/hosts/{resource_id}` | `host_edit.edit_host` |
 | certificate tags | `POST /certificates/{cert_id}/tags` | `PUT /api/certificates/{cert_id}/tags` | `resource_metadata.update_certificate_tags` |
 | certificate upload | `POST /upload` | `POST /api/certificates/upload` | `certificate_management.upload_certificate_bytes` |

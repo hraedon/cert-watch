@@ -11,6 +11,10 @@ from tests._route_inventory import _walk, mutating_routes
 # control-plane configuration are a separate browser/session surface; CRUD
 # concepts that already have a JSON API are included.
 HTML_TO_JSON: dict[tuple[str, str], tuple[str, str]] = {
+    ("POST", "/application-secrets"): ("POST", "/api/application-secrets"),
+    ("POST", "/application-secrets/{secret_id}/retire"): (
+        "POST", "/api/application-secrets/{secret_id}/retire",
+    ),
     ("POST", "/alerts/mark-all-read"): ("POST", "/api/alerts/mark-all-read"),
     ("POST", "/alerts/{alert_id}/retry"): (
         "POST", "/api/alerts/{alert_id}/retry"

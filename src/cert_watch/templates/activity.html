@@ -87,13 +87,16 @@
   <div class="cw-panel">
     {% if alerts %}
       {% for a in alerts %}
-        {% set sev_tone = 't-crit' if a.alert_type == 'expired' else 't-warn' if a.alert_type in ('scan_failure', 'expiry_warning', 'drift') else 't-muted' %}
+        {% set credential_urgent = a.alert_type == 'application_secret_expiry' and a.threshold_days is not none and a.threshold_days <= 7 %}
+        {% set sev_tone = 't-crit' if a.alert_type in ('expired', 'application_secret_expired') or credential_urgent else 't-warn' if a.alert_type in ('scan_failure', 'expiry_warning', 'drift', 'application_secret_expiry') else 't-muted' %}
         {% set type_labels = {'expired': 'Expired', 'scan_failure': 'Scan failure', 'expiry_warning': 'Expiry warning', 'drift': 'Drift', 'mis_issuance': 'CT mis-issuance'} %}
         <div class="cw-panel-body" data-alert-id="{{ a.id }}">
           <div class="cw-chiprow">
             {{ ui.status(label=type_labels.get(a.alert_type, a.alert_type | humanize_label), tone=sev_tone) }}
             <span class="cw-id">{{ a.subject or "(deleted)" }}</span>
-            {% if a.historical_cert|default(false) %}
+            {% if a.alert_type in ('application_secret_expiry', 'application_secret_expired') %}
+            <span class="cw-chip">Application credential</span>
+            {% elif a.historical_cert|default(false) %}
             <span class="cw-chip">Historical certificate — no longer in inventory</span>
             {% endif %}
             {% if not a.read %}<span class="cw-badge-new">NEW</span>{% endif %}

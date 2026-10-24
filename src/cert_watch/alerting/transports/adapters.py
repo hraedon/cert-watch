@@ -38,31 +38,31 @@ class AlertAdapter(Protocol):
     def build(self, msg: OutboundMessage, config: WebhookConfig) -> AlertRequest: ...
 
 def _status_color(alert_type: str) -> int:
-    if alert_type in ("expired", "renewal_failed"):
+    if alert_type in ("expired", "renewal_failed", "application_secret_expired"):
         return 0xCC0000
     if alert_type in (
         "expiry_warning", "drift", "renewal_stalled", "renewal_not_deployed",
-        "policy_violation",
+        "policy_violation", "application_secret_expiry",
     ):
         return 0xE0A800
     return 0x808080
 
 
 def _status_urgency(alert_type: str) -> str:
-    if alert_type == "expired":
+    if alert_type in ("expired", "application_secret_expired"):
         return "attention"
     if alert_type in (
         "expiry_warning", "renewal_stalled", "renewal_not_deployed", "renewal_failed",
-        "policy_violation",
+        "policy_violation", "application_secret_expiry",
     ):
         return "warning"
     return "default"
 
 
 def _pd_severity(alert_type: str, threshold_days: int | None) -> str:
-    if alert_type == "expired":
+    if alert_type in ("expired", "application_secret_expired"):
         return "critical"
-    if alert_type in ("expiry_warning", "drift"):
+    if alert_type in ("expiry_warning", "drift", "application_secret_expiry"):
         if threshold_days is not None and threshold_days <= 3:
             return "error"
         return "warning"
@@ -88,6 +88,8 @@ def _pd_dedup_key(cert_id: str, alert_type: str, threshold_days: int | None) -> 
 
 
 _ALERT_NAMES = {
+    "application_secret_expired": "ApplicationSecretExpired",
+    "application_secret_expiry": "ApplicationSecretExpiry",
     "expired": "CertExpired",
     "expiry_warning": "CertExpiry",
     "drift": "CertDrift",
@@ -462,9 +464,11 @@ class PagerDutyAdapter:
 
 
 def _slack_color(alert_type: str) -> str:
-    if alert_type in ("expired", "renewal_failed"):
+    if alert_type in ("expired", "renewal_failed", "application_secret_expired"):
         return "danger"
-    if alert_type in ("expiry_warning", "renewal_stalled", "renewal_not_deployed"):
+    if alert_type in (
+        "expiry_warning", "renewal_stalled", "renewal_not_deployed", "application_secret_expiry",
+    ):
         return "warning"
     return "good"
 

@@ -1009,6 +1009,7 @@ _TARGET_PARAMS: dict[str, tuple[str, ...]] = {
 # Path parameters of mutating routes that do not address estate data. Each
 # needs a reason; a new parameter fails test_every_mutating_route_is_classified.
 _NOT_ESTATE_TARGETS: dict[str, str] = {
+    "secret_id": "admin-only application credential inventory, without certificate tag scope",
     "anchor_id": "trust anchors are admin-only and estate-wide",
     "key_id": "API keys are admin-only account objects",
     "role_id": "roles are admin-only account objects",
@@ -1496,6 +1497,8 @@ _BULK_ROUTES = frozenset({
     "/hosts/all/scan", "/api/hosts/scan", "/alerts/mark-all-read", "/api/alerts/mark-all-read",
 })
 _NON_TARGET_MUTATIONS: dict[str, str] = {
+    "/application-secrets": "admin-only application credential metadata",
+    "/api/application-secrets": "admin-only application credential metadata",
     "/login": "authentication",
     "/auth/logout": "authentication",
     "/setup": "first-run setup; refused once setup_complete",

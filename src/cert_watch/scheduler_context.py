@@ -238,6 +238,7 @@ class SchedulerContext:
         from cert_watch.alerting.digest.expiry import ExpiryDigestKind
         from cert_watch.alerting.dispatch import process_pending
         from cert_watch.alerting.model import ALERT_CYCLE_BUDGET_SECONDS
+        from cert_watch.alerting.rules.application_secrets import evaluate_application_secrets
         from cert_watch.alerting.rules.expiry import evaluate_all_certs
         from cert_watch.alerting.rules.renewal import evaluate_renewal_window
         from cert_watch.alerting.rules.renewal_reports import evaluate_renewal_report_alerts
@@ -245,6 +246,7 @@ class SchedulerContext:
         config = self._snapshot()
         s = config.settings
         repo = SqliteAlertRepository(s.db_path)
+        evaluate_application_secrets(s.db_path)
         closed_sent: list[Any] = []
         if s.alert_digest_only:
             evaluate_all_certs(s.db_path, repo, urgent_only=True)

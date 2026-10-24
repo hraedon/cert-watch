@@ -22,6 +22,14 @@ All notable changes to cert-watch are documented in this file.
 
 ### Added
 
+- Administrators can track application credential expiry from metadata under
+  Credentials, including manual entry, owner email and retirement. Individual
+  reminders use the existing delivery queue at 30/14/7/3/1 days and expiry;
+  no secret values are accepted. See [the guide](docs/application-secrets.md).
+- A standalone PowerShell helper exports Entra application password-credential
+  metadata through an existing Graph session, with atomic output and no secret
+  values. The operator can review the JSON before adding it through the API.
+
 - A certificate's detail page lists the other endpoints serving the same
   certificate, each with its notes and a link to its own page. Notes, owner and
   renewal settings belong to each endpoint, and their edit page was reachable
