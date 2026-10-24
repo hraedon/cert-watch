@@ -262,9 +262,8 @@ def test_dashboard_pagination_empty():
     assert "pagination" not in r.text and "Page" not in r.text
 
 
-def test_uploaded_cert_has_no_notes_ui(reload_app, tmp_path, leaf_pem_file):
-    """UI-INVENTORY V1: notes are host-scoped; an uploaded certificate with no
-    host row renders no notes editing control."""
+def test_uploaded_cert_has_notes_ui_without_a_host(reload_app, tmp_path, leaf_pem_file):
+    """Uploads have one certificate-notes editor without needing a host row."""
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
@@ -272,7 +271,8 @@ def test_uploaded_cert_has_no_notes_ui(reload_app, tmp_path, leaf_pem_file):
     with TestClient(app_mod.app) as client:
         r = client.get(f"/certificates/{cert_id}")
     assert r.status_code == 200
-    assert 'name="notes"' not in r.text
+    assert r.text.count('name="notes"') == 1
+    assert 'data-testid="edit-certificate-notes"' in r.text
 
 
 def test_dashboard_pagination_with_data(reload_app, tmp_path):

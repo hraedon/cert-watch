@@ -29,6 +29,7 @@ from cert_watch.routes.api._shared import (
     _normalize_pagination,
     _pagination_links,
     delivery_details_allowed,
+    json_body,
     status_api_row,
     status_filter_error,
     status_for_api,
@@ -51,6 +52,7 @@ from cert_watch.services.resource_metadata import (
     ResourceMetadataNotFoundError,
     ResourceMetadataValidationError,
     update_certificate_tags,
+    update_uploaded_certificate_notes,
 )
 from cert_watch.status_model import AxisSettings
 from cert_watch.tags import parse_tags
@@ -225,8 +227,32 @@ def api_get_certificate(
             "tags": parse_tags(repo.get_tags(cert_id)),
             "effective_tags": repo.effective_tags(cert_id),
             "status": status,
+            **({"notes": repo.get_uploaded_notes(cert_id)} if cert.source == "uploaded" else {}),
         }
     )
+
+
+@router.patch("/api/certificates/{cert_id}/notes")
+async def api_update_certificate_notes(
+    request: Request, cert_id: IdParam, _auth: str = Depends(json_write_guard)
+) -> JSONResponse:
+    raw = await request.body()
+    try:
+        notes = update_uploaded_certificate_notes(
+            _db_path(request),
+            cert_id,
+            lambda: json_body(raw).get("notes", ""),
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+    except ScopeDeniedError as exc:
+        return JSONResponse(status_code=403, content={"error": str(exc)})
+    except (JsonBodyError, ResourceMetadataValidationError) as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except ResourceMetadataNotFoundError:
+        return JSONResponse(status_code=404, content={"error": "not found"})
+    return JSONResponse(content={"id": cert_id, "notes": notes})
 
 
 @router.get("/api/certificates/{cert_id}/posture", response_model=None)

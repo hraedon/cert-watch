@@ -438,15 +438,14 @@ def _stage_resolve_pending_alerts(
     if not isinstance(webhook_config, WebhookConfig):
         return None, None
     from cert_watch.database import SqliteAlertRepository
+    from cert_watch.database.cert_ops import _scan_leaf_rows, _select_predecessors
     from cert_watch.database.connection import _connect
     with _connect(repo_path) as conn:
-        row = conn.execute(
-            "SELECT id FROM certificates"
-            " WHERE hostname = ? AND port = ? AND is_leaf = 1",
-            (entry.host, entry.port),
-        ).fetchone()
-    if row:
-        old_leaf_id = row["id"]
+        predecessors, _ = _select_predecessors(
+            _scan_leaf_rows(conn, entry.host, entry.port), entry.leaf.fingerprint_sha256
+        )
+    if predecessors:
+        old_leaf_id = predecessors[0]["id"]
         pending = [
             alert
             for alert in SqliteAlertRepository(repo_path).list_for_cert(old_leaf_id)

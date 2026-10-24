@@ -234,7 +234,7 @@ def test_0049_runner_is_idempotent_and_matches_fresh_schema(
     assert runner.run_pending_migrations(upgraded, backup=False)[-1] == "0048"
 
     monkeypatch.setattr(runner, "_MIGRATIONS", migrations)
-    assert runner.run_pending_migrations(upgraded, backup=False) == ["0049"]
+    assert runner.run_pending_migrations(upgraded, backup=False) == ["0049", "0050"]
     assert runner.run_pending_migrations(upgraded, backup=False) == []
     init_schema(fresh)
     assert _schema_snapshot(upgraded) == _schema_snapshot(fresh)

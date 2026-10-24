@@ -68,6 +68,9 @@ CERT_ID_REFERENCES: dict[str, tuple[str, str]] = {
     # rewritten; a row whose new id is later deleted is inert.
     "certificate_lineage.old_cert_id": ("HISTORY", "HISTORY"),
     "certificate_lineage.new_cert_id": ("HISTORY", "HISTORY"),
+    # Upload-only: scans never rewrite the uploaded record or move its notes
+    # to a scanned leaf, even when the same certificate is served by a host.
+    "uploaded_certificate_notes.cert_id": ("KEPT", "KEPT"),
 }
 
 def distinct_tags(
@@ -127,6 +130,21 @@ def _select_predecessors(
     return heads, False
 
 
+def _scan_leaf_rows(
+    conn: sqlite3.Connection, hostname: str, port: int
+) -> list[sqlite3.Row]:
+    """Endpoint rows eligible for replacement, in the shared predecessor order.
+
+    Uploaded files remain independent even when older rows carry endpoint
+    metadata. Unknown-source historical scan rows retain their prior behavior.
+    """
+    return conn.execute(
+        "SELECT * FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1 "
+        "AND source != 'uploaded' ORDER BY created_at DESC, rowid DESC",
+        (hostname, port),
+    ).fetchall()
+
+
 def _carried_operator_data(
     conn: sqlite3.Connection, predecessors: list[sqlite3.Row]
 ) -> tuple[str, list[str]]:
@@ -174,11 +192,7 @@ def _do_replace(
 
     now = _iso(datetime.now(UTC))
     leaf_id = str(uuid.uuid4())
-    old_leaf_rows = conn.execute(
-        "SELECT * FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1 "
-        "ORDER BY created_at DESC, rowid DESC",
-        (hostname, port),
-    ).fetchall()
+    old_leaf_rows = _scan_leaf_rows(conn, hostname, port)
     old_leaves = [row["id"] for row in old_leaf_rows]
     predecessors, unchanged = _select_predecessors(old_leaf_rows, leaf.fingerprint_sha256)
     # Lineage fields (the kept id, ``replaces_cert_id``) need exactly one row;
@@ -203,7 +217,8 @@ def _do_replace(
     old_all_ids = [
         row["id"]
         for row in conn.execute(
-            "SELECT id FROM certificates WHERE hostname = ? AND port = ?",
+            "SELECT id FROM certificates WHERE hostname = ? AND port = ? "
+            "AND source != 'uploaded'",
             (hostname, port),
         ).fetchall()
     ]
@@ -277,7 +292,8 @@ def _do_replace(
             "DELETE FROM certificates WHERE parent_cert_id = ?", (old_id,)
         )
     conn.execute(
-        "DELETE FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1",
+        "DELETE FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1 "
+        "AND source != 'uploaded'",
         (hostname, port),
     )
 
@@ -477,7 +493,7 @@ def delete_certificate_cascade(
         # across multiple host:port pairs — silently destroying their renewal
         # analytics (lead time, cadence, automation classification).
         leaf_row = conn.execute(
-            "SELECT hostname, port FROM certificates WHERE id = ?", (cert_id,)
+            "SELECT hostname, port, source FROM certificates WHERE id = ?", (cert_id,)
         ).fetchone()
         fps = [
             r["fingerprint_sha256"]
@@ -489,6 +505,7 @@ def delete_certificate_cascade(
         ]
         if (
             leaf_row is not None
+            and leaf_row["source"] != "uploaded"
             and leaf_row["hostname"] is not None
             and leaf_row["port"] is not None
             and fps

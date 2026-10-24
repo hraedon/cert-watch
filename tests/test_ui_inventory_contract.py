@@ -100,7 +100,7 @@ def _result(service: str, resource_id: str) -> Any:
         from cert_watch.services.resource_metadata import TagUpdateResult
 
         return TagUpdateResult(resource_id, "ops", ("ops",), ("ops",))
-    if service.endswith("update_host_notes"):
+    if service.endswith(("update_host_notes", "update_uploaded_certificate_notes")):
         return "notes"
     if service.endswith("update_host_ownership"):
         from cert_watch.services.host_ownership import HostOwnership
@@ -178,7 +178,7 @@ def _request_pair(concept: str) -> tuple[dict[str, Any], dict[str, Any]]:
     elif concept == "host ownership":
         form["data"] = {"owner_name": "owner"}
         api["json"] = {"owner_name": "owner"}
-    elif concept == "host notes":
+    elif concept in {"host notes", "uploaded certificate notes"}:
         form["data"] = {"notes": "notes"}
         api["json"] = {"notes": "notes"}
     elif concept == "host create":
