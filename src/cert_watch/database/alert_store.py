@@ -694,4 +694,3 @@ class AlertStore:
             "SELECT closed_at FROM alerts WHERE id=?", (alert_id,),
         ).fetchone()
         return row is not None and row["closed_at"] is not None
-
