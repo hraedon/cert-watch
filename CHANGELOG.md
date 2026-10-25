@@ -37,6 +37,9 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Credential reminders due within seven days now appear in the Critical alert
+  filter and its count, matching their displayed urgency. Later reminders stay
+  in Warnings, and tag-scoped views continue to exclude global credentials.
 - The combined notes and application-credential upgrade uses separate migration
   numbers: 0050 for uploaded notes and 0051 for credential metadata. Startup
   refuses an incompatible draft database that assigned 0050 to credentials

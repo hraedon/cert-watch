@@ -2,6 +2,7 @@
 
 import sqlite3
 from contextlib import closing
+from pathlib import Path
 
 import pytest
 
@@ -99,10 +100,15 @@ def test_other_draft_0050_without_notes_is_refused_before_schema_change(tmp_path
             "INSERT INTO schema_version VALUES "
             "('0050', 'track application credential expiry metadata', '2026-10-25')"
         )
-        conn.execute(
-            "CREATE TABLE application_secrets (id TEXT PRIMARY KEY, application_name TEXT)"
+        conn.executescript(
+            (Path(__file__).parent / "fixtures/application_only_0050_draft.sql").read_text()
         )
-        conn.execute("INSERT INTO application_secrets VALUES ('synthetic-id', 'keep metadata')")
+        conn.execute(
+            "INSERT INTO application_secrets "
+            "(id,application_name,application_id,credential_id,expires_at,created_at) "
+            "VALUES ('synthetic-id','keep metadata','synthetic-app','synthetic-key',"
+            "'2030-01-01T00:00:00+00:00','2026-10-25T00:00:00+00:00')"
+        )
         conn.commit()
     before = _snapshot(database)
 
