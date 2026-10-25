@@ -225,7 +225,7 @@ def test_0049_runner_is_idempotent_and_matches_fresh_schema(
 
     upgraded = tmp_path / "through-0048.sqlite3"
     fresh = tmp_path / "fresh-0049.sqlite3"
-    migrations = runner.get_migrations()
+    migrations = [migration for migration in runner.get_migrations() if migration[0] <= "0049"]
     monkeypatch.setattr(
         runner,
         "_MIGRATIONS",
@@ -234,8 +234,24 @@ def test_0049_runner_is_idempotent_and_matches_fresh_schema(
     assert runner.run_pending_migrations(upgraded, backup=False)[-1] == "0048"
 
     monkeypatch.setattr(runner, "_MIGRATIONS", migrations)
-    assert runner.run_pending_migrations(upgraded, backup=False) == ["0049", "0050"]
+    assert runner.run_pending_migrations(upgraded, backup=False) == ["0049"]
     assert runner.run_pending_migrations(upgraded, backup=False) == []
+    init_schema(fresh)
+    assert _schema_snapshot(upgraded) == _schema_snapshot(fresh)
+
+
+def test_current_runner_upgrades_0049_to_current_schema(tmp_path: Path, monkeypatch) -> None:
+    import cert_watch.migrations.registry  # noqa: F401
+    from cert_watch.migrations import runner
+
+    migrations = runner.get_migrations()
+    upgraded = tmp_path / "upgrade-current.sqlite3"
+    monkeypatch.setattr(runner, "_MIGRATIONS", [m for m in migrations if m[0] <= "0049"])
+    runner.run_pending_migrations(upgraded, backup=False)
+    monkeypatch.setattr(runner, "_MIGRATIONS", migrations)
+    assert runner.run_pending_migrations(upgraded, backup=False) == ["0050", "0051"]
+    assert runner.run_pending_migrations(upgraded, backup=False) == []
+    fresh = tmp_path / "fresh-current.sqlite3"
     init_schema(fresh)
     assert _schema_snapshot(upgraded) == _schema_snapshot(fresh)
 

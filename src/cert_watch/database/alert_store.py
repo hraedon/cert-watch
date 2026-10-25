@@ -687,3 +687,10 @@ class AlertStore:
             )
             conn.commit()
         return cursor.rowcount == 1
+
+    def is_closed(self, alert_id: str) -> bool:
+        """Read closure after settlement without changing delivery state."""
+        row = _connect(self.db_path).execute(
+            "SELECT closed_at FROM alerts WHERE id=?", (alert_id,),
+        ).fetchone()
+        return row is not None and row["closed_at"] is not None

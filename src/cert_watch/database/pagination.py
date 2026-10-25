@@ -36,9 +36,13 @@ def list_alerts_with_subject(
     if unread_only:
         conditions.append("a.read = 0")
     if critical_only:
-        conditions.append("a.alert_type IN ('expired', 'scan_failure')")
+        conditions.append(
+            "a.alert_type IN ('expired', 'scan_failure', 'application_secret_expired')"
+        )
     if warning_only:
-        conditions.append("a.alert_type IN ('expiry_warning', 'drift')")
+        conditions.append(
+            "a.alert_type IN ('expiry_warning', 'drift', 'application_secret_expiry')"
+        )
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
     if scope_tags:
         from cert_watch.database.dashboard import _add_effective_tag_filter
@@ -148,14 +152,16 @@ def _count_alerts_by_filter(
                 f"SELECT COUNT(*) FROM alerts a "
                 f"LEFT JOIN certificates c ON c.id = a.cert_id "
                 f"LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port "
-                f"{base_where} AND a.alert_type IN ('expired', 'scan_failure')",
+                f"{base_where} AND "
+                "a.alert_type IN ('expired', 'scan_failure', 'application_secret_expired')",
                 base_params,
             ).fetchone()
             warn_row = conn.execute(
                 f"SELECT COUNT(*) FROM alerts a "
                 f"LEFT JOIN certificates c ON c.id = a.cert_id "
                 f"LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port "
-                f"{base_where} AND a.alert_type IN ('expiry_warning', 'drift')",
+                f"{base_where} AND "
+                "a.alert_type IN ('expiry_warning', 'drift', 'application_secret_expiry')",
                 base_params,
             ).fetchone()
     else:
@@ -165,10 +171,12 @@ def _count_alerts_by_filter(
                 "SELECT COUNT(*) FROM alerts WHERE read = 0"
             ).fetchone()
             crit_row = conn.execute(
-                "SELECT COUNT(*) FROM alerts WHERE alert_type IN ('expired', 'scan_failure')"
+                "SELECT COUNT(*) FROM alerts WHERE "
+                "alert_type IN ('expired', 'scan_failure', 'application_secret_expired')"
             ).fetchone()
             warn_row = conn.execute(
-                "SELECT COUNT(*) FROM alerts WHERE alert_type IN ('expiry_warning', 'drift')"
+                "SELECT COUNT(*) FROM alerts WHERE "
+                "alert_type IN ('expiry_warning', 'drift', 'application_secret_expiry')"
             ).fetchone()
     return {
         "all": all_row[0] if all_row else 0,

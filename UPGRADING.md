@@ -2,6 +2,19 @@
 
 ## How upgrades work
 
+The next release applies migration 0050 for uploaded certificate notes, then
+0051 for application credential expiry metadata and its indexes. Administrators
+gain a Credentials page and the matching `/api/application-secrets` endpoints.
+No credential values are migrated or stored; configure global delivery channels
+for reminders. Startup takes the normal pre-migration backup. Rollback requires
+restoring the pre-migration database as described below.
+
+An earlier application-credential draft also used migration number 0050. Its
+database is not interchangeable with the notes-first sequence: startup refuses
+migration 0051 if the uploaded-notes table is absent. Preserve that database
+and its credential metadata, and use its matching draft build or a compatible
+pre-0050 backup. Renumbering a ledger entry does not apply the missing migration.
+
 Install the new version over the same data directory and start it. On startup,
 cert-watch:
 

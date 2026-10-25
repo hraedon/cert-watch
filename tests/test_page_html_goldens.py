@@ -41,6 +41,7 @@ _GOLDEN_DIR = Path(__file__).with_name("golden") / "pages"
 _FROZEN_NOW = "2026-09-22 12:00:00+00:00"
 
 _PAGES = {
+    "application_secrets_empty": "/application-secrets",
     "home": "/",
     "browse_grouped": "/browse?grouped=1",
     "browse_ungrouped": "/browse?grouped=0",

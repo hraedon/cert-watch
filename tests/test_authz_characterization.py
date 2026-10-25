@@ -171,6 +171,13 @@ def _seed(db: Path, principal: Principal) -> Seeded:
     )
     ids["group"] = SqliteAlertGroupRepository(db).create("g", ["ops@example.com"], ["A"])
     ids["anchor"] = SqliteTrustAnchorRepository(db).add(_cert("Anchor CA", "c"))
+    from cert_watch.auth.rbac import AuthContext
+    from cert_watch.services.application_secrets import create_application_secret
+
+    ids["secret"] = create_application_secret(db, {
+        "application_name": "Synthetic app", "application_id": "synthetic-client",
+        "credential_id": "synthetic-key", "expires_at": "2040-01-01T00:00:00Z",
+    }, auth=AuthContext.system(), actor="matrix")
 
     keys = SqliteApiKeyRepository(db)
     entry, _ = keys.create_key("target-key", "read")
@@ -218,6 +225,7 @@ def _order_key(item: tuple[str, str, Any]) -> tuple[int, str, str]:
 
 
 _PARAM_TARGETS = {
+    "secret_id": ("secret",),
     "resource_id": ("host_a", "host_b", "cert_a", "cert_b", "cert_split"),
     "host_id": ("host_a", "host_b"),
     "cert_id": ("cert_a", "cert_b"),

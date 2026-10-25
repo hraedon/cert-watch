@@ -344,6 +344,10 @@ _NON_ESTATE = {
 }
 
 _ADMIN_ONLY = {
+    *_keys(
+        "/application-secrets", "/api/application-secrets",
+        "/application-secrets/{secret_id}/retire", "/api/application-secrets/{secret_id}/retire",
+    ),
     *_keys("/trust-anchors", "/api/trust-anchors"),
     "POST /trust-anchors/{anchor_id}/delete",
     "DELETE /api/trust-anchors/{anchor_id}",

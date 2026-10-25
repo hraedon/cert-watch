@@ -77,6 +77,10 @@ def test_inventory_write_contracts_each_have_one_shared_service() -> None:
 
 
 def _result(service: str, resource_id: str) -> Any:
+    if service.endswith("create_application_secret"):
+        return resource_id
+    if service.endswith("retire_application_secret"):
+        return True
     if service.endswith("edit_host"):
         from cert_watch.services.host_edit import HostEditResult
 
@@ -255,6 +259,7 @@ def test_both_adapters_reach_the_inventory_service(
             "contract.example.test", 443
         )
         substitutions = {
+            "secret_id": target_id,
             "cert_id": host_id,
             "host_id": host_id,
             "resource_id": host_id,
