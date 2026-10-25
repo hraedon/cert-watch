@@ -37,6 +37,10 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Oversized pagination parameters no longer fail while binding SQLite integers.
+  Explicit offsets outside SQLite's range return 422; far-out numbered pages
+  remain empty without wrapping to the first page.
+
 - Credential reminders due within seven days now appear in the Critical alert
   filter and its count, matching their displayed urgency. Later reminders stay
   in Warnings, and tag-scoped views continue to exclude global credentials.

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from cert_watch.database.connection import _connect
+from cert_watch.database.query_bounds import page_offset
 from cert_watch.database.schema import init_schema
 
 # Match the credential urgency shown in activity.html. Keep the complete OR
@@ -67,7 +68,7 @@ def list_alerts_with_subject(
         )
     with _connect(db_path) as conn:
         if limit > 0:
-            offset = max(0, (page - 1) * limit)
+            offset = page_offset(page, limit)
             rows = conn.execute(
                 f"""
                 SELECT a.id, a.cert_id, a.created_at, a.alert_type, a.status,
@@ -231,7 +232,7 @@ def list_scan_history(
         where = f"WHERE EXISTS ({host_match})"
     with _connect(db_path) as conn:
         if limit > 0:
-            offset = max(0, (page - 1) * limit)
+            offset = page_offset(page, limit)
             rows = conn.execute(
                 f"SELECT s.* FROM scan_history s {where}"
                 " ORDER BY s.scanned_at DESC LIMIT ? OFFSET ?",

@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from cert_watch.database.query_bounds import page_offset
 from cert_watch.database.schema import init_schema
 from cert_watch.status_model import RENEWAL_STATES
 
@@ -281,7 +282,7 @@ def get_pivot_group_page(
         page_sql = f"{group_sql} ORDER BY sort_expiry ASC, ekey ASC"
         if per_page > 0:
             page_sql += " LIMIT ? OFFSET ?"
-            group_params += [per_page, max(0, (page - 1) * per_page)]
+            group_params += [per_page, page_offset(page, per_page)]
         ordered = conn.execute(page_sql, group_params).fetchall()
         entries = build_inventory_entries(db_path, conn, ordered, status=status, axes=axes)
     attach_status_models(db_path, entries, axes)
