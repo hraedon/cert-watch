@@ -36,6 +36,7 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
 
 
+# closing() owns fixture handles; inner connection contexts retain transactions.
 def test_migration_0049_backfills_first_accepted_failure(tmp_path: Path) -> None:
     from cert_watch.database import SqliteHostRepository
     from cert_watch.migrations.m0049_renewal_failure_marker import upgrade
@@ -43,7 +44,7 @@ def test_migration_0049_backfills_first_accepted_failure(tmp_path: Path) -> None
     db = tmp_path / "failure-marker.sqlite3"
     init_schema(db)
     host_id = SqliteHostRepository(db).add("failure-marker.example.test", 443)
-    with sqlite3.connect(db) as conn:
+    with contextlib.closing(sqlite3.connect(db)) as conn, conn:
         conn.execute(
             """INSERT INTO renewal_attempts
                (attempt_id,host_id,is_current,source,state,opened_seq,
@@ -238,7 +239,7 @@ def test_migration_0049_uses_durable_verified_successor_evidence(
     host_id = SqliteHostRepository(db).add(hostname, 443)
     failed_at = "2026-09-20T00:00:00+00:00"
     verified_at = "2026-09-20T00:01:00+00:00"
-    with sqlite3.connect(db) as conn:
+    with contextlib.closing(sqlite3.connect(db)) as conn, conn:
         conn.execute(
             """INSERT INTO renewal_attempts
                (attempt_id,host_id,is_current,source,state,opened_seq,
@@ -275,7 +276,7 @@ def test_migration_0049_second_direct_run_preserves_manual_clear(
     host_id = SqliteHostRepository(db).add(hostname, 443)
     failed_at = "2026-09-20T00:00:00+00:00"
     cleared_at = "2026-09-20T00:02:00+00:00"
-    with sqlite3.connect(db) as conn:
+    with contextlib.closing(sqlite3.connect(db)) as conn, conn:
         conn.execute(
             """INSERT INTO renewal_attempts
                (attempt_id,host_id,is_current,source,state,opened_seq,
@@ -547,7 +548,7 @@ def _insert_v06x_sample_data(db_path: Path) -> None:
 
 def test_init_schema_creates_all_tables(db_path: Path) -> None:
     init_schema(db_path)
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         tables = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
         ).fetchall()}
@@ -565,7 +566,7 @@ def test_init_schema_creates_all_tables(db_path: Path) -> None:
 
 def test_schema_version_records_baseline(db_path: Path) -> None:
     init_schema(db_path)
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         rows = conn.execute(
             "SELECT id, description FROM schema_version ORDER BY id"
         ).fetchall()
@@ -575,7 +576,7 @@ def test_schema_version_records_baseline(db_path: Path) -> None:
 
 def test_schema_version_records_audit_migration(db_path: Path) -> None:
     init_schema(db_path)
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         rows = conn.execute(
             "SELECT id FROM schema_version ORDER BY id"
         ).fetchall()
@@ -587,11 +588,11 @@ def test_schema_version_records_audit_migration(db_path: Path) -> None:
 
 def test_init_schema_idempotent(db_path: Path) -> None:
     init_schema(db_path)
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         count1 = conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0]
     # Run again
     init_schema(db_path)
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         count2 = conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0]
     assert count1 == count2
 
@@ -618,7 +619,7 @@ def test_migration_0041_resets_renewed_hosts_with_one_audit_each_and_is_idempote
         hosts.add("two.example.test", 8443),
     ]
     unchanged = hosts.add("working.example.test", 443)
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         conn.execute(
             "UPDATE hosts SET renewal_status = 'in_progress' WHERE id = ?", (unchanged,)
         )
@@ -659,7 +660,7 @@ def test_concurrent_processes_serialize_migration_startup(tmp_path: Path) -> Non
     """Two app processes wait their turn and only one applies each migration."""
     db = tmp_path / "concurrent.sqlite3"
     init_schema(db)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         conn.execute("DELETE FROM schema_version WHERE id = '0035'")
         conn.commit()
     for old_backup in tmp_path.glob("concurrent-pre-migration-*.sqlite3"):
@@ -688,14 +689,14 @@ def test_concurrent_processes_serialize_migration_startup(tmp_path: Path) -> Non
                 process.join(timeout=5)
 
     assert sorted([results.get(timeout=2), results.get(timeout=2)]) == [[], ["0035"]]
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         assert conn.execute(
             "SELECT COUNT(*) FROM schema_version WHERE id = '0035'"
         ).fetchone() == (1,)
 
     backups = list(tmp_path.glob("concurrent-pre-migration-*.sqlite3"))
     assert len(backups) == 1
-    with sqlite3.connect(str(backups[0])) as conn:
+    with contextlib.closing(sqlite3.connect(str(backups[0]))) as conn, conn:
         assert conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
         assert conn.execute(
             "SELECT COUNT(*) FROM schema_version WHERE id = '0035'"
@@ -707,7 +708,7 @@ def test_concurrent_processes_serialize_migration_startup(tmp_path: Path) -> Non
 def test_ct_issuer_first_seen_dropped(db_path: Path) -> None:
     """Migration 0028 drops the unused ct_issuer_first_seen table (WI-082)."""
     init_schema(db_path)
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         assert conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='ct_issuer_first_seen'"
         ).fetchone() is None
@@ -718,7 +719,7 @@ def test_drop_ct_issuer_first_seen_idempotent(db_path: Path) -> None:
     from cert_watch.migrations.m0028_drop_ct_issuer_first_seen import upgrade
 
     init_schema(db_path)
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         upgrade(conn)
         upgrade(conn)
         tables = {r[0] for r in conn.execute(
@@ -731,7 +732,7 @@ def test_digest_delivery_ledger_migration_is_idempotent(db_path: Path) -> None:
     from cert_watch.migrations.m0029_digest_delivery_ledger import upgrade
 
     init_schema(db_path)
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         upgrade(conn)
         upgrade(conn)
         columns = {r[1] for r in conn.execute(
@@ -745,7 +746,7 @@ def test_backup_created_before_migration(tmp_path: Path) -> None:
     init_schema(db)
 
     # Add some data
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         conn.execute(
             "INSERT INTO hosts (id, hostname, port, added_at)"
             " VALUES ('h1', 'test.example.com', 443, '2026-01-01T00:00:00+00:00')"
@@ -761,7 +762,7 @@ def test_backup_created_before_migration(tmp_path: Path) -> None:
     assert backup_path.stat().st_size > 0
 
     # Verify backup is a valid SQLite database
-    with sqlite3.connect(str(backup_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(backup_path))) as conn, conn:
         count = conn.execute("SELECT COUNT(*) FROM hosts").fetchone()[0]
         assert count == 1
 
@@ -770,7 +771,7 @@ def test_automatic_backup_names_are_unique(tmp_path: Path) -> None:
     from cert_watch.migrations.runner import _backup
 
     db = tmp_path / "unique.sqlite3"
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         conn.execute("CREATE TABLE probe (value TEXT NOT NULL)")
         conn.execute("INSERT INTO probe VALUES ('preserved')")
         conn.commit()
@@ -778,7 +779,7 @@ def test_automatic_backup_names_are_unique(tmp_path: Path) -> None:
     backups = [_backup(db), _backup(db)]
     assert backups[0] != backups[1]
     for backup in backups:
-        with sqlite3.connect(str(backup)) as conn:
+        with contextlib.closing(sqlite3.connect(str(backup))) as conn, conn:
             assert conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
             assert conn.execute("SELECT value FROM probe").fetchone() == ("preserved",)
 
@@ -837,7 +838,7 @@ def test_baseline_stamps_on_existing_db(tmp_path: Path) -> None:
 
     # Create a "pre-migration" database with just the core tables
     ensure_base(db)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         # No schema_version table should exist yet (ensure_base doesn't create it)
         tables = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
@@ -846,7 +847,7 @@ def test_baseline_stamps_on_existing_db(tmp_path: Path) -> None:
 
     # Now run init_schema which should stamp the baseline
     init_schema(db)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         rows = conn.execute(
             "SELECT id FROM schema_version ORDER BY id"
         ).fetchall()
@@ -858,7 +859,7 @@ def test_baseline_stamps_on_existing_db(tmp_path: Path) -> None:
 def test_fresh_db_gets_all_migrations(db_path: Path) -> None:
     """A fresh database gets all migrations applied."""
     init_schema(db_path)
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         rows = conn.execute(
             "SELECT id FROM schema_version ORDER BY id"
         ).fetchall()
@@ -871,7 +872,7 @@ def test_fresh_db_gets_all_migrations(db_path: Path) -> None:
 def test_hosts_has_renewal_method_column(db_path: Path) -> None:
     """Verify the migration system doesn't break column additions."""
     init_schema(db_path)
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         cols = _table_columns(conn, "hosts")
     assert "renewal_method" in cols
     assert "runbook_url" in cols
@@ -880,7 +881,7 @@ def test_hosts_has_renewal_method_column(db_path: Path) -> None:
 def test_audit_log_table_exists(db_path: Path) -> None:
     """Verify audit_log table was created (from migration 0002)."""
     init_schema(db_path)
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         tables = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()}
@@ -905,14 +906,14 @@ def test_migration_from_v06x_baseline_with_data(db_path: Path) -> None:
     from cert_watch.migrations.runner import get_migrations
 
     expected_ids = [m[0] for m in get_migrations()]
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         applied_ids = [r[0] for r in conn.execute(
             "SELECT id FROM schema_version ORDER BY id"
         ).fetchall()]
     assert applied_ids == expected_ids
 
     # Tables added after the baseline must exist.
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         tables = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()}
@@ -933,7 +934,7 @@ def test_migration_from_v06x_baseline_with_data(db_path: Path) -> None:
         assert table in tables
 
     # Columns added after the baseline must exist.
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         alerts_cols = _table_columns(conn, "alerts")
         certs_cols = _table_columns(conn, "certificates")
         hosts_cols = _table_columns(conn, "hosts")
@@ -957,7 +958,7 @@ def test_migration_from_v06x_baseline_with_data(db_path: Path) -> None:
     assert "not_before" in cert_history_cols
 
     # Original rows must survive unchanged where columns existed in v0.6.x.
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         assert conn.execute("SELECT COUNT(*) FROM hosts").fetchone()[0] == 2
         assert conn.execute("SELECT COUNT(*) FROM certificates").fetchone()[0] == 2
         assert conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0] == 1
@@ -1020,7 +1021,7 @@ def test_backup_cli_subcommand(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     init_schema(db)
 
     # Insert data
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         conn.execute(
             "INSERT INTO hosts (id, hostname, port, added_at)"
             " VALUES ('h1', 'cli-test.example.com', 443, '2026-01-01T00:00:00+00:00')"
@@ -1033,7 +1034,7 @@ def test_backup_cli_subcommand(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     assert backup_path.exists()
     # Verify it's a valid database
-    with sqlite3.connect(str(backup_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(backup_path))) as conn, conn:
         count = conn.execute("SELECT COUNT(*) FROM hosts").fetchone()[0]
         assert count == 1
 
@@ -1047,7 +1048,7 @@ def test_migration_0016_adds_chain_status_column(tmp_path):
 
     db = tmp_path / "test.db"
     ensure_base(db)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         upgrade(conn)
         cols = {r[1] for r in conn.execute("PRAGMA table_info(scan_posture)").fetchall()}
     assert "chain_status" in cols
@@ -1062,7 +1063,7 @@ def test_migration_0017_adds_caa_columns(tmp_path):
 
     db = tmp_path / "test.db"
     ensure_base(db)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         upgrade(conn)
         cols = {r[1] for r in conn.execute("PRAGMA table_info(scan_posture)").fetchall()}
     assert "caa_present" in cols
@@ -1075,7 +1076,7 @@ def test_migration_0017_adds_caa_columns(tmp_path):
 def _mk_pre0031_db(db: Path, *, include_orphan: bool = True) -> None:
     """Create a current DB with the pre-0031 notes column restored."""
     init_schema(db)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         conn.execute("DROP TABLE schema_version")
         conn.execute(
             "ALTER TABLE certificates ADD COLUMN notes TEXT NOT NULL DEFAULT ''"
@@ -1109,10 +1110,10 @@ def test_migration_0031_merges_notes_and_drops_column(tmp_path: Path) -> None:
 
     db = tmp_path / "test.db"
     _mk_pre0031_db(db, include_orphan=False)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         upgrade(conn)
 
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         certs_cols = _table_columns(conn, "certificates")
         merged = conn.execute(
             "SELECT notes FROM hosts WHERE hostname = 'a.example.com'"
@@ -1128,14 +1129,14 @@ def test_migration_0031_does_not_treat_substring_as_duplicate(tmp_path: Path) ->
 
     db = tmp_path / "substring.db"
     _mk_pre0031_db(db, include_orphan=False)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         conn.execute(
             "UPDATE hosts SET notes = 'context around cert note one' WHERE id = 'h1'"
         )
         conn.execute("UPDATE certificates SET notes = '' WHERE id = 'c2'")
         upgrade(conn)
 
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         merged = conn.execute("SELECT notes FROM hosts WHERE id = 'h1'").fetchone()[0]
     assert merged == "context around cert note one\n\ncert note one"
 
@@ -1145,12 +1146,12 @@ def test_migration_0031_skips_normalized_exact_duplicate(tmp_path: Path) -> None
 
     db = tmp_path / "exact-duplicate.db"
     _mk_pre0031_db(db, include_orphan=False)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         conn.execute("UPDATE hosts SET notes = '  cert note one  ' WHERE id = 'h1'")
         conn.execute("UPDATE certificates SET notes = '' WHERE id = 'c2'")
         upgrade(conn)
 
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         merged = conn.execute("SELECT notes FROM hosts WHERE id = 'h1'").fetchone()[0]
     assert merged == "  cert note one  "
 
@@ -1172,7 +1173,7 @@ def test_migration_0031_warns_on_orphan_notes(
     with caplog.at_level(logging.WARNING, logger="cert_watch.migrations.0031"):
         run_pending_migrations(db, backup=False)
 
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         certs_cols = _table_columns(conn, "certificates")
         legacy_notes = dict(
             conn.execute("SELECT id, notes FROM certificates ORDER BY id").fetchall()
@@ -1201,7 +1202,7 @@ def test_migration_0031_warns_on_orphan_notes(
             raw_der=b"new",
         )
     )
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         assert conn.execute(
             "SELECT notes FROM certificates WHERE id = ?", (new_id,)
         ).fetchone()[0] == ""
@@ -1213,7 +1214,7 @@ def test_migration_0031_noop_without_column(tmp_path: Path) -> None:
 
     db = tmp_path / "test.db"
     ensure_base(db)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         upgrade(conn)  # must not raise
         cols = _table_columns(conn, "certificates")
     assert "notes" not in cols
@@ -1223,7 +1224,7 @@ def _stamp_feature_branch_migrations(
     db: Path, ids: tuple[str, ...]
 ) -> None:
     """Record old feature-branch ids without assuming their descriptions."""
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         conn.execute(
             "CREATE TABLE schema_version ("
             "id TEXT PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)"
@@ -1243,7 +1244,7 @@ def test_migration_0033_adds_deferred_since_and_is_idempotent(db_path: Path) -> 
     from cert_watch.migrations.m0033_alert_deferred_since import upgrade
 
     init_schema(db_path)
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         assert "deferred_since" in _table_columns(conn, "alerts")
         upgrade(conn)
         upgrade(conn)  # must not raise: the column already exists
@@ -1269,7 +1270,7 @@ def test_migration_0033_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
 
     db = tmp_path / "manual.sqlite3"
     _mk_pre0033_db(db)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         for statement in MANUAL_SQL:
             conn.execute(statement)
         conn.commit()
@@ -1278,7 +1279,7 @@ def test_migration_0033_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
         "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044",
         "0045", "0046", "0047", "0048", "0049",
     ]
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         assert "deferred_since" in _table_columns(conn, "alerts")
         ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0033'").fetchall()
     assert ledger == [("0033",)]
@@ -1295,7 +1296,7 @@ def test_migration_0033_tolerates_a_column_added_by_hand_without_the_ledger(
 
     db = tmp_path / "half-manual.sqlite3"
     _mk_pre0033_db(db)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         conn.execute(COLUMN_SQL)
         conn.commit()
 
@@ -1312,7 +1313,7 @@ def test_migration_0034_adds_trigger_cert_id_and_is_idempotent(db_path: Path) ->
     from cert_watch.migrations.m0034_alert_trigger_cert_id import upgrade
 
     init_schema(db_path)
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         assert "trigger_cert_id" in _table_columns(conn, "alerts")
         upgrade(conn)
         upgrade(conn)  # must not raise: the column already exists (and re-backfill is a no-op)
@@ -1334,7 +1335,7 @@ def test_migration_0034_backfills_existing_alerts_with_their_trigger_row(
 
     db = tmp_path / "backfill.sqlite3"
     _mk_pre0034_db(db)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         conn.execute(
             "INSERT INTO alerts (id, cert_id, alert_type, status, message,"
             " threshold_days, created_at) VALUES ('a1', 'row-that-fired',"
@@ -1346,7 +1347,7 @@ def test_migration_0034_backfills_existing_alerts_with_their_trigger_row(
         "0034", "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044",
         "0045", "0046", "0047", "0048", "0049",
     ]
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         row = conn.execute(
             "SELECT trigger_cert_id FROM alerts WHERE id = 'a1'"
         ).fetchone()
@@ -1370,7 +1371,7 @@ def test_migration_0034_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
 
     db = tmp_path / "manual.sqlite3"
     _mk_pre0034_db(db)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         for statement in MANUAL_SQL:
             conn.execute(statement)
         conn.commit()
@@ -1379,7 +1380,7 @@ def test_migration_0034_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
         "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044",
         "0045", "0046", "0047", "0048", "0049",
     ]
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         assert "trigger_cert_id" in _table_columns(conn, "alerts")
         ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0034'").fetchall()
     assert ledger == [("0034",)]
@@ -1396,7 +1397,7 @@ def test_migration_0034_tolerates_a_column_added_by_hand_without_the_ledger(
 
     db = tmp_path / "half-manual.sqlite3"
     _mk_pre0034_db(db)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         conn.execute(COLUMN_SQL)
         conn.commit()
 
@@ -1410,7 +1411,7 @@ def test_migration_0035_preserves_legacy_tls_verified_values(db_path: Path) -> N
     from cert_watch.migrations.m0035_schema_reconciliation import upgrade
 
     init_schema(db_path)
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         conn.execute("ALTER TABLE scan_posture ADD COLUMN tls_verified INTEGER")
         conn.executemany(
             "INSERT INTO scan_posture "
@@ -1438,7 +1439,7 @@ def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) ->
 
     db = tmp_path / "old-ui-feature.sqlite3"
     init_schema(db)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         # Reproduce the UI branch's resulting schema: role tiers exist and the
         # notes column is already gone, but the digest ledger did not exist.
         add_role_tiers(conn)
@@ -1457,7 +1458,7 @@ def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) ->
         "0044", "0045", "0046", "0047", "0048", "0049",
     ]
 
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         tables = {
             row[0]
             for row in conn.execute(
@@ -1480,7 +1481,7 @@ def test_reconciled_migrations_upgrade_old_review_feature_database(
 
     db = tmp_path / "old-review-feature.sqlite3"
     init_schema(db)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         conn.execute("DROP TABLE schema_version")
         conn.commit()
     _stamp_feature_branch_migrations(
@@ -1495,7 +1496,7 @@ def test_reconciled_migrations_upgrade_old_review_feature_database(
         "0044", "0045", "0046", "0047", "0048", "0049",
     ]
 
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         tables = {
             row[0]
             for row in conn.execute(
@@ -1676,7 +1677,7 @@ def test_migration_0038_merges_aliases_and_canonicalizes_every_hostname_keyed_ro
     from cert_watch.migrations.m0038_canonical_hostnames import upgrade
 
     init_schema(db_path)
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         _insert_alias_estate(conn)
         conn.commit()
         upgrade(conn)
@@ -1893,7 +1894,7 @@ def test_migration_0038_leaves_no_planted_recipient_on_any_dispatched_envelope(
     from cert_watch.migrations.m0038_canonical_hostnames import upgrade
 
     init_schema(db_path)
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         _insert_alias_estate(conn)
         conn.commit()
         upgrade(conn)
@@ -1929,7 +1930,7 @@ def test_migration_0038_rewrites_each_table_in_one_pass_regardless_of_alias_coun
 
     init_schema(db_path)
     now = datetime.now(UTC).isoformat()
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn, conn:
         for i in range(60):
             hn = f"HOST-{i}.example.test."
             conn.execute(
@@ -2004,7 +2005,7 @@ def test_migration_0040_dates_a_zero_attempt_give_up_to_the_upgrade(tmp_path: Pa
     init_schema(db)
     close_connections()
     created = (datetime.now(UTC) - timedelta(days=30)).isoformat()
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         conn.execute("DELETE FROM schema_version WHERE id = '0040'")
         conn.execute("ALTER TABLE alerts DROP COLUMN failed_at")
         conn.executemany(
@@ -2021,7 +2022,7 @@ def test_migration_0040_dates_a_zero_attempt_give_up_to_the_upgrade(tmp_path: Pa
 
     before = datetime.now(UTC)
     assert run_pending_migrations(db, backup=False) == ["0040"]
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         rows = dict(conn.execute("SELECT id, failed_at FROM alerts").fetchall())
     assert rows["attempted"] == "2026-01-02T03:04:05+00:00"
     assert rows["still-pending"] is None
@@ -2044,7 +2045,7 @@ def test_migration_0044_versions_and_refreshes_existing_0043_cache(
     monkeypatch.setattr(runner, "_MIGRATIONS", through_0042)
     assert runner.run_pending_migrations(db, backup=False)[-1] == "0042"
     first_seen = datetime(2026, 1, 1, tzinfo=UTC)
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         for index in range(3):
             issued_at = first_seen + timedelta(days=index * 60)
             conn.execute(
@@ -2065,7 +2066,7 @@ def test_migration_0044_versions_and_refreshes_existing_0043_cache(
 
     monkeypatch.setattr(runner, "_MIGRATIONS", through_0043)
     assert runner.run_pending_migrations(db, backup=False) == ["0043"]
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         assert conn.execute(
             "SELECT classification FROM endpoint_renewal_analytics"
         ).fetchone() == ("likely-automated",)
@@ -2078,7 +2079,7 @@ def test_migration_0044_versions_and_refreshes_existing_0043_cache(
     assert runner.run_pending_migrations(db, backup=False) == [
         "0044", "0045", "0046", "0047", "0048", "0049"
     ]
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         row = conn.execute(
             """SELECT classification, classifier_version, deployment_count,
                       basis_history_count
@@ -2099,7 +2100,7 @@ def test_migration_0045_adds_explicit_all_binding_to_existing_keys(tmp_path: Pat
     from cert_watch.migrations.m0045_api_key_bindings import upgrade
 
     db = tmp_path / "pre-0045.sqlite3"
-    with sqlite3.connect(db) as conn:
+    with contextlib.closing(sqlite3.connect(db)) as conn, conn:
         create_api_keys(conn)
         conn.execute(
             "INSERT INTO api_keys "
