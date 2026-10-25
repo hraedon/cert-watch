@@ -65,6 +65,7 @@ class StoredCertificateDetailData:
     # Other endpoints serving this certificate, each with its own host
     # settings and notes.
     shared_endpoints: tuple[SharedEndpointRecord, ...] = ()
+    notes: str = ""
 
 
 @dataclass(frozen=True)
@@ -207,6 +208,7 @@ def load_certificate_detail(
             if stored.hostname
             else []
         ),
+        notes=stored.notes,
         cert_tags=parse_tags(repo.get_tags(cert_id)),
         effective_tags=repo.effective_tags(cert_id),
         all_tags=all_tags,

@@ -464,6 +464,42 @@
                     {% endif %}
                 </div>
             </section>
+            {%- if cert and cert.source == 'uploaded' %}
+                <section class="cw-panel" data-testid="certificate-notes">
+                    <div class="cw-panel-head">
+                        <h2>Certificate notes</h2>
+                    </div>
+                    <div class="cw-panel-body">
+                        {% if notes_saved %}<p role="status">Certificate notes saved.</p>{% endif %}
+                        <p class="cw-hint">Notes stay with this uploaded certificate.</p>
+                        <p class="cw-notes-view" data-testid="certificate-notes-view">{{ certificate_notes or 'None' }}</p>
+                        {% if may_edit_certificate_notes %}
+                            <details class="cw-editor" {% if certificate_notes_error %}open{% endif %}>
+                                <summary class="cw-btn ghost sm" data-testid="edit-certificate-notes">{{ icons.svg_icon('edit', 13) }}Edit notes</summary>
+                                <div class="cw-editor-body">
+                                    <form method="post" action="/certificates/{{ cert_id }}/notes">
+                                        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                                        <div class="cw-field">
+                                            <label class="cw-label" for="certificate-notes">Certificate notes</label>
+                                            <textarea id="certificate-notes"
+                                                      name="notes"
+                                                      class="cw-textarea"
+                                                      rows="5"
+                                                      maxlength="10000"
+                                                      {% if certificate_notes_error %}aria-invalid="true" aria-describedby="certificate-notes-error"{% endif %}
+                                                      data-testid="certificate-notes-editor">{{ certificate_notes_draft }}</textarea>
+                                            {% if certificate_notes_error %}<p id="certificate-notes-error" class="cw-hint t-crit">{{ certificate_notes_error }}</p>{% endif %}
+                                        </div>
+                                        <div class="cw-form-foot">
+                                            <button type="submit" class="cw-btn primary sm" data-testid="save-certificate-notes">Save notes</button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </details>
+                        {% endif %}
+                    </div>
+                </section>
+            {% endif %}
             {%- if shared_endpoints %}
                 <section class="cw-panel" data-testid="shared-endpoints">
                     <div class="cw-panel-head">
