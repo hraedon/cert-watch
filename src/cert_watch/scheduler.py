@@ -125,7 +125,7 @@ def _host_scan_deadlines(
     delay retries by an hour, without moving a successful host's cadence.
     """
     from cert_watch.database import _connect
-    from cert_watch.scan_freshness import cadence_due_at
+    from cert_watch.scan_freshness import _add_deadline_delay, _timestamp, cadence_due_at
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
@@ -147,17 +147,15 @@ def _host_scan_deadlines(
         ).fetchall()
 
     def timestamp(value: str, hostname: str, field_name: str) -> datetime | None:
-        try:
-            parsed = datetime.fromisoformat(value)
-        except (TypeError, ValueError):
+        parsed = _timestamp(value)
+        if parsed is None:
             logger.warning(
                 "host %s has a malformed %s scan timestamp (%r); ignoring it",
                 hostname,
                 field_name,
                 value,
             )
-            return None
-        return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+        return parsed
 
     deadlines: list[tuple[str, int, datetime, bool]] = []
     for r in rows:
@@ -192,7 +190,8 @@ def _host_scan_deadlines(
                 )
                 deadline = cadence_due_at(last, None, hour, minute)
         if attempt is not None and (last is None or attempt > last):
-            deadline = max(deadline, attempt + timedelta(seconds=FAST_RETRY_INTERVAL))
+            retry_at = _add_deadline_delay(attempt, timedelta(seconds=FAST_RETRY_INTERVAL))
+            deadline = max(deadline, retry_at)
         verification = (
             timestamp(r["next_check_at"], r["hostname"], "renewal verification")
             if r["next_check_at"] else None
@@ -202,7 +201,7 @@ def _host_scan_deadlines(
             # Reports request an immediate check by storing ``next_check_at=now``.
             # Actual scans, never report times, enforce the endpoint-wide floor.
             if attempt is not None:
-                deadline = max(deadline, attempt + timedelta(minutes=5))
+                deadline = max(deadline, _add_deadline_delay(attempt, timedelta(minutes=5)))
         claim_expires = (
             timestamp(r["claim_expires_at"], r["hostname"], "scan claim")
             if r["claim_expires_at"] else None
@@ -241,6 +240,7 @@ def claim_hosts_due_for_scan(
     """Claim due endpoint scans atomically across scheduler processes."""
     from cert_watch.database import _connect, get_write_lock
     from cert_watch.database.connection import begin_immediate
+    from cert_watch.scan_freshness import _timestamp
 
     current = (now or datetime.now(UTC)).astimezone(UTC)
     due = get_hosts_due_for_scan(db_path, hour=hour, minute=minute, now=current)
@@ -254,11 +254,21 @@ def claim_hosts_due_for_scan(
             begin_immediate(conn)
             for hostname, port in due:
                 row = conn.execute(
-                    "SELECT id FROM hosts WHERE hostname=? AND port=?",
+                    "SELECT h.id, claim.claim_expires_at FROM hosts h "
+                    "LEFT JOIN host_scan_claims claim ON claim.host_id=h.id "
+                    "WHERE h.hostname=? AND h.port=?",
                     (hostname, port),
                 ).fetchone()
                 if row is None:
                     continue
+                claim_expiry = _timestamp(row["claim_expires_at"])
+                if claim_expiry is not None and claim_expiry > current:
+                    continue
+                if row["claim_expires_at"] and claim_expiry is None:
+                    logger.warning(
+                        "host %s:%s has an unusable scan claim expiry; replacing it",
+                        hostname, port,
+                    )
                 cursor = conn.execute(
                     """INSERT INTO host_scan_claims
                        (host_id,claimed_by,claimed_at,claim_expires_at)
@@ -266,8 +276,7 @@ def claim_hosts_due_for_scan(
                        ON CONFLICT(host_id) DO UPDATE SET
                            claimed_by=excluded.claimed_by,
                            claimed_at=excluded.claimed_at,
-                           claim_expires_at=excluded.claim_expires_at
-                       WHERE host_scan_claims.claim_expires_at<=excluded.claimed_at""",
+                           claim_expires_at=excluded.claim_expires_at""",
                     (row["id"], owner, current.isoformat(), expires),
                 )
                 if cursor.rowcount == 1:
@@ -315,6 +324,7 @@ def _seconds_until_next_rule_pass(
 ) -> float:
     """Return the durable renewal-rule wake without making a host scan-due."""
     from cert_watch.database import _connect
+    from cert_watch.scan_freshness import _timestamp
 
     current = (now or datetime.now(UTC)).astimezone(UTC)
     with _connect(db_path) as conn:
@@ -325,10 +335,8 @@ def _seconds_until_next_rule_pass(
     value = row[0] if row else None
     if value is None:
         return float("inf")
-    try:
-        due = datetime.fromisoformat(str(value))
-        due = due.replace(tzinfo=UTC) if due.tzinfo is None else due.astimezone(UTC)
-    except (TypeError, ValueError):
+    due = _timestamp(str(value))
+    if due is None:
         logger.warning("renewal rule wake timestamp is malformed (%r); running now", value)
         return 0.0
     return max(0.0, (due - current).total_seconds())
