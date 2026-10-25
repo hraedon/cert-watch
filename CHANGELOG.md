@@ -37,6 +37,9 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Calendar API date filters include every certificate expiring on the end
+  date. Date-only bounds use the same UTC days as the calendar buckets;
+  precise timestamp filters keep their existing behavior.
 - Browse ignores expiry-week filters whose seven-day end would exceed the
   supported date range, showing the existing invalid-week notice instead of
   failing the page.
