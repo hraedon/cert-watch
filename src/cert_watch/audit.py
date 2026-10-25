@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import Request
 
 from cert_watch.database.connection import _connect
+from cert_watch.database.query_bounds import page_offset
 
 logger = logging.getLogger("cert_watch.audit")
 
@@ -177,7 +178,7 @@ def list_audit(
         conditions.append(condition)
         params.extend(actor_params)
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
-    offset = (page - 1) * limit
+    offset = page_offset(page, limit)
     with _connect(db_path) as conn:
         rows = conn.execute(
             f"SELECT * FROM audit_log{where} ORDER BY ts DESC LIMIT ? OFFSET ?",

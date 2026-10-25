@@ -12,6 +12,7 @@ from cert_watch.database.connection import (
     parse_san_dns_names,
 )
 from cert_watch.database.dashboard_helpers import _SORT_COLUMNS_BARE, _safe_col, _safe_dir
+from cert_watch.database.query_bounds import page_offset
 from cert_watch.database.schema import init_schema
 
 
@@ -148,7 +149,7 @@ def list_dashboard_rows(
 
     with _connect(db_path) as conn:
         if per_page > 0:
-            offset = max(0, (page - 1) * per_page)
+            offset = page_offset(page, per_page)
             leaf_rows = conn.execute(
                 f"SELECT * FROM certificates WHERE is_leaf = 1 "
                 f"ORDER BY {sql_col} {sql_dir} LIMIT ? OFFSET ?",

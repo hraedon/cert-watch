@@ -29,6 +29,10 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Oversized pagination parameters no longer fail while binding SQLite integers.
+  Explicit offsets outside SQLite's range return 422; far-out numbered pages
+  remain empty without wrapping to the first page.
+
 - A stalled renewal on a host with the manual renewal method read "manual
   configured — no new certificate yet" on Home. It now reads "Manual renewal —
   no new certificate yet".

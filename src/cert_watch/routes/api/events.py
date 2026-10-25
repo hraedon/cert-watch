@@ -16,6 +16,7 @@ from sse_starlette.event import ServerSentEvent
 from sse_starlette.sse import EventSourceResponse
 
 from cert_watch.auth.guards import require_auth
+from cert_watch.database.query_bounds import MAX_SQLITE_OFFSET
 from cert_watch.events import get_events, get_failed_deliveries
 from cert_watch.routes._deps import _db_path
 from cert_watch.routes._scoped import scope_tags_from_auth
@@ -33,7 +34,7 @@ def api_list_events(
     source: str | None = Query(None),
     since: str | None = Query(None),
     limit: int = Query(100, ge=1, le=1000),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=MAX_SQLITE_OFFSET),
 ) -> JSONResponse:
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
