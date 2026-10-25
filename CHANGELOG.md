@@ -29,6 +29,9 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Calendar API date filters include every certificate expiring on the end
+  date. Date-only bounds use the same UTC days as the calendar buckets;
+  precise timestamp filters keep their existing behavior.
 - A stalled renewal on a host with the manual renewal method read "manual
   configured — no new certificate yet" on Home. It now reads "Manual renewal —
   no new certificate yet".
