@@ -29,6 +29,11 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Unusable stored scheduler times no longer stop unrelated host scans or
+  renewal-rule wakeups. Deadline arithmetic stays within the supported date
+  range, malformed scan claims can be replaced, and a lease acquired after
+  scan selection is checked again by its UTC instant inside the write
+  transaction. Valid retry, verification and claim holds remain in force.
 - A stalled renewal on a host with the manual renewal method read "manual
   configured — no new certificate yet" on Home. It now reads "Manual renewal —
   no new certificate yet".
