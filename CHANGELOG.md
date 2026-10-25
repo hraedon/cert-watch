@@ -29,6 +29,10 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Browse ignores expiry-week filters whose seven-day end would exceed the
+  supported date range, showing the existing invalid-week notice instead of
+  failing the page.
+
 - A stalled renewal on a host with the manual renewal method read "manual
   configured — no new certificate yet" on Home. It now reads "Manual renewal —
   no new certificate yet".
