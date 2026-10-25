@@ -37,6 +37,9 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- TLS-version and posture-grade trend API responses report the effective
+  1–365 day window used by the query, including when the requested window
+  falls outside that range.
 - Calendar API date filters include every certificate expiring on the end
   date. Date-only bounds use the same UTC days as the calendar buckets;
   precise timestamp filters keep their existing behavior.
