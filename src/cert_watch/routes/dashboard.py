@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request
@@ -21,6 +21,7 @@ from cert_watch.database import (
 )
 from cert_watch.database.chain_status_cache import prepare_status
 from cert_watch.database.connection import _connect
+from cert_watch.expiry_week import expiry_week_bounds
 from cert_watch.presenters.browse import present_browse
 from cert_watch.presenters.home import present_home
 from cert_watch.routes._deps import (
@@ -180,12 +181,9 @@ def dashboard(
             renewal = None
         if "delivery" in invalid_filters:
             delivery = None
-    if expiry_week:
-        try:
-            date.fromisoformat(expiry_week)
-        except ValueError:
-            notice = notice or f"Ignored invalid expiry week: {expiry_week}"
-            expiry_week = None
+    if expiry_week and expiry_week_bounds(expiry_week) is None:
+        notice = notice or f"Ignored invalid expiry week: {expiry_week}"
+        expiry_week = None
     chain_problem = int(chain_problem == 1)
     routing_gap = int(routing_gap == 1)
     if not chain_problem:
