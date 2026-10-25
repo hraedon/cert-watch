@@ -17,8 +17,9 @@ from tests.e2e._seed import seed_detail_estate
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    e2e_dir = Path(__file__).parent
     for item in items:
-        if "e2e" in str(item.fspath):
+        if item.path.is_relative_to(e2e_dir):
             item.add_marker(pytest.mark.e2e)
 
 

@@ -29,6 +29,9 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Local unit runs keep tests whose filename or checkout path contains `e2e`.
+  Automatic browser markers now apply only inside `tests/e2e`, so the optional
+  Playwright import guard runs even when browser tests are collected alongside it.
 - A stalled renewal on a host with the manual renewal method read "manual
   configured — no new certificate yet" on Home. It now reads "Manual renewal —
   no new certificate yet".
