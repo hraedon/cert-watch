@@ -135,9 +135,10 @@ def api_pivot_group_entries(
 def api_tls_version_trends(
     request: Request, _auth: str = Depends(require_auth), days: int = 30
 ) -> JSONResponse:
+    days = min(max(days, 1), 365)
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
-    trends = list_tls_version_trends(db, days=min(max(days, 1), 365), scope_tags=scope_tags)
+    trends = list_tls_version_trends(db, days=days, scope_tags=scope_tags)
     return JSONResponse(content={"days": days, "trends": trends})
 
 
@@ -145,9 +146,10 @@ def api_tls_version_trends(
 def api_grade_trends(
     request: Request, _auth: str = Depends(require_auth), days: int = 30
 ) -> JSONResponse:
+    days = min(max(days, 1), 365)
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
-    trends = list_grade_trends(db, days=min(max(days, 1), 365), scope_tags=scope_tags)
+    trends = list_grade_trends(db, days=days, scope_tags=scope_tags)
     return JSONResponse(content={"days": days, "trends": trends})
 
 

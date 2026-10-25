@@ -29,6 +29,9 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- TLS-version and posture-grade trend API responses report the effective
+  1–365 day window used by the query, including when the requested window
+  falls outside that range.
 - A stalled renewal on a host with the manual renewal method read "manual
   configured — no new certificate yet" on Home. It now reads "Manual renewal —
   no new certificate yet".
