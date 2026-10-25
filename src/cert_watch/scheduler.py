@@ -149,7 +149,8 @@ def _host_scan_deadlines(
     def timestamp(value: str, hostname: str, field_name: str) -> datetime | None:
         try:
             parsed = datetime.fromisoformat(value)
-        except (TypeError, ValueError):
+            return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+        except (TypeError, ValueError, OverflowError):
             logger.warning(
                 "host %s has a malformed %s scan timestamp (%r); ignoring it",
                 hostname,
@@ -157,7 +158,6 @@ def _host_scan_deadlines(
                 value,
             )
             return None
-        return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
     deadlines: list[tuple[str, int, datetime, bool]] = []
     for r in rows:

@@ -29,6 +29,10 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- A stored scan, renewal-check or claim timestamp whose UTC conversion exceeds
+  the supported date range no longer stops scan selection for the entire estate.
+  The scheduler logs and ignores that unusable field, as it does other malformed
+  timestamps, while continuing to select healthy endpoints.
 - A stalled renewal on a host with the manual renewal method read "manual
   configured — no new certificate yet" on Home. It now reads "Manual renewal —
   no new certificate yet".
