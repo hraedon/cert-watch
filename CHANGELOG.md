@@ -29,6 +29,11 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- PKCS#7 uploads now identify the monitored certificate and order its issuers
+  instead of treating the first certificate in the unordered bag as the leaf.
+  Duplicate certificates are ignored within the existing 100-certificate cap.
+  Bags with multiple or ambiguous chains are refused with guidance to upload
+  a leaf-first PEM chain instead.
 - A stalled renewal on a host with the manual renewal method read "manual
   configured — no new certificate yet" on Home. It now reads "Manual renewal —
   no new certificate yet".

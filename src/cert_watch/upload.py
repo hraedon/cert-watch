@@ -11,7 +11,12 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.serialization import Encoding, pkcs12
 
-from cert_watch.cert_chain import extract_chain, extract_chain_pem, validate_chain_order
+from cert_watch.cert_chain import (
+    deduplicate_chain,
+    extract_chain,
+    extract_chain_pem,
+    validate_chain_order,
+)
 from cert_watch.certificate_model import (
     Certificate,
     extract_chain_from_pem,
@@ -94,9 +99,7 @@ def _parse_der(name: str, data: bytes) -> UploadedEntry | ParseError:
     return UploadedEntry(file_name=name, leaf=parsed, chain=[])
 
 
-def _parse_pkcs12(
-    name: str, data: bytes, password: bytes | None
-) -> UploadedEntry | ParseError:
+def _parse_pkcs12(name: str, data: bytes, password: bytes | None) -> UploadedEntry | ParseError:
     try:
         _key, cert, additional = pkcs12.load_key_and_certificates(data, password)
     except Exception:  # noqa: BLE001 — cryptography raises various Errors
@@ -117,8 +120,7 @@ def _parse_pkcs12(
     if len(chain) > 50:
         return ParseError(
             error_message=(
-                f"PKCS#12 contains too many additional certificates"
-                f" ({len(chain)}), max 50"
+                f"PKCS#12 contains too many additional certificates ({len(chain)}), max 50"
             )
         )
     return UploadedEntry(file_name=name, leaf=leaf_parsed, chain=chain)
@@ -132,17 +134,57 @@ def _parse_pkcs7(name: str, data: bytes) -> UploadedEntry | ParseError:
         return ParseError(error_message="could not parse PKCS#7: no certificates found")
     if len(certs) > 100:
         return ParseError(
+            error_message=(f"PKCS#7 bundle contains too many certificates ({len(certs)}), max 100")
+        )
+    ordered = _order_pkcs7_chain(certs)
+    if ordered is None:
+        return ParseError(
             error_message=(
-                f"PKCS#7 bundle contains too many certificates"
-                f" ({len(certs)}), max 100"
+                "PKCS#7 must contain one unambiguous certificate chain; "
+                "upload a leaf-first PEM chain instead"
             )
         )
-    leaf = certs[0]
+    leaf = ordered[0]
     leaf.is_leaf = True
-    chain_certs = certs[1:]
+    chain_certs = ordered[1:]
     for c in chain_certs:
         c.is_leaf = False
     return UploadedEntry(file_name=name, leaf=leaf, chain=chain_certs)
+
+
+def _order_pkcs7_chain(certs: list[Certificate]) -> list[Certificate] | None:
+    """Order a certificate bag structurally, without asserting signature or trust.
+
+    PKCS#7 CertificateSet is unordered (RFC 5652 section 10.2.3). Require
+    exactly one path consuming the whole bag; unrelated chains, ambiguous
+    issuers and cycles need an explicit leaf-first PEM upload instead.
+    """
+    unique = deduplicate_chain(certs)
+    parents = [
+        {
+            parent
+            for parent, issuer in enumerate(unique)
+            if parent != child and validate_chain_order([certificate, issuer])
+        }
+        for child, certificate in enumerate(unique)
+    ]
+    issuers = {parent for candidates in parents for parent in candidates}
+    leaves = set(range(len(unique))) - issuers
+    if len(leaves) != 1:
+        return None
+    current = leaves.pop()
+    ordered = [unique[current]]
+    remaining = set(range(len(unique))) - {current}
+    while remaining:
+        candidates = parents[current]
+        if len(candidates) != 1 or not candidates <= remaining:
+            return None
+        current = next(iter(candidates))
+        ordered.append(unique[current])
+        remaining.remove(current)
+    if parents[current]:
+        return None
+    return ordered
 
 
 def store_uploaded(

@@ -23,7 +23,9 @@ answers three questions:
 
 - **Scans hosts** over TLS, including STARTTLS for SMTP, LDAP and friends, on
   a daily schedule or per-host cadence. It also accepts **certificate files**
-  in PEM, DER, PKCS#12 and PKCS#7 for things it can't reach.
+  in PEM, DER, PKCS#12 and PKCS#7 for things it can't reach. PKCS#7 uploads
+  must describe one unambiguous certificate chain; for multiple or ambiguous
+  chains, upload each intended leaf with its issuers as a leaf-first PEM file.
 - **Tracks renewals.** It links each certificate to its successor, flags
   renewals that stall before they turn into expiries, and can call your
   automation through a renewal webhook.
