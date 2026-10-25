@@ -200,18 +200,24 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
         meta.pop(oldest, None)
 
     conn = sqlite3.connect(path_str, timeout=30, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.create_function("cw_casefold", 1, _cw_casefold)
-    conn.create_function("cw_tag_set", 1, _cw_tag_set, deterministic=True)
-    conn.create_function("cw_tags_overlap", -1, _cw_tags_overlap, deterministic=True)
-    conn.create_function("cw_utc_now", 0, _cw_utc_now)
-    conn.create_function("cw_epoch_ms", 1, _cw_epoch_ms, deterministic=True)
-    from cert_watch.status_rule import register_sql_functions
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.create_function("cw_casefold", 1, _cw_casefold)
+        conn.create_function("cw_tag_set", 1, _cw_tag_set, deterministic=True)
+        conn.create_function("cw_tags_overlap", -1, _cw_tags_overlap, deterministic=True)
+        conn.create_function("cw_utc_now", 0, _cw_utc_now)
+        conn.create_function("cw_epoch_ms", 1, _cw_epoch_ms, deterministic=True)
+        from cert_watch.status_rule import register_sql_functions
 
-    register_sql_functions(conn)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=15000")
-    conn.execute("PRAGMA foreign_keys=ON")
+        register_sql_functions(conn)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=15000")
+        conn.execute("PRAGMA foreign_keys=ON")
+    except BaseException:
+        # Failed or cancelled setup never transfers this handle to the cache.
+        with contextlib.suppress(sqlite3.Error):
+            conn.close()
+        raise
     cache[path_str] = conn
     if current_stat:
         meta[path_str] = (current_stat.st_ino, current_stat.st_size, current_stat.st_mtime)

@@ -29,6 +29,9 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Failed SQLite initialization closes its new connection immediately, including
+  on cancellation, and preserves the original setup error. Database handles no
+  longer wait for garbage collection on this failure path.
 - A stalled renewal on a host with the manual renewal method read "manual
   configured — no new certificate yet" on Home. It now reads "Manual renewal —
   no new certificate yet".
