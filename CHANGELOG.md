@@ -73,6 +73,15 @@ All notable changes to cert-watch are documented in this file.
   Duplicate certificates are ignored within the existing 100-certificate cap.
   Bags with multiple or ambiguous chains are refused with guidance to upload
   a leaf-first PEM chain instead.
+- PKCS#7 uploads accept cross-signed issuers. Public CA bundles often carry
+  two copies of an intermediate or root, with the same name and key but signed
+  by different issuers; either copy can issue the certificate below it, so the
+  upload no longer refuses the bag as ambiguous. The leaf is the one
+  certificate that issues nothing else in the bag. The stored chain prefers a
+  path ending at a self-signed root in the bag, then the one whose issuers
+  stay valid longest, then the shortest; the alternative copies are not
+  stored. Same-named issuers with different keys, unrelated certificates and
+  cycles are still refused.
 - An application credential record with an unreadable stored time (from a
   hand edit or a restore) no longer stops alert evaluation. Before, one such
   record raised before any certificate expiry or renewal alert was evaluated,

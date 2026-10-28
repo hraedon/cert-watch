@@ -9,9 +9,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cryptography.hazmat.primitives.serialization import Encoding, pkcs12
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, pkcs12
 
 from cert_watch.cert_chain import (
+    _issuer_bytes,
+    _load_x509,
+    _subject_bytes,
     deduplicate_chain,
     extract_chain,
     extract_chain_pem,
@@ -152,39 +155,111 @@ def _parse_pkcs7(name: str, data: bytes) -> UploadedEntry | ParseError:
     return UploadedEntry(file_name=name, leaf=leaf, chain=chain_certs)
 
 
+# Bounds the search over cross-signed alternatives in one 100-certificate bag.
+_PKCS7_PATH_STEPS = 10_000
+
+
+def _public_key_der(certificate: Certificate) -> bytes | None:
+    parsed = _load_x509(certificate)
+    if parsed is None:
+        return None
+    try:
+        return parsed.public_key().public_bytes(
+            Encoding.DER, PublicFormat.SubjectPublicKeyInfo
+        )
+    except (ValueError, TypeError):  # unsupported key type
+        return None
+
+
 def _order_pkcs7_chain(certs: list[Certificate]) -> list[Certificate] | None:
     """Order a certificate bag structurally, without asserting signature or trust.
 
-    PKCS#7 CertificateSet is unordered (RFC 5652 section 10.2.3). Require
-    exactly one path consuming the whole bag; unrelated chains, ambiguous
-    issuers and cycles need an explicit leaf-first PEM upload instead.
+    PKCS#7 CertificateSet is unordered (RFC 5652 section 10.2.3). Exactly one
+    certificate may issue nothing else in the bag: that is the leaf. Every
+    certificate must lie on a path from the leaf to a self-issued certificate
+    or to one whose issuer is absent.
+
+    Public CA bundles often carry cross-signs: copies of one CA certificate,
+    with the same name and key, signed by different issuers. Any copy can
+    issue the certificate below it, so a choice between them is not
+    ambiguous. A choice between same-named issuers with different keys is,
+    and so are unrelated chains and pure cycles; those need an explicit
+    leaf-first PEM upload instead.
+
+    Of the candidate paths, the stored chain prefers one ending at a
+    self-signed root in the bag, then the one whose issuers stay valid
+    longest, then the shortest. The alternative copies are not stored.
     """
     unique = deduplicate_chain(certs)
-    parents = [
-        {
+    count = len(unique)
+    parents: list[set[int]] = []
+    for child, certificate in enumerate(unique):
+        if _is_self_signed(certificate):
+            parents.append(set())  # a root, or self-issued: the path ends here
+            continue
+        parents.append({
             parent
             for parent, issuer in enumerate(unique)
             if parent != child and validate_chain_order([certificate, issuer])
-        }
-        for child, certificate in enumerate(unique)
-    ]
+        })
+    for candidates in parents:
+        if len(candidates) > 1:
+            keys = {_public_key_der(unique[index]) for index in candidates}
+            if len(keys) != 1 or None in keys:
+                return None
     issuers = {parent for candidates in parents for parent in candidates}
-    leaves = set(range(len(unique))) - issuers
+    leaves = set(range(count)) - issuers
     if len(leaves) != 1:
         return None
-    current = leaves.pop()
-    ordered = [unique[current]]
-    remaining = set(range(len(unique))) - {current}
-    while remaining:
-        candidates = parents[current]
-        if len(candidates) != 1 or not candidates <= remaining:
-            return None
-        current = next(iter(candidates))
-        ordered.append(unique[current])
-        remaining.remove(current)
-    if parents[current]:
+    leaf = leaves.pop()
+
+    paths: list[list[int]] = []
+    visited: set[int] = set()
+    steps = 0
+
+    def walk(path: list[int]) -> bool:
+        nonlocal steps
+        steps += 1
+        if steps > _PKCS7_PATH_STEPS:
+            return False
+        current = path[-1]
+        visited.add(current)
+        if not parents[current]:
+            paths.append(list(path))
+            return True
+        # A parent already on the path is a cycle; that branch has no end.
+        for parent in sorted(parents[current] - set(path)):
+            path.append(parent)
+            if not walk(path):
+                return False
+            path.pop()
+        return True
+
+    if not walk([leaf]) or not paths or len(visited) != count:
         return None
-    return ordered
+
+    def preference(path: list[int]) -> tuple[bool, datetime, int, list[str]]:
+        top = unique[path[-1]]
+        complete = len(path) > 1 and _is_self_signed(top)
+        issued_until = min(
+            (_utc(unique[index].not_after) for index in path[1:]),
+            default=datetime.max.replace(tzinfo=UTC),
+        )
+        return (
+            complete, issued_until, -len(path),
+            [unique[index].fingerprint_sha256 for index in path],
+        )
+
+    best = max(paths, key=preference)
+    return [unique[index] for index in best]
+
+
+def _is_self_signed(certificate: Certificate) -> bool:
+    return _issuer_bytes(certificate) == _subject_bytes(certificate)
+
+
+def _utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def store_uploaded(
