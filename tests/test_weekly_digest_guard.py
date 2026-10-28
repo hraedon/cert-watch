@@ -28,6 +28,9 @@ class _FakeClock:
 
 
 def _context(db_path, *, digest_only: bool = False) -> SchedulerContext:
+    from cert_watch.database.schema import init_schema
+
+    init_schema(db_path)
     settings = MagicMock(
         db_path=db_path,
         alert_digest_only=digest_only,
@@ -164,6 +167,9 @@ def test_expiry_digest_runs_each_alert_cycle_and_lets_claims_dedupe(
 
 
 def test_all_digest_kinds_share_the_alert_cycle_deadline(monkeypatch, tmp_path):
+    from cert_watch.database.schema import init_schema
+
+    init_schema(tmp_path / "digest.sqlite3")
     now = [100.0]
     stopped = threading.Event()
     context = SchedulerContext(

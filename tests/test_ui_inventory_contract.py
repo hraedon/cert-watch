@@ -77,6 +77,10 @@ def test_inventory_write_contracts_each_have_one_shared_service() -> None:
 
 
 def _result(service: str, resource_id: str) -> Any:
+    if service.endswith("create_application_secret"):
+        return resource_id
+    if service.endswith("retire_application_secret"):
+        return True
     if service.endswith("edit_host"):
         from cert_watch.services.host_edit import HostEditResult
 
@@ -100,7 +104,7 @@ def _result(service: str, resource_id: str) -> Any:
         from cert_watch.services.resource_metadata import TagUpdateResult
 
         return TagUpdateResult(resource_id, "ops", ("ops",), ("ops",))
-    if service.endswith("update_host_notes"):
+    if service.endswith(("update_host_notes", "update_uploaded_certificate_notes")):
         return "notes"
     if service.endswith("update_host_ownership"):
         from cert_watch.services.host_ownership import HostOwnership
@@ -178,7 +182,7 @@ def _request_pair(concept: str) -> tuple[dict[str, Any], dict[str, Any]]:
     elif concept == "host ownership":
         form["data"] = {"owner_name": "owner"}
         api["json"] = {"owner_name": "owner"}
-    elif concept == "host notes":
+    elif concept in {"host notes", "uploaded certificate notes"}:
         form["data"] = {"notes": "notes"}
         api["json"] = {"notes": "notes"}
     elif concept == "host create":
@@ -255,6 +259,7 @@ def test_both_adapters_reach_the_inventory_service(
             "contract.example.test", 443
         )
         substitutions = {
+            "secret_id": target_id,
             "cert_id": host_id,
             "host_id": host_id,
             "resource_id": host_id,

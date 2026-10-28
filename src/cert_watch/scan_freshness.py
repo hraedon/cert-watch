@@ -30,13 +30,23 @@ def scan_interval_out_of_range(interval_hours: int | None) -> bool:
     )
 
 
+def _add_deadline_delay(value: datetime, delay: timedelta) -> datetime:
+    """Add a nonnegative delay, capping a future deadline at datetime's limit."""
+    try:
+        return value + delay
+    except OverflowError:
+        return datetime.max.replace(tzinfo=value.tzinfo)
+
+
 def cadence_due_at(last_success: datetime, interval_hours: int | None,
                    hour: int, minute: int) -> datetime:
     """Next successful observation due after this success, ignoring retry backoff."""
     if interval_hours is not None and interval_hours > 0:
         return last_success + timedelta(hours=interval_hours)
     boundary = last_success.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    return boundary + timedelta(days=1) if boundary <= last_success else boundary
+    return (
+        _add_deadline_delay(boundary, timedelta(days=1)) if boundary <= last_success else boundary
+    )
 
 
 def _timestamp(value: str | None) -> datetime | None:

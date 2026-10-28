@@ -1,12 +1,24 @@
 """Calendar view queries."""
+
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 from cert_watch.database.connection import _connect
 from cert_watch.database.dashboard_helpers import current_leaf_sql
 from cert_watch.database.schema import init_schema
+
+
+def _bound_column(value: str) -> str:
+    """Use UTC calendar days for date-only bounds; preserve timestamp bounds."""
+    try:
+        if date.fromisoformat(value).isoformat() == value:
+            return "DATE(not_after)"
+    except ValueError:
+        pass
+    return "not_after"
 
 
 def list_calendar(
@@ -21,6 +33,9 @@ def list_calendar(
     Buckets: ``day``, ``week``, ``month``.  Each result has
     ``bucket_start``, ``count``, and ``cert_ids`` (JSON array).
     Only leaf certificates are included.
+
+    Canonical ``YYYY-MM-DD`` bounds include the whole UTC day, matching the
+    calendar buckets. Timestamp bounds retain their precise comparison.
 
     ``scope_tags`` restricts results to certificates/hosts whose effective
     tags match (WI-128).
@@ -42,10 +57,10 @@ def list_calendar(
     conditions = [current_leaf_sql("certificates")]
     params: list[str] = []
     if from_date:
-        conditions.append("not_after >= ?")
+        conditions.append(f"{_bound_column(from_date)} >= ?")
         params.append(from_date)
     if to_date:
-        conditions.append("not_after <= ?")
+        conditions.append(f"{_bound_column(to_date)} <= ?")
         params.append(to_date)
 
     if scope_tags:
@@ -72,9 +87,11 @@ def list_calendar(
     result = []
     for r in rows:
         ids = r["cert_ids_csv"].split(",") if r["cert_ids_csv"] else []
-        result.append({
-            "bucket_start": r["bucket_start"],
-            "count": r["count"],
-            "cert_ids": ids,
-        })
+        result.append(
+            {
+                "bucket_start": r["bucket_start"],
+                "count": r["count"],
+                "cert_ids": ids,
+            }
+        )
     return result

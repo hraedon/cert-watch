@@ -110,6 +110,43 @@ def test_upload_pem_appears_on_dashboard(
     expect(page.locator("body")).to_contain_text("e2e-pem.example.com")
 
 
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_uploaded_certificate_notes_persist_without_a_host(
+    page: Page, cert_watch_server: str, pem_path: Path, theme: str,
+) -> None:
+    response = page.request.post(
+        f"{cert_watch_server}/api/certificates/upload",
+        multipart={"file": {"name": "notes.pem", "mimeType": "application/x-pem-file",
+                            "buffer": pem_path.read_bytes()}},
+    )
+    assert response.status == 201
+    cert_id = response.json()["id"]
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{cert_watch_server}/certificates/{cert_id}")
+    page.evaluate("theme => { localStorage.setItem('cw-theme', theme); }", theme)
+    page.reload()
+    expect(page.get_by_test_id("certificate-notes-view")).to_have_text("None")
+    expect(page.get_by_test_id("certificate-notes-editor")).not_to_be_visible()
+    page.get_by_test_id("edit-certificate-notes").click()
+    note = "Renew with the offline CA.\nKeep this with the uploaded file."
+    page.get_by_test_id("certificate-notes-editor").fill(note)
+    page.get_by_test_id("save-certificate-notes").click()
+    expect(page.get_by_role("status").filter(has_text="Certificate notes saved.")).to_be_visible()
+    page.reload()
+    expect(page.get_by_test_id("certificate-notes-view")).to_have_text(note)
+    expect(page.get_by_test_id("certificate-notes-editor")).not_to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    stored = page.evaluate(
+        "url => fetch(url).then(response => response.json())",
+        f"/api/certificates/{cert_id}",
+    )
+    assert stored["notes"].replace("\r\n", "\n") == note
+    page.get_by_test_id("edit-certificate-notes").click()
+    page.get_by_test_id("certificate-notes-editor").fill("")
+    page.get_by_test_id("save-certificate-notes").click()
+    expect(page.get_by_test_id("certificate-notes-view")).to_have_text("None")
+
+
 def test_upload_pfx_shows_leaf_and_chain(
     page: Page, cert_watch_server: str, pfx_path: Path
 ) -> None:

@@ -31,6 +31,8 @@ Browse. Attempt-specific progress and timing are secondary detail beneath it.
 ## Ownership and boundaries
 
 This page owns the single editing controls for endpoint settings, host-scoped
-notes, and tags, plus scan/download/delete actions allowed by authorization. It
+notes, uploaded certificate notes, and tags, plus scan/download/delete actions
+allowed by authorization. Uploaded notes stay with the file, independently of
+endpoint scans, renewals or host removal. It
 does not duplicate fleet filtering, global posture trends, alert delivery
 history, or system configuration.

@@ -2,6 +2,19 @@
 
 ## How upgrades work
 
+The next release applies migration 0050 for uploaded certificate notes, then
+0051 for application credential expiry metadata and its indexes. Administrators
+gain a Credentials page and the matching `/api/application-secrets` endpoints.
+No credential values are migrated or stored; configure global delivery channels
+for reminders. Startup takes the normal pre-migration backup. Rollback requires
+restoring the pre-migration database as described below.
+
+An earlier application-credential draft also used migration number 0050. Its
+database is not interchangeable with the notes-first sequence: startup refuses
+migration 0051 if the uploaded-notes table is absent. Preserve that database
+and its credential metadata, and use its matching draft build or a compatible
+pre-0050 backup. Renumbering a ledger entry does not apply the missing migration.
+
 Install the new version over the same data directory and start it. On startup,
 cert-watch:
 
@@ -22,6 +35,20 @@ start the previous version.
 through the upgrade and checks that nothing is lost. From an older release,
 upgrade to 0.9.x first, or start a fresh 1.0 and re-add your hosts with the CSV
 import (history is not carried over that way).
+
+## Next release: uploaded certificate notes
+
+Migration 0050 adds `uploaded_certificate_notes`. It recovers uploaded
+certificate notes preserved in the deprecated `certificates.notes` column by
+migration 0031, without changing host notes. Notes merged into hosts by 0031
+remain there. Fresh uploads start with empty notes. Deleting an upload deletes
+its notes. The certificate detail API includes a `notes` string for uploads;
+`PATCH /api/certificates/{id}/notes` edits it (maximum 10,000 characters).
+Empty or omitted notes clear the value. Host scans, renewals and host removal
+preserve uploaded files and notes, even for old uploads carrying a hostname.
+An old upload is detached from a host when that host is removed, or on upgrade
+when no matching host exists, so a later host at that address cannot inherit
+access to its notes. Its own tags remain unchanged.
 
 ## Upgrading from 1.2.2 to 1.2.3
 

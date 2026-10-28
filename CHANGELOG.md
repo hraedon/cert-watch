@@ -22,6 +22,14 @@ All notable changes to cert-watch are documented in this file.
 
 ### Added
 
+- Administrators can track application credential expiry from metadata under
+  Credentials, including manual entry, owner email and retirement. Individual
+  reminders use the existing delivery queue at 30/14/7/3/1 days and expiry;
+  no secret values are accepted. See [the guide](docs/application-secrets.md).
+- A standalone PowerShell helper exports Entra application password-credential
+  metadata through an existing Graph session, with atomic output and no secret
+  values. The operator can review the JSON before adding it through the API.
+
 - A certificate's detail page lists the other endpoints serving the same
   certificate, each with its notes and a link to its own page. Notes, owner and
   renewal settings belong to each endpoint, and their edit page was reachable
@@ -29,6 +37,48 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Unusable stored scheduler times no longer stop unrelated host scans or
+  renewal-rule wakeups. Deadline arithmetic stays within the supported date
+  range, malformed scan claims can be replaced, and a lease acquired after
+  scan selection is checked again by its UTC instant inside the write
+  transaction. Valid retry, verification and claim holds remain in force.
+- TLS-version and posture-grade trend API responses report the effective
+  1–365 day window used by the query, including when the requested window
+  falls outside that range.
+- Calendar API date filters include every certificate expiring on the end
+  date. Date-only bounds use the same UTC days as the calendar buckets;
+  precise timestamp filters keep their existing behavior.
+- Browse ignores expiry-week filters whose seven-day end would exceed the
+  supported date range, showing the existing invalid-week notice instead of
+  failing the page.
+
+- Oversized pagination parameters no longer fail while binding SQLite integers.
+  Explicit offsets outside SQLite's range return 422; far-out numbered pages
+  remain empty without wrapping to the first page.
+
+- Credential reminders due within seven days now appear in the Critical alert
+  filter and its count, matching their displayed urgency. Later reminders stay
+  in Warnings, and tag-scoped views continue to exclude global credentials.
+- The combined notes and application-credential upgrade uses separate migration
+  numbers: 0050 for uploaded notes and 0051 for credential metadata. Startup
+  refuses an incompatible draft database that assigned 0050 to credentials
+  without applying the uploaded-notes schema.
+- Manually uploaded certificates have editable notes again, without requiring
+  a monitored host. Preserved legacy upload notes are recovered on upgrade.
+  Scanned certificate notes remain attached to their endpoint. Scanning or
+  removing a host preserves uploaded files and their notes, including older
+  uploads with matching hostname metadata.
+- PKCS#7 uploads now identify the monitored certificate and order its issuers
+  instead of treating the first certificate in the unordered bag as the leaf.
+  Duplicate certificates are ignored within the existing 100-certificate cap.
+  Bags with multiple or ambiguous chains are refused with guidance to upload
+  a leaf-first PEM chain instead.
+- Local unit runs keep tests whose filename or checkout path contains `e2e`.
+  Automatic browser markers now apply only inside `tests/e2e`, so the optional
+  Playwright import guard runs even when browser tests are collected alongside it.
+- Failed SQLite initialization closes its new connection immediately, including
+  on cancellation, and preserves the original setup error. Database handles no
+  longer wait for garbage collection on this failure path.
 - A stalled renewal on a host with the manual renewal method read "manual
   configured — no new certificate yet" on Home. It now reads "Manual renewal —
   no new certificate yet".

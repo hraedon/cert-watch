@@ -207,12 +207,12 @@ def test_certificate_detail_shows_host_notes(tmp_path, reload_app, leaf_pem_file
     repo = SqliteHostRepository(db)
     repo.add("leaf.example.com", 443, notes="host-level note")
 
-    # Update the cert to link to the host
+    # Model a scanned endpoint using the parsed certificate fixture.
     import sqlite3
 
     with sqlite3.connect(str(db)) as conn:
         conn.execute(
-            "UPDATE certificates SET hostname = ?, port = ? WHERE id = ?",
+            "UPDATE certificates SET source = 'scanned', hostname = ?, port = ? WHERE id = ?",
             ("leaf.example.com", 443, cert_id),
         )
         conn.commit()

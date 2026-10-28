@@ -1295,18 +1295,19 @@ def test_delete_certificate_not_found(reload_app):
     assert r.headers["location"] == "/?error=certificate+not+found"
 
 
-# ---------- certificate notes (removed — UI-INVENTORY V1) ----------
+# ---------- uploaded certificate notes ----------
 
 
-def test_certificate_notes_route_removed(reload_app):
-    """POST /certificates/{id}/notes must not exist — notes are host-scoped."""
+def test_certificate_notes_missing_target(reload_app):
+    """An unknown upload redirects with a missing-certificate message."""
     app_mod = reload_app()
     _MISSING = "00000000-0000-0000-0000-000000000000"
     with TestClient(app_mod.app) as client:
         r = client.post(
             f"/certificates/{_MISSING}/notes", data={"notes": "test"}, follow_redirects=False
         )
-    assert r.status_code == 404
+    assert r.status_code == 303
+    assert r.headers["location"] == "/?error=certificate+not+found"
 
 
 # ---------- certificate owner ----------

@@ -211,6 +211,15 @@ _target(
     "PATCH /api/hosts/{host_id}/notes",
 )
 _target(
+    _Contract(
+        resource_metadata.update_uploaded_certificate_notes,
+        resource_metadata._transact,
+        "persist(conn)",
+    ),
+    "POST /certificates/{cert_id}/notes",
+    "PATCH /api/certificates/{cert_id}/notes",
+)
+_target(
     _Contract(resource_metadata.update_host_tags, resource_metadata._transact, "persist(conn)"),
     "POST /hosts/{host_id}/tags",
     "PUT /api/hosts/{host_id}/tags",
@@ -286,6 +295,11 @@ _route_service(
     "PATCH /api/hosts/{host_id}/notes",
 )
 _route_service(
+    resource_metadata.update_uploaded_certificate_notes,
+    "POST /certificates/{cert_id}/notes",
+    "PATCH /api/certificates/{cert_id}/notes",
+)
+_route_service(
     resource_metadata.update_host_tags,
     "POST /hosts/{host_id}/tags",
     "PUT /api/hosts/{host_id}/tags",
@@ -330,6 +344,10 @@ _NON_ESTATE = {
 }
 
 _ADMIN_ONLY = {
+    *_keys(
+        "/application-secrets", "/api/application-secrets",
+        "/application-secrets/{secret_id}/retire", "/api/application-secrets/{secret_id}/retire",
+    ),
     *_keys("/trust-anchors", "/api/trust-anchors"),
     "POST /trust-anchors/{anchor_id}/delete",
     "DELETE /api/trust-anchors/{anchor_id}",

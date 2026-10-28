@@ -302,12 +302,8 @@ def test_api_report_inventory_requires_auth(reload_app):
     assert r.status_code == 200
 
 
-def test_api_cert_notes_endpoints_removed(reload_app, tmp_path, leaf_pem_file):
-    """UI-INVENTORY V1: per-certificate notes were removed (host-scoped now).
-
-    PATCH /api/certificates/{id}/notes must not exist, and the GET response
-    must not carry a notes key. Host notes live at PATCH /api/hosts/{id}/notes.
-    """
+def test_api_uploaded_cert_notes_roundtrip(reload_app, tmp_path, leaf_pem_file):
+    """An uploaded certificate supports notes without an associated host."""
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
@@ -321,12 +317,13 @@ def test_api_cert_notes_endpoints_removed(reload_app, tmp_path, leaf_pem_file):
             f"/api/certificates/{cert_id}/notes",
             json={"notes": "staging cert"},
         )
-    assert r.status_code == 404
+    assert r.status_code == 200
+    assert r.json() == {"id": cert_id, "notes": "staging cert"}
 
     with TestClient(app_mod.app) as client:
         r = client.get(f"/api/certificates/{cert_id}")
     assert r.status_code == 200
-    assert "notes" not in r.json()
+    assert r.json()["notes"] == "staging cert"
 
 
 def test_api_download_pem(tmp_path, reload_app, leaf_pem_file):

@@ -16,6 +16,7 @@ from cert_watch.config.schedule_validation import (
     validate_schedule,
 )
 from cert_watch.database import SqliteAlertRepository, kv_set_multi
+from cert_watch.database.query_bounds import MAX_SQLITE_OFFSET
 from cert_watch.policy import (
     PolicyRule,
     PolicySet,
@@ -196,7 +197,7 @@ def api_policy_violations(
     _auth: str = Depends(require_auth),
     format: str = "json",
     limit: int = Query(100, ge=1, le=1000),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=MAX_SQLITE_OFFSET),
 ) -> JSONResponse | PlainTextResponse:
     db = _db_path(request)
     repo = SqliteAlertRepository(str(db))

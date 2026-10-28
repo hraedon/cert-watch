@@ -1,3 +1,4 @@
+import contextlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -56,8 +57,9 @@ def test_init_schema_detects_replaced_backup(tmp_path):
         f.unlink(missing_ok=True)
     ensure_base(db)  # fresh file: base tables only, no migrations applied
 
-    # Confirm the "backup" lacks migration-added artifacts.
-    with sqlite3.connect(str(db)) as conn:
+    # Confirm the "backup" lacks migration-added artifacts. closing() owns the
+    # handle; the inner connection context retains commit/rollback behavior.
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         tables = {
             r[0]
             for r in conn.execute(
@@ -70,7 +72,7 @@ def test_init_schema_detects_replaced_backup(tmp_path):
     init_schema(db)
 
     # 4. Migration-added column must now exist.
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(roles)").fetchall()}
         assert "permission_tier" in cols  # added by migration 0024
 
@@ -82,7 +84,7 @@ def test_init_schema_migrates_old_database_without_replaces_cert_id(tmp_path):
     import sqlite3
 
     # Simulate a pre-migration database
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         conn.execute(
             """
             CREATE TABLE certificates (
@@ -131,7 +133,7 @@ def test_init_schema_migrates_old_database_without_replaces_cert_id(tmp_path):
     init_schema(db)
 
     # Verify migrated columns exist
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(certificates)").fetchall()}
         assert "replaces_cert_id" in cols
         # 0030: certificates.notes is merged into hosts.notes and dropped.
@@ -146,7 +148,7 @@ def test_init_schema_creates_scan_history_and_alerts_indexes(tmp_path):
     init_schema(db)
     import sqlite3
 
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn, conn:
         for table, idx_name in (
             ("scan_history", "idx_scan_history_scanned_at"),
             ("alerts", "idx_alerts_created_at"),

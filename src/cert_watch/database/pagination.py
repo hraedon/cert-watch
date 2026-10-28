@@ -1,4 +1,5 @@
 """Alert and scan history pagination helpers."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -7,7 +8,21 @@ from pathlib import Path
 from typing import Any
 
 from cert_watch.database.connection import _connect
+from cert_watch.database.query_bounds import page_offset
 from cert_watch.database.schema import init_schema
+
+# Match the credential urgency shown in activity.html. Keep the complete OR
+# expression grouped so combining it with a tag-scope clause cannot widen access.
+_CRITICAL_ALERT_FILTER = (
+    "(a.alert_type IN ('expired', 'scan_failure', 'application_secret_expired') "
+    "OR (a.alert_type = 'application_secret_expiry' "
+    "AND a.threshold_days IS NOT NULL AND a.threshold_days <= 7))"
+)
+_WARNING_ALERT_FILTER = (
+    "(a.alert_type IN ('expiry_warning', 'drift') "
+    "OR (a.alert_type = 'application_secret_expiry' "
+    "AND (a.threshold_days IS NULL OR a.threshold_days > 7)))"
+)
 
 
 def list_alerts_with_subject(
@@ -25,8 +40,8 @@ def list_alerts_with_subject(
     When ``limit > 0``, applies SQL-level pagination.
     Filters:
       - unread_only: only alerts where read=0
-      - critical_only: only expired or scan_failure alerts
-      - warning_only: only expiry_warning or drift alerts
+      - critical_only: expired, scan_failure, or urgent credential alerts
+      - warning_only: expiry_warning, drift, or later credential reminders
     When ``scope_tags`` is non-empty, only alerts whose cert or host
     tags match any of the scope tags are returned (tag-scoped access control).
     """
@@ -36,21 +51,24 @@ def list_alerts_with_subject(
     if unread_only:
         conditions.append("a.read = 0")
     if critical_only:
-        conditions.append("a.alert_type IN ('expired', 'scan_failure')")
+        conditions.append(_CRITICAL_ALERT_FILTER)
     if warning_only:
-        conditions.append("a.alert_type IN ('expiry_warning', 'drift')")
+        conditions.append(_WARNING_ALERT_FILTER)
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
     if scope_tags:
         from cert_watch.database.dashboard import _add_effective_tag_filter
 
         base = where if where else "WHERE 1=1"
         where, params = _add_effective_tag_filter(
-            base, params, scope_tags,
-            col_cert="c.tags", col_host="h.tags",
+            base,
+            params,
+            scope_tags,
+            col_cert="c.tags",
+            col_host="h.tags",
         )
     with _connect(db_path) as conn:
         if limit > 0:
-            offset = max(0, (page - 1) * limit)
+            offset = page_offset(page, limit)
             rows = conn.execute(
                 f"""
                 SELECT a.id, a.cert_id, a.created_at, a.alert_type, a.status,
@@ -100,8 +118,11 @@ def _total_alerts(db_path: str | Path, scope_tags: tuple[str, ...] = ()) -> int:
         from cert_watch.database.dashboard import _add_effective_tag_filter
 
         where, params = _add_effective_tag_filter(
-            "WHERE 1=1", [], scope_tags,
-            col_cert="c.tags", col_host="h.tags",
+            "WHERE 1=1",
+            [],
+            scope_tags,
+            col_cert="c.tags",
+            col_host="h.tags",
         )
         with _connect(db_path) as conn:
             row = conn.execute(
@@ -148,27 +169,25 @@ def _count_alerts_by_filter(
                 f"SELECT COUNT(*) FROM alerts a "
                 f"LEFT JOIN certificates c ON c.id = a.cert_id "
                 f"LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port "
-                f"{base_where} AND a.alert_type IN ('expired', 'scan_failure')",
+                f"{base_where} AND {_CRITICAL_ALERT_FILTER}",
                 base_params,
             ).fetchone()
             warn_row = conn.execute(
                 f"SELECT COUNT(*) FROM alerts a "
                 f"LEFT JOIN certificates c ON c.id = a.cert_id "
                 f"LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port "
-                f"{base_where} AND a.alert_type IN ('expiry_warning', 'drift')",
+                f"{base_where} AND {_WARNING_ALERT_FILTER}",
                 base_params,
             ).fetchone()
     else:
         with _connect(db_path) as conn:
             all_row = conn.execute("SELECT COUNT(*) FROM alerts").fetchone()
-            unread_row = conn.execute(
-                "SELECT COUNT(*) FROM alerts WHERE read = 0"
-            ).fetchone()
+            unread_row = conn.execute("SELECT COUNT(*) FROM alerts WHERE read = 0").fetchone()
             crit_row = conn.execute(
-                "SELECT COUNT(*) FROM alerts WHERE alert_type IN ('expired', 'scan_failure')"
+                f"SELECT COUNT(*) FROM alerts a WHERE {_CRITICAL_ALERT_FILTER}"
             ).fetchone()
             warn_row = conn.execute(
-                "SELECT COUNT(*) FROM alerts WHERE alert_type IN ('expiry_warning', 'drift')"
+                f"SELECT COUNT(*) FROM alerts a WHERE {_WARNING_ALERT_FILTER}"
             ).fetchone()
     return {
         "all": all_row[0] if all_row else 0,
@@ -185,7 +204,10 @@ def _total_scan_history(db_path: str | Path) -> int:
 
 
 def list_scan_history(
-    db_path: str | Path, *, page: int = 1, limit: int = 0,
+    db_path: str | Path,
+    *,
+    page: int = 1,
+    limit: int = 0,
     scope_tags: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
     """Return scan_history rows, newest first.
@@ -202,12 +224,15 @@ def list_scan_history(
 
         host_match, params = _add_effective_tag_filter(
             "SELECT 1 FROM hosts h WHERE h.hostname = s.hostname AND h.port = s.port",
-            params, scope_tags, col_cert=None, col_host="h.tags",
+            params,
+            scope_tags,
+            col_cert=None,
+            col_host="h.tags",
         )
         where = f"WHERE EXISTS ({host_match})"
     with _connect(db_path) as conn:
         if limit > 0:
-            offset = max(0, (page - 1) * limit)
+            offset = page_offset(page, limit)
             rows = conn.execute(
                 f"SELECT s.* FROM scan_history s {where}"
                 " ORDER BY s.scanned_at DESC LIMIT ? OFFSET ?",
@@ -228,7 +253,8 @@ def _total_scan_batches(db_path: str | Path) -> int:
 
 
 def _group_scan_batches(
-    rows: list[dict[str, Any]], window_minutes: int = 5,
+    rows: list[dict[str, Any]],
+    window_minutes: int = 5,
 ) -> list[dict[str, Any]]:
     """Group per-host scan rows into batch-oriented runs.
 
@@ -262,11 +288,13 @@ def _group_scan_batches(
                 placed = True
                 break
         if not placed:
-            batches.append({
-                "scanned_at": row.get("scanned_at", ""),
-                "hosts": [row],
-                "_ts": ts,
-            })
+            batches.append(
+                {
+                    "scanned_at": row.get("scanned_at", ""),
+                    "hosts": [row],
+                    "_ts": ts,
+                }
+            )
     # Sort by newest batch first
     batches.sort(key=lambda b: b["_ts"], reverse=True)
     # Compute summary fields. A batch counts *endpoints*: an endpoint retried
@@ -374,12 +402,17 @@ def purge_old_alerts(db_path: str | Path, retention_days: int) -> int:
             conn.commit()
         if deleted:
             import logging
+
             logging.getLogger("cert_watch.database").info(
                 "purged %d alert rows (delivered older than %d days, undelivered older "
-                "than %d days)", deleted, retention_days, undelivered_days,
+                "than %d days)",
+                deleted,
+                retention_days,
+                undelivered_days,
             )
         return deleted
     except (sqlite3.Error, OSError):
         import logging
+
         logging.getLogger("cert_watch.database").warning("alert purge failed", exc_info=True)
         return 0

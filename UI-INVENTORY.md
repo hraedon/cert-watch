@@ -9,7 +9,8 @@ diff fails review.
 Paths are relative to `src/cert_watch/`. The HTML UI and JSON API are both
 first-class consumers of the application services named below. State inventoried:
 branch `review/product-coherence-20260912`, 2026-09-12 (V1 + V2 implemented;
-notes are host-scoped only; inactive group-webhook controls removed).
+scanned notes are host-scoped; uploads have certificate notes; inactive
+group-webhook controls removed).
 
 IA note: the landing page is now **Home** (`/`, `templates/home.html` —
 certificate risk, certificate hygiene, monitoring gaps, delivery/routing, and
@@ -36,7 +37,7 @@ endpoint-specific monitoring state.
 
 | Concept | Column | Editing control today | Write endpoint | Single owner (proposed) |
 |---|---|---|---|---|
-| ~~Notes & procedures~~ | **REMOVED** — `certificates.notes` merged by migration 0031 (deprecated column retained for unmatched notes) | — | `POST /certificates/{id}/notes` and `PATCH /api/certificates/{id}/notes` **removed** | Host-scoped notes won (V1, implemented 2026-08-30) |
+| Uploaded certificate notes | `uploaded_certificate_notes.notes` (migration 0050 also recovers preserved legacy upload notes) | **Edit notes** in the Certificate notes panel, on uploaded certificate detail only | `POST /certificates/{id}/notes` and `PATCH /api/certificates/{id}/notes` use `services.resource_metadata.update_uploaded_certificate_notes`; detail JSON includes upload notes | Uploads own their notes; scanned endpoint notes remain on the host |
 | Own tags | `certificates.tags` | The top-level **Edit** disclosure on certificate detail; scanned certificates use the combined **Edit host** form, while uploaded certificates use **Edit certificate** because they have no host. Inherited host tags remain read-only and shown `(host)` | `POST /hosts/{resource_id}/edit` and `PUT /api/hosts/{resource_id}` use `services.host_edit.edit_host`; upload-only and legacy tag-only adapters remain callable | Detail A's top-level editor |
 | Lifecycle (create/delete) | row | Add drawer: upload tab `dashboard.html:377`; delete `certificate_detail.html:72` | `POST /upload` + `POST /api/certificates/upload`; `POST /certificates/{id}/delete` + `DELETE /api/certificates/{id}` use `services.certificate_management` | HTML and JSON are equal adapters |
 
@@ -93,7 +94,10 @@ endpoint-specific monitoring state.
   Both endpoints removed: `POST /certificates/{id}/notes`,
   `PATCH /api/certificates/{id}/notes`. The single "Notes" panel is scoped
   "operational notes for this host". Certificate-less uploaded certs have no
-  notes surface.
+  notes surface. **Revised for uploads:** migration 0050 recovers the preserved
+  upload notes into `uploaded_certificate_notes`; the certificate-note adapters
+  and a single editor are restored for uploads only. Scanned certificates still
+  use host notes so renewal does not lose operational context.
 - **V2 — RESOLVED 2026-08-30 (same branch).** The three dashboard
   single-line inline note editors were removed from `static/js/dashboard.js`
   and `dashboard.html`; the dashboard now renders a **read-only** note
@@ -183,8 +187,11 @@ because the HTML and JSON adapters must share their mutation owner too.
 
 | Concept | HTML endpoint | JSON endpoint | Service symbol |
 |---|---|---|---|
+| application credential add | `POST /application-secrets` | `POST /api/application-secrets` | `application_secrets.create_application_secret` |
+| application credential retire | `POST /application-secrets/{secret_id}/retire` | `POST /api/application-secrets/{secret_id}/retire` | `application_secrets.retire_application_secret` |
 | detail host edit | `POST /hosts/{resource_id}/edit` | `PUT /api/hosts/{resource_id}` | `host_edit.edit_host` |
 | certificate tags | `POST /certificates/{cert_id}/tags` | `PUT /api/certificates/{cert_id}/tags` | `resource_metadata.update_certificate_tags` |
+| uploaded certificate notes | `POST /certificates/{cert_id}/notes` | `PATCH /api/certificates/{cert_id}/notes` | `resource_metadata.update_uploaded_certificate_notes` |
 | certificate upload | `POST /upload` | `POST /api/certificates/upload` | `certificate_management.upload_certificate_bytes` |
 | certificate delete | `POST /certificates/{cert_id}/delete` | `DELETE /api/certificates/{cert_id}` | `certificate_management.delete_certificate` |
 | host ownership | `POST /hosts/{host_id}/owner` | `PATCH /api/hosts/{host_id}/owner` | `host_ownership.update_host_ownership` |

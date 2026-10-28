@@ -1113,3 +1113,8 @@ details.cw-editor[open] .when-open { display: inline; }
   .cw-detail-disclosure-body { padding-left: 18px; }
   .cw-detail-disclosures summary .cw-sub { display: block; margin: 3px 0 0; }
 }
+
+/* Application credential metadata inventory. */
+.cw-credentials .cw-panel-head h3 { overflow-wrap: anywhere; min-width: 0; }
+.cw-credentials .cw-kv > div { min-width: 0; }
+.cw-credentials form .cw-form-grid { margin-bottom: var(--space-4); }

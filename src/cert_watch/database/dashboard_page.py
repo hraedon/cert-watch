@@ -29,6 +29,7 @@ from cert_watch.database.dashboard_unified import (
 )
 from cert_watch.database.renewal_attempts import host_projection_sql
 from cert_watch.database.schema import init_schema
+from cert_watch.expiry_week import expiry_week_bounds
 from cert_watch.status_model import (
     AxisSettings,
     StatusModelContext,
@@ -781,20 +782,14 @@ def list_dashboard_page(
         if issuer is not None:
             base_sql = f"SELECT * FROM ({base_sql}) WHERE grp_issuer = ?"
             params = [*params, issuer]
-    if expiry_week:
-        try:
-            from datetime import date, timedelta
-
-            start = date.fromisoformat(expiry_week)
-        except ValueError:
-            start = None
-        if start is not None:
-            end = start + timedelta(days=7)
-            base_sql = (
-                f"SELECT * FROM ({base_sql}) WHERE etype = 'leaf' "
-                "AND sort_expiry >= ? AND sort_expiry < ?"
-            )
-            params = [*params, start.isoformat(), end.isoformat()]
+    bounds = expiry_week_bounds(expiry_week) if expiry_week else None
+    if bounds is not None:
+        start, end = bounds
+        base_sql = (
+            f"SELECT * FROM ({base_sql}) WHERE etype = 'leaf' "
+            "AND sort_expiry >= ? AND sort_expiry < ?"
+        )
+        params = [*params, start.isoformat(), end.isoformat()]
 
     with _connect(db_path) as conn:
         register_status_model_functions(conn, axes)

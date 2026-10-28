@@ -282,6 +282,7 @@ class CertificateDetailView:
     renewal_reports: tuple[RenewalReportView, ...] = ()
     reveal_renewal_report_details: bool = False
     shared_endpoints: tuple[SharedEndpointView, ...] = ()
+    certificate_notes: str = ""
 
     def template_context(self) -> dict[str, Any]:
         """Expose one stable boundary to Jinja or a future JSON serializer."""
@@ -1280,6 +1281,7 @@ def present_certificate_detail(
             for alert in data.alerts
         ),
         slack_configured=slack_configured,
+        certificate_notes=data.notes,
         source_label=source_label,
         source_icon=source_icon,
         source_meta=source_meta,

@@ -161,11 +161,23 @@ def _seed(db: Path, principal: Principal) -> Seeded:
     from cert_watch.database import SqliteCertificateRepository
 
     SqliteCertificateRepository(db).set_tags(ids["cert_split"], "A")
+    uploads = SqliteCertificateRepository(db, source="uploaded")
+    for suffix, fingerprint in (("a", "d"), ("b", "e")):
+        key = f"upload_{suffix}"
+        ids[key] = uploads.add(_cert(f"upload-{suffix}.example.com", fingerprint))
+        uploads.set_tags(ids[key], suffix.upper())
     ids["alert"] = SqliteAlertRepository(db).create(
         Alert(cert_id=ids["cert_a"], alert_type="expiry_warning", status="pending", message="m")
     )
     ids["group"] = SqliteAlertGroupRepository(db).create("g", ["ops@example.com"], ["A"])
     ids["anchor"] = SqliteTrustAnchorRepository(db).add(_cert("Anchor CA", "c"))
+    from cert_watch.auth.rbac import AuthContext
+    from cert_watch.services.application_secrets import create_application_secret
+
+    ids["secret"] = create_application_secret(db, {
+        "application_name": "Synthetic app", "application_id": "synthetic-client",
+        "credential_id": "synthetic-key", "expires_at": "2040-01-01T00:00:00Z",
+    }, auth=AuthContext.system(), actor="matrix")
 
     keys = SqliteApiKeyRepository(db)
     entry, _ = keys.create_key("target-key", "read")
@@ -213,6 +225,7 @@ def _order_key(item: tuple[str, str, Any]) -> tuple[int, str, str]:
 
 
 _PARAM_TARGETS = {
+    "secret_id": ("secret",),
     "resource_id": ("host_a", "host_b", "cert_a", "cert_b", "cert_split"),
     "host_id": ("host_a", "host_b"),
     "cert_id": ("cert_a", "cert_b"),
@@ -238,6 +251,8 @@ def _expansions(path: str) -> list[dict[str, str]]:
         targets = _PARAM_TARGETS[name]
         if path in _CERTIFICATE_ADDRESSED_OWNER_PATHS:
             targets = (*targets, "cert_split")
+        if path in {"/certificates/{cert_id}/notes", "/api/certificates/{cert_id}/notes"}:
+            targets = (*targets, "upload_a", "upload_b")
         combos = [{**c, name: t} for c in combos for t in targets]
     return combos
 

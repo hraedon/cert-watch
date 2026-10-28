@@ -36,6 +36,9 @@ from cert_watch.database.metadata_ops import (
 )
 from cert_watch.database.metadata_ops import update_host_notes as persist_host_notes
 from cert_watch.database.metadata_ops import update_host_tags as persist_host_tags
+from cert_watch.database.metadata_ops import (
+    update_uploaded_certificate_notes as persist_uploaded_certificate_notes,
+)
 from cert_watch.database.repo import SqliteCertificateRepository
 from cert_watch.services.certificate_identity import (
     ensure_not_superseded,
@@ -151,6 +154,56 @@ def normalize_tags(tags: Any) -> str:
     if len(normalized) > MAX_TAGS_LENGTH:
         raise ResourceMetadataValidationError("tags too long (max 2000)")
     return normalized
+
+
+def update_uploaded_certificate_notes(
+    db_path: str | Path,
+    cert_id: str,
+    notes: Deferred[Any],
+    *,
+    auth: Any,
+    actor: str,
+    source_ip: str | None,
+) -> str:
+    """Edit an upload's notes without requiring or manufacturing a host."""
+    require_auth_context(auth)
+    value = ""
+    detail: dict[str, object] = {}
+
+    def guard(conn: sqlite3.Connection) -> None:
+        nonlocal value
+        ensure_write_scope_on(conn, auth, cert_id=cert_id)
+        row = conn.execute(
+            "SELECT source FROM certificates WHERE id = ?", (cert_id,)
+        ).fetchone()
+        if row is None:
+            raise ResourceMetadataNotFoundError("certificate not found")
+        if row["source"] != "uploaded":
+            raise ResourceMetadataValidationError(
+                "notes for scanned certificates belong to the host"
+            )
+        submitted = _value(notes)
+        if not isinstance(submitted, str):
+            raise ResourceMetadataValidationError("notes must be a string")
+        if len(submitted) > MAX_NOTES_LENGTH:
+            raise ResourceMetadataValidationError("notes too long (max 10000)")
+        value = submitted
+        detail["notes_length"] = len(value)
+
+    with get_write_lock():
+        event = _transact(
+            db_path,
+            persist=lambda conn: persist_uploaded_certificate_notes(conn, cert_id, value),
+            guard=guard,
+            action="cert.update_notes",
+            target_type="certificate",
+            target_id=cert_id,
+            detail=detail,
+            actor=actor,
+            source_ip=source_ip,
+        )
+    export_audit(event)
+    return value
 
 
 def _authorize_tag_transition(auth: Any, current: str, submitted: str) -> str:
