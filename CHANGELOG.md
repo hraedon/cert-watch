@@ -77,11 +77,14 @@ All notable changes to cert-watch are documented in this file.
   two copies of an intermediate or root, with the same name and key but signed
   by different issuers; either copy can issue the certificate below it, so the
   upload no longer refuses the bag as ambiguous. The leaf is the one
-  certificate that issues nothing else in the bag. The stored chain prefers a
-  path ending at a self-signed root in the bag, then the one whose issuers
-  stay valid longest, then the shortest; the alternative copies are not
-  stored. Same-named issuers with different keys, unrelated certificates and
-  cycles are still refused.
+  certificate that issues nothing else in the bag. The stored chain prefers
+  a path whose issuers are all valid now, so an expired cross-sign cannot
+  make a valid upload read as expired. After that it prefers a path anchored
+  by an uploaded trust anchor or the system trust store, then one ending at a
+  self-signed root in the bag, then the one whose issuers stay valid longest,
+  then the shortest. The alternative copies are not stored. Same-named
+  issuers with different keys, unrelated certificates and bags whose only
+  paths loop are still refused.
 - An application credential record with an unreadable stored time (from a
   hand edit or a restore) no longer stops alert evaluation. Before, one such
   record raised before any certificate expiry or renewal alert was evaluated,

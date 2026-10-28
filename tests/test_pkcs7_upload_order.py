@@ -1,5 +1,6 @@
 """An unordered PKCS#7 certificate bag must identify the monitored certificate."""
 
+from datetime import UTC, datetime
 from itertools import permutations
 
 import pytest
@@ -248,3 +249,95 @@ def test_pkcs7_path_search_is_bounded(tmp_path, chain_triplet, cross_signed, mon
 
     assert isinstance(result, ParseError)
     assert "unambiguous" in result.error_message
+
+
+def test_pkcs7_prefers_a_valid_path_over_an_expired_complete_one(tmp_path):
+    # The expired copy of the intermediate reaches a self-signed root in the
+    # bag; the valid copy's root is absent. Storing the expired path made the
+    # upload's effective expiry negative although the leaf has a year left.
+    from cert_watch.status_rule import effective_days
+    from tests.conftest import _make_cert
+
+    old_root = _make_cert("Old Root CA", days_valid=-11, not_before_days_ago=3650, ca=True)
+    new_root = _make_cert("New Root CA", days_valid=3650, ca=True)
+    expired = _make_cert(
+        "Shared Intermediate CA", issuer_cert=old_root.cert, issuer_key=old_root.key,
+        days_valid=-11, not_before_days_ago=1000, ca=True,
+    )
+    valid = _make_cert(
+        "Shared Intermediate CA", issuer_cert=new_root.cert, issuer_key=new_root.key,
+        key=expired.key, days_valid=1825, ca=True,
+    )
+    leaf = _make_cert(
+        "valid-path.example.com", issuer_cert=valid.cert, issuer_key=valid.key, days_valid=364,
+    )
+    path = tmp_path / "expired-cross-sign.p7b"
+    path.write_bytes(pkcs7.serialize_certificates(
+        [old_root.cert, expired.cert, leaf.cert, valid.cert], Encoding.DER,
+    ))
+
+    entry = upload_certificate(path)
+
+    assert isinstance(entry, UploadedEntry)
+    assert [cert.fingerprint_sha256 for cert in [entry.leaf, *entry.chain]] == _fingerprints(
+        [leaf.cert, valid.cert]
+    )
+    days = effective_days(
+        entry.leaf.not_after, [cert.not_after for cert in entry.chain], datetime.now(UTC),
+    )
+    assert days >= 363
+
+
+def test_pkcs7_prefers_a_path_ending_at_a_user_trust_anchor(tmp_path):
+    from cert_watch.auth.rbac import AuthContext
+    from cert_watch.cert_chain import chain_status
+    from cert_watch.certificate_model import parse_certificate
+    from cert_watch.database import SqliteTrustAnchorRepository, init_schema
+    from cert_watch.database.connection import _connect
+    from cert_watch.services.certificate_management import upload_certificate_bytes
+    from tests.conftest import _make_cert
+
+    public_root = _make_cert("Bundled Root CA", days_valid=3650, ca=True)
+    private_root = _make_cert("Private Root CA", days_valid=3650, ca=True)
+    bundled = _make_cert(
+        "Issuing CA", issuer_cert=public_root.cert, issuer_key=public_root.key,
+        days_valid=1825, ca=True,
+    )
+    private = _make_cert(
+        "Issuing CA", issuer_cert=private_root.cert, issuer_key=private_root.key,
+        key=bundled.key, days_valid=1825, ca=True,
+    )
+    leaf = _make_cert(
+        "anchored.example.com", issuer_cert=bundled.cert, issuer_key=bundled.key, days_valid=90,
+    )
+    content = pkcs7.serialize_certificates(
+        [leaf.cert, bundled.cert, private.cert, public_root.cert], Encoding.DER,
+    )
+    path = tmp_path / "anchored.p7b"
+    path.write_bytes(content)
+    unanchored = upload_certificate(path)
+    assert isinstance(unanchored, UploadedEntry)
+    assert [c.fingerprint_sha256 for c in unanchored.chain] == _fingerprints(
+        [bundled.cert, public_root.cert]
+    )
+    assert chain_status(unanchored.leaf, unanchored.chain, []) == "incomplete"
+
+    database = tmp_path / "anchored.sqlite3"
+    init_schema(database)
+    anchor = parse_certificate(private_root.der)
+    SqliteTrustAnchorRepository(database).add(anchor)
+    result = upload_certificate_bytes(
+        database, content, "anchored.p7b", auth=AuthContext.system(), actor="test",
+        source_ip=None,
+    )
+
+    with _connect(database) as conn:
+        stored = [row[0] for row in conn.execute(
+            "SELECT fingerprint_sha256 FROM certificates WHERE parent_cert_id=? ORDER BY rowid",
+            (result.id,),
+        )]
+    assert stored == _fingerprints([private.cert])
+    anchors = SqliteTrustAnchorRepository(database).list_entries()
+    assert chain_status(
+        parse_certificate(leaf.der), [parse_certificate(private.der)], anchors,
+    ) == "private"

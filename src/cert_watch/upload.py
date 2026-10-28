@@ -5,6 +5,7 @@ PKCS#12 support extends the original spec per the MVP requirements.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,6 +13,9 @@ from pathlib import Path
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, pkcs12
 
 from cert_watch.cert_chain import (
+    _AnchorLike,
+    _is_anchored_by_system_root,
+    _is_signature_anchored_by_user,
     _issuer_bytes,
     _load_x509,
     _subject_bytes,
@@ -51,8 +55,13 @@ def upload_certificate(
     file_path: Path,
     *,
     password: bytes | None = None,
+    anchors: Sequence[_AnchorLike] = (),
 ) -> UploadedEntry | ParseError:
-    """Parse a file by extension. Returns UploadedEntry or ParseError."""
+    """Parse a file by extension. Returns UploadedEntry or ParseError.
+
+    *anchors* are the user's trust anchors; a PKCS#7 bag with cross-signed
+    issuers prefers a chain they anchor.
+    """
     path = Path(file_path)
     if not path.exists():
         return ParseError(error_message=f"file not found: {path}")
@@ -66,7 +75,7 @@ def upload_certificate(
     if ext in _PKCS12_EXT:
         return _parse_pkcs12(path.name, data, password)
     if ext in _PKCS7_EXT:
-        return _parse_pkcs7(path.name, data)
+        return _parse_pkcs7(path.name, data, anchors)
     if ext in _PEM_EXT:
         return _parse_pem_or_der(path.name, data)
     if ext in _DER_EXT:
@@ -129,7 +138,9 @@ def _parse_pkcs12(name: str, data: bytes, password: bytes | None) -> UploadedEnt
     return UploadedEntry(file_name=name, leaf=leaf_parsed, chain=chain)
 
 
-def _parse_pkcs7(name: str, data: bytes) -> UploadedEntry | ParseError:
+def _parse_pkcs7(
+    name: str, data: bytes, anchors: Sequence[_AnchorLike] = (),
+) -> UploadedEntry | ParseError:
     certs = extract_chain(data)
     if not certs:
         certs = extract_chain_pem(data)
@@ -139,7 +150,7 @@ def _parse_pkcs7(name: str, data: bytes) -> UploadedEntry | ParseError:
         return ParseError(
             error_message=(f"PKCS#7 bundle contains too many certificates ({len(certs)}), max 100")
         )
-    ordered = _order_pkcs7_chain(certs)
+    ordered = _order_pkcs7_chain(certs, anchors)
     if ordered is None:
         return ParseError(
             error_message=(
@@ -171,13 +182,20 @@ def _public_key_der(certificate: Certificate) -> bytes | None:
         return None
 
 
-def _order_pkcs7_chain(certs: list[Certificate]) -> list[Certificate] | None:
+def _order_pkcs7_chain(
+    certs: list[Certificate],
+    anchors: Sequence[_AnchorLike] = (),
+    *,
+    now: datetime | None = None,
+) -> list[Certificate] | None:
     """Order a certificate bag structurally, without asserting signature or trust.
 
     PKCS#7 CertificateSet is unordered (RFC 5652 section 10.2.3). Exactly one
     certificate may issue nothing else in the bag: that is the leaf. Every
-    certificate must lie on a path from the leaf to a self-issued certificate
-    or to one whose issuer is absent.
+    certificate must be reachable from the leaf through its issuers, and at
+    least one path must end at a self-issued certificate or at one whose
+    issuer is absent. A branch that only loops back onto its own path is
+    dropped, so its certificates are reachable but not stored.
 
     Public CA bundles often carry cross-signs: copies of one CA certificate,
     with the same name and key, signed by different issuers. Any copy can
@@ -186,10 +204,15 @@ def _order_pkcs7_chain(certs: list[Certificate]) -> list[Certificate] | None:
     and so are unrelated chains and pure cycles; those need an explicit
     leaf-first PEM upload instead.
 
-    Of the candidate paths, the stored chain prefers one ending at a
-    self-signed root in the bag, then the one whose issuers stay valid
-    longest, then the shortest. The alternative copies are not stored.
+    Of the candidate paths, the stored chain prefers, in order: every issuer
+    valid now; a top anchored by one of the user's trust anchors or the system
+    trust store; ending at a self-signed root in the bag; issuers that stay
+    valid longest; fewer certificates. Validity comes first because the
+    earliest expiry across the stored chain is the upload's effective expiry:
+    an expired cross-sign must not make a valid upload read as expired. The
+    alternative copies are not stored.
     """
+    current_time = now or datetime.now(UTC)
     unique = deduplicate_chain(certs)
     count = len(unique)
     parents: list[set[int]] = []
@@ -238,16 +261,23 @@ def _order_pkcs7_chain(certs: list[Certificate]) -> list[Certificate] | None:
     if not walk([leaf]) or not paths or len(visited) != count:
         return None
 
-    def preference(path: list[int]) -> tuple[bool, datetime, int, list[str]]:
-        top = unique[path[-1]]
-        complete = len(path) > 1 and _is_self_signed(top)
+    def preference(path: list[int]) -> tuple[bool, bool, bool, datetime, int, list[str]]:
+        chain = [unique[index] for index in path]
+        issuers = chain[1:]
+        valid_now = all(
+            _utc(cert.not_before) <= current_time < _utc(cert.not_after) for cert in issuers
+        )
+        anchored = bool(issuers) and (
+            _is_signature_anchored_by_user(chain, anchors) or _is_anchored_by_system_root(chain)
+        )
+        complete = bool(issuers) and _is_self_signed(chain[-1])
         issued_until = min(
-            (_utc(unique[index].not_after) for index in path[1:]),
+            (_utc(cert.not_after) for cert in issuers),
             default=datetime.max.replace(tzinfo=UTC),
         )
         return (
-            complete, issued_until, -len(path),
-            [unique[index].fingerprint_sha256 for index in path],
+            valid_now, anchored, complete, issued_until, -len(path),
+            [cert.fingerprint_sha256 for cert in chain],
         )
 
     best = max(paths, key=preference)
