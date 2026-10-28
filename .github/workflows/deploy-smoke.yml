@@ -437,7 +437,8 @@ jobs:
           .\scripts\install-windows.ps1 -InstallDir C:\cert-watch-ci
 
       # Event Log export is optional and deliberately remains an operator-selected
-      # extra. Install it into the deployed venv exactly as the IIS runbook says,
+      # extra. Install its hash-locked closure into the deployed venv exactly as
+      # the IIS runbook says,
       # then exercise the real pywin32 imports and read the emitted marker back
       # from the Application log.
       - name: Verify optional Windows Event Log sink
@@ -445,10 +446,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $venvPy = 'C:\cert-watch-ci\venv\Scripts\python.exe'
-          $package = (Resolve-Path '.').Path + '[windows]'
-          & $venvPy -m pip install --upgrade $package
+          & $venvPy -m pip install --require-hashes --only-binary :all: -r deploy\iis\requirements-windows.lock.txt
           if ($LASTEXITCODE -ne 0) {
-            throw 'Installation of cert-watch[windows] failed'
+            throw 'Hash-locked installation of the cert-watch[windows] dependencies failed'
           }
 
           $source = 'cert-watch-deploy-smoke'

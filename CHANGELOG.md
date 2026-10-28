@@ -19,6 +19,16 @@ All notable changes to cert-watch are documented in this file.
 - CI also runs the unit and integration tests on Python 3.15. cert-watch needed
   no changes for it. Until the lockfile picks up 3.15 wheels, eight locked
   dependencies (among them cffi and pydantic-core) build from source there.
+- The Windows installer installs every dependency by hash from lock files
+  exported from `uv.lock` (`deploy/iis/requirements*.lock.txt`), including the
+  Hatchling build backend, and then cert-watch with `--no-deps`. Before, a
+  bare `pip install` re-resolved every runtime dependency from the index at
+  install time, so a new upstream release could change or break a server
+  install. `-WithAuthExtras` keeps selecting the LDAP and OAuth libraries.
+  The installer no longer upgrades pip from the index. The Event Log extra
+  and the Windows deploy smoke test use the same locked closure.
+  `scripts/export_install_locks.py` regenerates the files; a test fails when
+  they drift from `uv.lock`, and the monthly lock refresh re-exports them.
 
 ### Added
 

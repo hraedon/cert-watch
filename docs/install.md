@@ -156,11 +156,15 @@ prerequisites, both hosting models, site configuration, TLS binding,
 upgrades, removal and troubleshooting. `scripts/Verify-Install.ps1` checks a
 finished installation.
 
-To send the audit log to the Windows Event Log, install the extra into the
-installer's venv and set `CERT_WATCH_EVENTLOG=1` in the site's environment:
+The installer installs every dependency by hash from the lock files in
+`deploy/iis/`, exported from `uv.lock`, and resolves nothing from the index.
+
+To send the audit log to the Windows Event Log, install the extra's locked
+closure into the installer's venv from the repository root, and set
+`CERT_WATCH_EVENTLOG=1` in the site's environment:
 
 ```powershell
-& C:\ProgramData\cert-watch\venv\Scripts\python.exe -m pip install "cert-watch[windows]"
+& C:\ProgramData\cert-watch\venv\Scripts\python.exe -m pip install --require-hashes --only-binary :all: -r deploy\iis\requirements-windows.lock.txt
 ```
 
 ## First start

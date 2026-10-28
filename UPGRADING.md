@@ -50,6 +50,25 @@ An old upload is detached from a host when that host is removed, or on upgrade
 when no matching host exists, so a later host at that address cannot inherit
 access to its notes. Its own tags remain unchanged.
 
+## Next release: hash-locked Windows install
+
+`scripts/install-windows.ps1` no longer resolves dependencies from the index.
+It installs `deploy/iis/requirements.lock.txt` (or
+`requirements-auth.lock.txt` with `-WithAuthExtras`) and the Hatchling build
+backend by hash, then cert-watch with `--no-deps`. Re-running the installer on
+an existing venv moves any package that a previous floating install upgraded
+back to the version CI tested. Packages the lock does not name are left in
+place. The installer no longer upgrades pip; it needs the venv's bundled pip to
+be 23 or later. `--only-binary :all:` means each dependency needs a wheel for
+the chosen Python. Every one has a Windows wheel for Python 3.12 to 3.14.
+
+If the Event Log extra is installed, re-install it the new way after the
+upgrade, from the repository root:
+
+```powershell
+& C:\ProgramData\cert-watch\venv\Scripts\python.exe -m pip install --require-hashes --only-binary :all: -r deploy\iis\requirements-windows.lock.txt
+```
+
 ## Upgrading from 1.2.2 to 1.2.3
 
 A drop-in upgrade: no database migrations, no new settings, no API removals.

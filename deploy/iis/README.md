@@ -91,6 +91,19 @@ persistent signing keys at `C:\ProgramData\cert-watch\secrets\` (locked down to
 Administrators). See the script for parameters (`-InstallDir`, `-WithAuthExtras`,
 etc.).
 
+Dependencies install by hash, never from a live resolve. The installer runs
+`pip install --require-hashes --only-binary :all:` on
+`deploy/iis/requirements.lock.txt` (or `requirements-auth.lock.txt` with
+`-WithAuthExtras`), then on `requirements-build.lock.txt` for the Hatchling
+build backend. It then installs the checkout with
+`--no-build-isolation --no-deps`, so pip resolves nothing from the index. These
+files are exported from `uv.lock` by `scripts/export_install_locks.py`, and a
+test fails when they drift. uv is not needed on the server. For an offline
+install, download the wheels these files name in advance, then set
+`PIP_NO_INDEX=1` and `PIP_FIND_LINKS` to that folder. The installer no longer
+upgrades pip from the index. It requires the venv's bundled pip to be version 23
+or later, which any supported Python provides.
+
 > **Why generated key files?** cert-watch reads `CERT_WATCH_AUTH_SECRET` /
 > `CERT_WATCH_CSRF_SECRET` (or their `*_FILE` variants). Persisted keys let
 > sessions survive process restarts and app-pool recycles, as the Kubernetes
@@ -99,14 +112,16 @@ etc.).
 ### Optional Windows Event Log export
 
 The base Windows install does not include `pywin32`. If this deployment sends
-audit events to the Windows Application log, install the `cert-watch[windows]`
-extra explicitly from an elevated PowerShell in the repository root:
+audit events to the Windows Application log, install the hash-locked
+`cert-watch[windows]` closure explicitly from an elevated PowerShell in the
+repository root:
 
 ```powershell
 $venvPython = "C:\ProgramData\cert-watch\venv\Scripts\python.exe"
-$package = (Resolve-Path ".").Path + "[windows]"
-& $venvPython -m pip install --upgrade $package
+& $venvPython -m pip install --require-hashes --only-binary :all: -r deploy\iis\requirements-windows.lock.txt
 ```
+
+Repeat this after each upgrade that changes the lock files.
 
 If `-InstallDir` was used, point `$venvPython` at that installation's venv.
 Then add these variables to the environment of the IIS-hosted process or
