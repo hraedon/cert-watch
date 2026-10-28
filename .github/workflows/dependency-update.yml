@@ -23,6 +23,11 @@ jobs:
       - name: Refresh lockfile
         run: uv lock
 
+      # The Windows installer's hash-locked requirement files are exported from
+      # uv.lock; tests/test_install_locks.py fails when they drift.
+      - name: Re-export install locks
+        run: python3 scripts/export_install_locks.py
+
       - name: Install deps from refreshed lock
         run: uv sync --frozen --extra dev --extra auth
 
@@ -49,3 +54,4 @@ jobs:
           labels: dependencies
           add-paths: |
             uv.lock
+            deploy/iis/requirements*.lock.txt

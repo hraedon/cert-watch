@@ -57,7 +57,9 @@ chain operators (&& / ||). Use if/else and -or/-and instead.
     written).
 
 .PARAMETER WithAuthExtras
-    Also install the LDAP + OAuth optional dependencies.
+    Also install the LDAP + OAuth optional dependencies. Every dependency is
+    installed by hash from deploy\iis\requirements*.lock.txt, exported from
+    uv.lock; nothing is resolved from the index at install time.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1 -WithAuthExtras
@@ -573,13 +575,47 @@ if ("$venvOut" -match "Unable to copy") {
     Write-Host "        venv creation; the venv was created and verified working, so it is not an error."
 }
 Write-Host "Installing cert-watch ..."
-& $venvPy -m pip install --upgrade pip | Out-Null
-$pkg = if ($WithAuthExtras) { "$repoRoot[auth-ldap,auth-oauth]" } else { $repoRoot }
-# --upgrade so an in-place re-install actually refreshes the package metadata.
-# Without it pip could leave a prior version's dist-info in place, which is what
-# the app reports as its version (the GUI then shows a stale version after an
-# upgrade that otherwise appeared to succeed).
-& $venvPy -m pip install --upgrade $pkg
+# No `pip install --upgrade pip`: that fetched an unpinned, unhashed pip from
+# the live index as Administrator. The venv's bundled pip is enough for
+# --require-hashes; a floor check catches a genuinely ancient interpreter.
+$pipVerRaw = (& $venvPy -m pip --version) 2>&1
+if ("$pipVerRaw" -match 'pip\s+(\d+)\.') {
+    Write-Host "  pip: $pipVerRaw"
+    if ([int]$Matches[1] -lt 23) {
+        throw ("The pip in the venv is too old for hash-checked installs ($pipVerRaw). " +
+               "Use a newer Python 3.12+ installation.")
+    }
+} else {
+    Write-Host "  [warn] could not parse pip version: $pipVerRaw"
+}
+# Dependencies come from hash-locked files exported from uv.lock
+# (scripts/export_install_locks.py), not from a live resolve. A bare
+# `pip install <checkout>` re-resolved every dependency against the index at
+# install time, so the closure on the server was not the one CI tested and a
+# new upstream release could break an install. --require-hashes refuses any
+# artifact that does not match, and --only-binary keeps pip from building a
+# dependency from source with an unpinned build backend.
+$lockName = if ($WithAuthExtras) { "requirements-auth.lock.txt" } else { "requirements.lock.txt" }
+$requirements = Join-Path $repoRoot "deploy\iis\$lockName"
+& $venvPy -m pip install --require-hashes --only-binary :all: -r $requirements
+if ($LASTEXITCODE -ne 0) {
+    throw ("Hash-locked dependency install from deploy/iis/$lockName failed (exit $LASTEXITCODE). " +
+           "Do not fall back to an unpinned install.")
+}
+# The build backend is locked too. An isolated PEP 517 build would resolve
+# build-system.requires (hatchling) from the index, unpinned.
+$buildRequirements = Join-Path $repoRoot "deploy\iis\requirements-build.lock.txt"
+& $venvPy -m pip install --require-hashes --only-binary :all: -r $buildRequirements
+if ($LASTEXITCODE -ne 0) {
+    throw "Hash-locked build backend install failed (exit $LASTEXITCODE)."
+}
+$pkg = $repoRoot
+# --no-deps: the lock files above are the only thing that decides dependency
+# versions. --upgrade so an in-place re-install actually refreshes the package
+# metadata. Without it pip could leave a prior version's dist-info in place,
+# which is what the app reports as its version (the GUI then shows a stale
+# version after an upgrade that otherwise appeared to succeed).
+& $venvPy -m pip install --upgrade --no-build-isolation --no-deps $pkg
 if ($LASTEXITCODE -ne 0) {
     throw "pip install of cert-watch failed (exit $LASTEXITCODE)."
 }

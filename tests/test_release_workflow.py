@@ -94,7 +94,8 @@ def test_windows_smoke_exercises_optional_eventlog_sink() -> None:
     start = smoke.index("Start app on loopback and wait for health", eventlog)
 
     assert install < eventlog < start
-    assert ".Path + '[windows]'" in smoke[eventlog:start]
+    assert "-r deploy\\iis\\requirements-windows.lock.txt" in smoke[eventlog:start]
+    assert "--require-hashes" in smoke[eventlog:start]
     assert "import os, win32evtlog, win32evtlogutil" in smoke[eventlog:start]
     assert "siem.export_audit_event" in smoke[eventlog:start]
     assert "Get-EventLog -LogName Application" in smoke[eventlog:start]
