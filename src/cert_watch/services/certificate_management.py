@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,7 @@ from cert_watch.auth.scope import (
     require_auth_context,
     unknown_target_scope_error,
 )
-from cert_watch.cert_chain import validate_is_ca_certificate
+from cert_watch.cert_chain import _AnchorLike, validate_is_ca_certificate
 from cert_watch.database import (
     SqliteTrustAnchorRepository,
     delete_certificate_cascade,
@@ -56,6 +57,7 @@ def _parse_upload(
     filename: str,
     password: str | None,
     suffixes: frozenset[str],
+    anchors: Sequence[_AnchorLike] = (),
 ) -> UploadedEntry:
     if len(content) > MAX_UPLOAD_BYTES:
         raise CertificateValidationError("file too large (max 10 MB)")
@@ -65,7 +67,9 @@ def _parse_upload(
         tmp.write(content)
         tmp_path = Path(tmp.name)
     try:
-        result = upload_certificate(tmp_path, password=password.encode() if password else None)
+        result = upload_certificate(
+            tmp_path, password=password.encode() if password else None, anchors=anchors,
+        )
     finally:
         tmp_path.unlink(missing_ok=True)
     if isinstance(result, ParseError):
@@ -90,7 +94,10 @@ def upload_certificate_bytes(
     tags = format_tags(merge_tags(tags, scope or ""))
     ensure_new_tags_in_scope(auth, tags)
     try:
-        entry = _parse_upload(content, filename, password, CERTIFICATE_SUFFIXES)
+        entry = _parse_upload(
+            content, filename, password, CERTIFICATE_SUFFIXES,
+            SqliteTrustAnchorRepository(db_path).list_entries(),
+        )
     except CertificateValidationError as exc:
         logger.warning("certificate upload parsing failed for %r: %s", filename, exc)
         message = str(exc)

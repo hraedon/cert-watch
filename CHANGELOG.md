@@ -83,6 +83,30 @@ All notable changes to cert-watch are documented in this file.
   Duplicate certificates are ignored within the existing 100-certificate cap.
   Bags with multiple or ambiguous chains are refused with guidance to upload
   a leaf-first PEM chain instead.
+- PKCS#7 uploads accept cross-signed issuers. Public CA bundles often carry
+  two copies of an intermediate or root, with the same name and key but signed
+  by different issuers; either copy can issue the certificate below it, so the
+  upload no longer refuses the bag as ambiguous. The leaf is the one
+  certificate that issues nothing else in the bag. The stored chain prefers
+  a path whose issuers are all valid now, so an expired cross-sign cannot
+  make a valid upload read as expired. After that it prefers a path anchored
+  by an uploaded trust anchor or the system trust store, then one ending at a
+  self-signed root in the bag, then the one whose issuers stay valid longest,
+  then the shortest. The alternative copies are not stored. Same-named
+  issuers with different keys, unrelated certificates and bags whose only
+  paths loop are still refused.
+- An application credential record with an unreadable stored time (from a
+  hand edit or a restore) no longer stops alert evaluation. Before, one such
+  record raised before any certificate expiry or renewal alert was evaluated,
+  and the Credentials page and its API failed. The record is now listed as
+  "Expiry unreadable", the scheduler logs an error for it every cycle, and
+  the other credentials and certificates are evaluated as usual. A failure in
+  the credential pass for any other reason is logged and no longer stops the
+  certificate alerts either.
+- A host scanned by another scheduler worker between this worker's due-host
+  read and its claim is no longer scanned a second time. The claim
+  transaction now decides again which hosts are due, under the write lock,
+  so the other worker's fresh scan history or claim is seen.
 - Local unit runs keep tests whose filename or checkout path contains `e2e`.
   Automatic browser markers now apply only inside `tests/e2e`, so the optional
   Playwright import guard runs even when browser tests are collected alongside it.

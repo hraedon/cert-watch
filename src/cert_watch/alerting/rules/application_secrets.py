@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from cert_watch.database.connection import _connect, get_write_lock
 from cert_watch.database.repo import Alert
 
 THRESHOLDS = (30, 14, 7, 3, 1)
+
+logger = logging.getLogger(__name__)
 
 
 def evaluate_application_secrets(
@@ -22,7 +25,17 @@ def evaluate_application_secrets(
     with get_write_lock(), _connect(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
         for secret in list_application_secrets(db_path):
-            if secret.retired_at is not None:
+            if secret.retired:
+                continue
+            if secret.expires_at is None:
+                # One unreadable row must not stop the others, or the
+                # certificate alerts evaluated after this pass. The inventory
+                # shows it as "Expiry unreadable"; this repeats every cycle.
+                logger.error(
+                    "application credential %s has an unreadable stored expiry and "
+                    "gets no reminders; retire it and add its metadata again",
+                    secret.id,
+                )
                 continue
             seconds = (secret.expires_at - current).total_seconds()
             crossed = [day for day in THRESHOLDS if seconds <= day * 86400]

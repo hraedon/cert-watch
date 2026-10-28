@@ -15,14 +15,25 @@ class ApplicationSecret:
     credential_id: str
     credential_name: str
     tenant_id: str
-    expires_at: datetime
+    expires_at: datetime | None
     owner_email: str
-    created_at: datetime
+    created_at: datetime | None
     retired_at: datetime | None = None
+    # Stored timestamps this build cannot read (a hand edit or a restore). The
+    # record stays listed so an operator can see and replace it.
+    unreadable: tuple[str, ...] = ()
+
+    @property
+    def retired(self) -> bool:
+        # Any stored retirement retires the record, as the SQL does, even if
+        # its time is unreadable.
+        return self.retired_at is not None or "retired_at" in self.unreadable
 
     def state(self, now: datetime) -> str:
-        if self.retired_at is not None:
+        if self.retired:
             return "Retired"
+        if self.expires_at is None:
+            return "Expiry unreadable"
         remaining = (self.expires_at - now).total_seconds()
         if remaining <= 0:
             return "Expired"

@@ -328,3 +328,71 @@ def test_active_credential_trigger_does_not_resolve_itself(db, fake_transport, m
 def test_inventory_status(db, days, state):
     create(db, expires_at=(NOW + timedelta(days=days)).isoformat())
     assert list_application_secrets(db)[0].state(NOW) == state
+
+
+def _store_raw(db, identifier, column, value):
+    with _connect(db) as conn:
+        conn.execute(f"UPDATE application_secrets SET {column}=? WHERE id=?", (value, identifier))
+        conn.commit()
+
+
+@pytest.mark.parametrize("stored", [
+    "not-a-date", "2027-01-15T00:00:00", "9999-12-31T23:59:59-14:00", b"\x00",
+])
+def test_unreadable_stored_expiry_is_flagged_not_fatal(db, caplog, stored):
+    healthy = create(db, credential_id="healthy-key")
+    broken = create(db, credential_id="broken-key")
+    _store_raw(db, broken, "expires_at", stored)
+
+    alerts = evaluate_application_secrets(db, now=NOW)
+
+    assert [alert.cert_id for alert in alerts] == [f"application-secret:{healthy}"]
+    assert broken in caplog.text
+    assert "unreadable stored expiry" in caplog.text
+    listed = {item.id: item for item in list_application_secrets(db)}
+    assert listed[broken].expires_at is None
+    assert listed[broken].unreadable == ("expires_at",)
+    assert listed[broken].state(NOW) == "Expiry unreadable"
+    assert listed[healthy].state(NOW) == "Expires within 30 days"
+    # Retiring the unreadable record is the documented way out.
+    assert retire_application_secret(db, broken, auth=AuthContext.system(), actor="test")
+    assert {item.id: item for item in list_application_secrets(db)}[broken].state(NOW) == "Retired"
+
+
+def test_unreadable_retirement_time_still_retires(db):
+    identifier = create(db)
+    _store_raw(db, identifier, "retired_at", "yesterday")
+    secret = list_application_secrets(db)[0]
+    assert secret.retired and secret.retired_at is None
+    assert secret.unreadable == ("retired_at",)
+    assert secret.state(NOW) == "Retired"
+    assert evaluate_application_secrets(db, now=NOW + timedelta(days=40)) == []
+
+
+def test_credential_pass_failure_does_not_stop_certificate_alerts(db, monkeypatch, caplog):
+    from unittest.mock import MagicMock
+
+    from cert_watch.scheduler_context import SchedulerContext
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("credential pass failed")
+
+    certificate_pass = MagicMock()
+    monkeypatch.setattr(
+        "cert_watch.alerting.rules.application_secrets.evaluate_application_secrets", fail,
+    )
+    monkeypatch.setattr("cert_watch.alerting.rules.expiry.evaluate_all_certs", certificate_pass)
+    monkeypatch.setattr("cert_watch.alerting.rules.renewal.evaluate_renewal_window", MagicMock())
+    monkeypatch.setattr(
+        "cert_watch.alerting.rules.renewal_reports.evaluate_renewal_report_alerts", MagicMock(),
+    )
+    monkeypatch.setattr(
+        "cert_watch.alerting.dispatch.process_pending",
+        MagicMock(return_value={"sent": 0, "failed": 0, "deferred": 0}),
+    )
+    settings = MagicMock(db_path=db, alert_digest_only=False, renewal_window_days=30)
+    context = SchedulerContext(settings=settings, alert_cfg=None, webhook_cfg=None)
+
+    assert context.run_alerts() == {"sent": 0, "failed": 0, "deferred": 0}
+    certificate_pass.assert_called_once()
+    assert "application credential reminder evaluation failed" in caplog.text

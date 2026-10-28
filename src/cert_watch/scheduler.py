@@ -115,36 +115,48 @@ def _has_pending_hosts(db_path: str | Path) -> bool:
     return row is not None
 
 
+def _host_scan_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    rows: list[sqlite3.Row] = conn.execute(
+        """
+        SELECT h.id AS host_id,h.hostname, h.port, h.scan_interval_hours,
+               MAX(CASE WHEN sh.status = 'success' THEN sh.scanned_at END) as last_scan,
+               MAX(sh.scanned_at) as last_attempt,
+               a.next_check_at,
+               claim.claim_expires_at
+        FROM hosts h
+        LEFT JOIN scan_history sh
+            ON sh.hostname = h.hostname AND sh.port = h.port
+        LEFT JOIN renewal_attempts a
+            ON a.host_id=h.id AND a.is_current=1
+              AND a.state IN ('verifying','not_deployed')
+        LEFT JOIN host_scan_claims claim ON claim.host_id=h.id
+        GROUP BY h.id,h.hostname,h.port,h.scan_interval_hours,
+                 a.next_check_at,claim.claim_expires_at
+        """
+    ).fetchall()
+    return rows
+
+
 def _host_scan_deadlines(
     db_path: str | Path, hour: int, minute: int, now: datetime,
+    *, conn: sqlite3.Connection | None = None,
 ) -> list[tuple[str, int, datetime, bool]]:
     """One cadence policy for host selection and scheduler wakeups.
 
     Custom intervals start at the last success. Default hosts use the next
     configured daily UTC boundary after their last success. Failed attempts
     delay retries by an hour, without moving a successful host's cadence.
+
+    *conn* reads inside a caller's open transaction. It is used as-is: the
+    connection context manager would commit that transaction on exit.
     """
     from cert_watch.database import _connect
     from cert_watch.scan_freshness import _add_deadline_delay, _timestamp, cadence_due_at
-    with _connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT h.id AS host_id,h.hostname, h.port, h.scan_interval_hours,
-                   MAX(CASE WHEN sh.status = 'success' THEN sh.scanned_at END) as last_scan,
-                   MAX(sh.scanned_at) as last_attempt,
-                   a.next_check_at,
-                   claim.claim_expires_at
-            FROM hosts h
-            LEFT JOIN scan_history sh
-                ON sh.hostname = h.hostname AND sh.port = h.port
-            LEFT JOIN renewal_attempts a
-                ON a.host_id=h.id AND a.is_current=1
-                  AND a.state IN ('verifying','not_deployed')
-            LEFT JOIN host_scan_claims claim ON claim.host_id=h.id
-            GROUP BY h.id,h.hostname,h.port,h.scan_interval_hours,
-                     a.next_check_at,claim.claim_expires_at
-            """
-        ).fetchall()
+    if conn is None:
+        with _connect(db_path) as own:
+            rows = _host_scan_rows(own)
+    else:
+        rows = _host_scan_rows(conn)
 
     def timestamp(value: str, hostname: str, field_name: str) -> datetime | None:
         parsed = _timestamp(value)
@@ -243,8 +255,8 @@ def claim_hosts_due_for_scan(
     from cert_watch.scan_freshness import _timestamp
 
     current = (now or datetime.now(UTC)).astimezone(UTC)
-    due = get_hosts_due_for_scan(db_path, hour=hour, minute=minute, now=current)
-    if not due:
+    # A cheap read outside the write lock, so an idle wakeup takes no lock.
+    if not get_hosts_due_for_scan(db_path, hour=hour, minute=minute, now=current):
         return []
     claimed: list[tuple[str, int]] = []
     expires = (current + timedelta(minutes=SCAN_CLAIM_MINUTES)).isoformat()
@@ -252,6 +264,16 @@ def claim_hosts_due_for_scan(
         conn = _connect(db_path)
         try:
             begin_immediate(conn)
+            # Due-ness is decided again under the write lock. Another worker
+            # can claim, scan and release a host between the read above and
+            # this transaction; its new scan history makes the host not due.
+            due = [
+                (hostname, port)
+                for hostname, port, deadline, _ in _host_scan_deadlines(
+                    db_path, hour, minute, current, conn=conn,
+                )
+                if deadline <= current
+            ]
             for hostname, port in due:
                 row = conn.execute(
                     "SELECT h.id, claim.claim_expires_at FROM hosts h "
