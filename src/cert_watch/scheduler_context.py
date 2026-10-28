@@ -246,7 +246,12 @@ class SchedulerContext:
         config = self._snapshot()
         s = config.settings
         repo = SqliteAlertRepository(s.db_path)
-        evaluate_application_secrets(s.db_path)
+        try:
+            evaluate_application_secrets(s.db_path)
+        except Exception:
+            # Credential reminders are a separate inventory. A failure there
+            # must not silence certificate expiry and renewal alerts.
+            logger.exception("application credential reminder evaluation failed")
         closed_sent: list[Any] = []
         if s.alert_digest_only:
             evaluate_all_certs(s.db_path, repo, urgent_only=True)

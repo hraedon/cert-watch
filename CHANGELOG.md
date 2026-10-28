@@ -73,6 +73,14 @@ All notable changes to cert-watch are documented in this file.
   Duplicate certificates are ignored within the existing 100-certificate cap.
   Bags with multiple or ambiguous chains are refused with guidance to upload
   a leaf-first PEM chain instead.
+- An application credential record with an unreadable stored time (from a
+  hand edit or a restore) no longer stops alert evaluation. Before, one such
+  record raised before any certificate expiry or renewal alert was evaluated,
+  and the Credentials page and its API failed. The record is now listed as
+  "Expiry unreadable", the scheduler logs an error for it every cycle, and
+  the other credentials and certificates are evaluated as usual. A failure in
+  the credential pass for any other reason is logged and no longer stops the
+  certificate alerts either.
 - Local unit runs keep tests whose filename or checkout path contains `e2e`.
   Automatic browser markers now apply only inside `tests/e2e`, so the optional
   Playwright import guard runs even when browser tests are collected alongside it.

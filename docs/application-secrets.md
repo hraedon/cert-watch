@@ -7,7 +7,11 @@ each active credential, including overlapping credentials during a rotation.
 Never enter the secret value. cert-watch has no field for it.
 
 The inventory distinguishes current, expires within 30 days, expires within
-7 days, expired and retired. Expiry is an exact instant: a secret expiring
+7 days, expired and retired. A record whose stored expiry cannot be read (after
+a hand edit or a restore) shows as expiry unreadable and gets no reminders;
+the scheduler logs an error for it on every alert cycle, and the API returns
+its `expires_at` as `null` with the field named in `unreadable`. Retire it and
+add the credential again. Expiry is an exact instant: a secret expiring
 tomorrow is still valid today. UTC avoids a browser's timezone silently moving
 the deadline.
 

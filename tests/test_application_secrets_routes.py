@@ -52,3 +52,25 @@ def test_json_shape_and_size_validation(reload_app):
                                headers={"Content-Type": "application/json"}).status_code == 422
         assert client.post("/api/application-secrets", json={"application_name": "x" * 17000}
                            ).status_code == 413
+
+
+def test_unreadable_record_is_listed_as_a_problem(reload_app, tmp_path):
+    from cert_watch.database.connection import _connect
+
+    with TestClient(reload_app().app) as client:
+        identifier = client.post("/api/application-secrets", json=metadata()).json()["id"]
+        with _connect(tmp_path / "cert-watch.sqlite3") as conn:
+            conn.execute(
+                "UPDATE application_secrets SET expires_at='not-a-date' WHERE id=?",
+                (identifier,),
+            )
+            conn.commit()
+        rows = client.get("/api/application-secrets").json()
+        assert rows[0]["expires_at"] is None
+        assert rows[0]["state"] == "Expiry unreadable"
+        assert rows[0]["unreadable"] == ["expires_at"]
+        page = client.get("/application-secrets")
+        assert page.status_code == 200
+        assert "Expiry unreadable" in page.text
+        assert "gets no reminders" in page.text
+        assert f"/application-secrets/{identifier}/retire" in page.text
