@@ -97,6 +97,40 @@ def test_writer_honors_offset_lease_acquired_after_selection(tmp_path, monkeypat
     assert owner == "other-worker"
 
 
+@pytest.mark.parametrize("status", ["success", "failure"])
+def test_host_scanned_by_another_worker_after_selection_is_not_claimed(
+    tmp_path, monkeypatch, status
+):
+    # Worker A selects the host; worker B then claims, scans and releases it
+    # before A's write transaction. A must see B's scan and not scan again.
+    db = tmp_path / "rescan.sqlite3"
+    host_id = _host(db)
+    original = scheduler.get_hosts_due_for_scan
+    interleaved = []
+
+    def select_then_other_worker_scans(*args, **kwargs):
+        due = original(*args, **kwargs)
+        if not interleaved:
+            interleaved.append(True)
+            assert scheduler.claim_hosts_due_for_scan(db, owner="worker-b", now=NOW) == [
+                ENDPOINT
+            ]
+            record_scan_history(
+                db, ScanHistory(*ENDPOINT, status, scanned_at=NOW + timedelta(seconds=30)),
+            )
+            scheduler.release_host_scan_claim(db, *ENDPOINT, owner="worker-b")
+        return due
+
+    monkeypatch.setattr(scheduler, "get_hosts_due_for_scan", select_then_other_worker_scans)
+    assert scheduler.claim_hosts_due_for_scan(db, owner="worker-a", now=NOW) == []
+    assert interleaved
+    with _connect(db) as conn:
+        claim = conn.execute(
+            "SELECT claimed_by FROM host_scan_claims WHERE host_id=?", (host_id,)
+        ).fetchone()
+    assert claim is None
+
+
 def _competing_worker(db, owner, barrier, results):
     original = scheduler.get_hosts_due_for_scan
 

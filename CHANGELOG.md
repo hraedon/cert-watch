@@ -81,6 +81,10 @@ All notable changes to cert-watch are documented in this file.
   the other credentials and certificates are evaluated as usual. A failure in
   the credential pass for any other reason is logged and no longer stops the
   certificate alerts either.
+- A host scanned by another scheduler worker between this worker's due-host
+  read and its claim is no longer scanned a second time. The claim
+  transaction now decides again which hosts are due, under the write lock,
+  so the other worker's fresh scan history or claim is seen.
 - Local unit runs keep tests whose filename or checkout path contains `e2e`.
   Automatic browser markers now apply only inside `tests/e2e`, so the optional
   Playwright import guard runs even when browser tests are collected alongside it.
